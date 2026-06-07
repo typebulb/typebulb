@@ -1,0 +1,1038 @@
+:root {
+  /* Light is the default; data-theme="dark" is set by the host (typebulb.com
+     or the typebulb CLI, sourced from prefers-color-scheme).
+     GRAY RAMP — every gray rides ONE neutral tint (R=G=B), like the main app's
+      bg1–bg5 ramp. Lightness may step; the HUE never changes. The bug to avoid is a
+      gray in a *different* tint (a cool/blue panel beside a neutral one), not the
+      number of steps. App chrome (statusbar, picker, modals) sits on the fixed
+      --panel. Document panels — code, callouts, tables, user bubbles, open tools —
+      paint --veil instead: a translucent neutral that matches --panel when alone on
+      the page but COMPOUNDS when panels nest (a code block in a callout, a panel in a
+      user bubble), so every depth separates on its own — no level-counting, no cap. */
+  --bg: rgb(255, 255, 255);
+  --fg: rgb(28, 28, 30);
+  --muted: rgb(96, 96, 100);
+  --panel: rgb(242, 242, 242);
+  --border: rgb(221, 221, 221);
+  --accent: rgb(58, 125, 232);
+  --veil: rgba(0, 0, 0, 0.05);      /* one shade step; alpha-stacks as panels nest */
+  --tool-bg: var(--panel);
+  --err: rgb(206, 60, 60);
+  --diff-add: rgb(40, 140, 70);
+  --fold-marker: rgb(24, 145, 72);
+  /* Prose measure for text (bubbles + notes) — kept to a readable line length.
+     Diagrams break out wider than this; see .md .mermaid. */
+  --content-max: 800px;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  /* Neutral ramp, same tint as the main app: page 18 → surface 32 → border 52. */
+  --bg: rgb(18, 19, 20);
+  --fg: rgb(232, 232, 232);
+  --muted: rgb(150, 150, 150);
+  --panel: rgb(32, 32, 32);
+  --border: rgb(52, 52, 52);
+  --accent: rgb(122, 162, 250);
+  --veil: rgba(255, 255, 255, 0.06);
+  --tool-bg: var(--panel);
+  --err: rgb(230, 60, 60);
+  --diff-add: rgb(100, 210, 130);
+  --fold-marker: rgb(0, 255, 0);
+  color-scheme: dark;
+}
+
+/* Aliases for beautiful-mermaid, indirecting around a var-name collision with the
+   bulb's theme (see the renderMermaidSVG call). They still resolve to the live
+   theme at the use site. */
+:root {
+  --mm-bg: var(--bg);
+  --mm-fg: var(--fg);
+  --mm-line: var(--muted);
+  --mm-accent: var(--accent);
+  --mm-muted: var(--muted);
+  --mm-surface: var(--tool-bg);
+  --mm-border: var(--border);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+/* position:relative anchors the overlaid (absolute) statusbar to the viewport box. */
+.app { position: relative; display: flex; flex-direction: column; height: 100vh; }
+
+/* Bottom status strip, overlaid (not in flow) on the chat — which runs
+   full-height to the very bottom. The strip itself has NO fill, so the message
+   text shows through everywhere, right to the bottom edge. Only the items (the
+   pills) are opaque, so they overlay the text with visual precedence rather than
+   the strip cutting it off with a band. No border — the typebulb host's rounded
+   card is the only frame. */
+.statusbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  /* .4rem inset on top/left/bottom; the right is larger to clear the scrollbar
+     the statusbar overlays — so the *visible* gap to the content edge matches the
+     other sides instead of the pills sitting flush against the scrollbar. */
+  padding: .4rem 1.35rem .4rem .4rem;
+  font-size: .8rem;
+  /* Drop the inherited 1.55 line-height so the bar's own strut doesn't add
+     phantom ascender/descender room above the pills. Everything in the bar
+     is a fixed-height pill or a shimmer text line — both look right at 1. */
+  line-height: 1;
+  min-width: 0;
+}
+.statusbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: .4rem;
+  align-items: center;
+}
+/* Chip shape shared by the status-bar pills (interactive: session chip, token
+   counter) and the working indicator (passive). One rule = one source of vertical
+   alignment, no element-type drift between siblings; inline-flex + line-height:1
+   + fixed height centers the glyph run by the box, not by the inherited line-box.
+   Opaque so they read cleanly over the message text the transparent strip lets
+   through. */
+.pill, .working {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  height: 1.7rem;
+  padding: 0 .7rem;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .8rem;
+  white-space: nowrap;
+  user-select: none;
+}
+/* Pills are <button>s: reset UA chrome (font/appearance/margin) and add the
+   interactive affordance. Slightly larger text than the passive indicator. */
+.pill {
+  font: inherit;
+  font-size: .85rem;
+  appearance: none;
+  margin: 0;
+  cursor: pointer;
+}
+.pill:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The two status-bar chips each anchor an upward popover (token breakdown /
+   session list). Wrap = positioning context; the popover anchors bottom/right and
+   grows up-and-left — the chips sit in the right-aligned cluster, so left:0 would
+   run them off the viewport's right edge. */
+.token-wrap, .sid-wrap, .servers-wrap { position: relative; display: inline-block; }
+/* Each pill renders its wrap unconditionally, emitting an empty div when it has
+   nothing to show (no tokens / no session / nothing running). An empty wrap is
+   still a flex child, so .statusbar-actions' gap lands on both its sides —
+   doubling the visible gap between its neighbours. Collapse the empties so the
+   cluster spaces evenly regardless of which pills are present. */
+.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty { display: none; }
+.token-pop, .picker, .servers-pop {
+  position: absolute;
+  bottom: calc(100% + .35rem);
+  right: 0;
+  z-index: 10;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
+}
+.token-pop {
+  min-width: 360px;
+  max-width: 92vw;
+  padding: .35rem;
+  font-size: .85rem;
+}
+/* Each row: left text block, number pushed to the right edge. Sizing/rhythm matches .picker-row
+   (font .85rem, row padding .45rem .55rem) so the three status-bar popovers read as one family. */
+.token-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .6rem;
+  padding: .45rem .55rem;
+}
+.token-line-title { font-weight: 600; color: var(--fg); margin-right: .5rem; }
+.token-line-lbl { color: var(--muted); font-size: .72rem; }
+.token-line-num { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* "working…" indicator: CC is mid-turn. Passive — driven by the live-chain leaf,
+   not a live token stream (the JSONL is flushed in batches, so this can sit lit
+   through a multi-minute buffering window). Shares the chip shape above; only adds
+   room for the pulsing dot. Non-interactive — no cursor / hover accent. */
+.working { gap: .45rem; }
+.working-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: working-pulse 1.4s ease-in-out infinite;
+}
+@keyframes working-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .working-dot { animation: none; opacity: .8; } }
+
+/* Session list — shares the popover chrome (.token-pop, .picker above); these are
+   just its own dimensions. */
+.picker {
+  width: min(440px, calc(100vw - 2rem));
+  max-height: 60vh;
+  overflow: hidden;
+  padding: .35rem;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+/* The filter (.bulb-filter-control) pins at the top; the row list scrolls inside the capped box —
+   same shape as the launcher's .servers-pop / .bulb-list. */
+.picker-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.picker-empty { padding: .8rem; color: var(--muted); font-size: .85rem; text-align: center; }
+.picker-row {
+  display: flex;
+  gap: .6rem;
+  align-items: baseline;
+  padding: .45rem .55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: .85rem;
+}
+.picker:focus { outline: none; }   /* the list owns its own highlight; no focus ring */
+.picker-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* Keyboard cursor (arrow keys / hover) — matches the bulb picker's .active row. */
+.picker-row.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* The attached session — a leading accent dot in its own gutter slot, reserved (transparent) on
+   every row so titles align whether or not it's shown, and filled only on the attached row so it
+   reads as "you are here" even when the cursor has moved off. */
+.picker-dot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: transparent;
+}
+.picker-row.current .picker-dot { background: var(--accent); }
+.picker-preview {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--fg);
+}
+.picker-time {
+  color: var(--muted);
+  font-size: .72rem;
+  min-width: 2.6rem; text-align: right;
+}
+
+/* Running-breakouts list — shares the popover chrome (.servers-pop above); its own dimensions +
+   per-row layout: the play/stop button + name read together on the left (▶/■ Title, name flex:1),
+   and the metadata/controls form a right-aligned cluster of fixed-width columns (logs · trust ·
+   time/port) that line up row-to-row — right-anchored, so the rightmost (time/port) always aligns and
+   the rest stack inward (logs and time/port share a width; trust is wider, to fit "restricted"). The
+   box is a FIXED size shared with the drilled-in console (.log-mode below): flipping list⇄console
+   swaps only the contents, not the frame, so it doesn't jump. The filter pins to the top and the list
+   scrolls inside (see .bulb-list). */
+.servers-pop {
+  width: min(560px, calc(100vw - 2rem));
+  height: min(66vh, 560px);
+  overflow: hidden;
+  padding: .35rem;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+.server-row {
+  /* Subgrid: all rows share ONE set of column tracks (defined on .bulb-list). A per-row grid sizes
+     its columns independently — which is exactly what broke alignment (a stopped row with no
+     logs/port sized its tracks differently and its trust toggle drifted right). Spanning the parent's
+     tracks instead makes trust/logs/time line up row-to-row, while the parent's auto columns size to
+     the widest content so the cluster stays tight (no reserved min-width slack). Absent trust/logs
+     render an empty cell that still holds its column. */
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  /* Inset rounded highlight, matching the session picker. The background is the subgrid track area
+     (not bled out to the edge — that ran it under the scrollbar on the right while staying clear on
+     the left, an asymmetry). Text gets its breathing room inside the highlight via end-item margins
+     (.server-stop/.bulb-launch on the left, .server-port/.bulb-time on the right) rather than row
+     padding, which would shift the subgrid tracks and break alignment. */
+  padding: .15rem 0;
+  border-radius: 6px;
+  font-size: .85rem;
+}
+.server-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* Keyboard-highlighted row (arrow-key cursor) — a touch stronger than hover so it stands out. */
+.server-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.server-name {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--accent); text-decoration: none; cursor: pointer;
+}
+.server-name:hover { text-decoration: underline; }
+/* Port is a link to the running server (localhost:<port>), same target as the name. */
+.server-port { color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; text-decoration: none; text-align: right; margin-right: .4rem; }
+a.server-port:hover { color: var(--accent); text-decoration: underline; }
+/* Logs reads like a link (flips to this server's console), not a button. */
+.server-logs { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; margin-left: .5rem; }
+.server-logs:hover, .server-logs.on { color: var(--accent); text-decoration: underline; }
+/* Launcher filter box — pinned above the list; type to narrow (matches name + path). The control
+   wrapper pins to the top and anchors the clear (×) at the far right (position:relative + the
+   input's right padding reserves its room). */
+.bulb-filter-control { position: relative; flex: none; margin-bottom: .35rem; }
+.bulb-filter {
+  font: inherit;
+  font-size: .82rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: .35rem 1.7rem .35rem .5rem;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.bulb-filter::placeholder { color: var(--muted); }
+.bulb-filter:focus { outline: none; border-color: var(--accent); }
+/* Clear (×) — only rendered when the filter is non-empty; wipes it and refocuses the box. */
+.bulb-filter-clear {
+  position: absolute; right: .3rem; top: 50%; transform: translateY(-50%);
+  appearance: none; border: none; background: transparent; cursor: pointer;
+  color: var(--muted); font-size: 1.05rem; line-height: 1; padding: 0 .3rem; border-radius: 4px;
+}
+.bulb-filter-clear:hover { color: var(--accent); }
+/* Scrolls within the fixed-height popover so the filter stays put and the box never grows. */
+/* The shared grid for the launcher rows: each .server-row is a subgrid spanning these tracks, so
+   columns line up row-to-row. auto cols size to their widest content (tight, no slack); 1fr is the
+   name. A small right padding keeps the selected-row highlight off the scrollbar. */
+.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; column-gap: .6rem; row-gap: .05rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+/* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
+.server-name.stopped { color: var(--fg); }
+.bulb-time { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; margin-right: .4rem; }
+/* The row's chrome buttons share one reset; sizing + colour differ below. Play/stop are round icon
+   buttons (friendlier, space-economic); the trust switch is text. Logs is a link, not a button
+   (see .server-logs above), so it's not in this group. */
+.server-stop, .bulb-launch, .trust-toggle {
+  font: inherit; appearance: none; margin: 0; cursor: pointer; box-sizing: border-box;
+  background: transparent; border: 1px solid var(--border); border-radius: 5px;
+  height: 1.7rem; display: inline-flex; align-items: center; justify-content: center;
+}
+.trust-toggle { font-size: .76rem; padding: 0 .5rem; color: var(--muted); justify-self: center; }
+.trust-toggle:hover, .trust-toggle.on { color: var(--accent); border-color: var(--accent); }
+.server-stop, .bulb-launch { width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
+.btn-icon { display: block; }
+/* A stopped bulb's play button is dormant — the title is the primary launch target — so it's
+   hidden until the row is hovered or keyboard-selected. visibility (not display) reserves its slot,
+   so the name column doesn't shift when it appears. */
+.bulb-launch { color: var(--accent); visibility: hidden; }
+.server-row:hover .bulb-launch, .server-row.active .bulb-launch { visibility: visible; }
+.bulb-launch:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* Launching: stays visible (hover-independent) and shimmers until the row flips to a stop button,
+   so the ~2s wait reads as "working" rather than a dead click. Transient — driven by the in-memory
+   launching set, never persisted. */
+.bulb-launch.launching {
+  visibility: visible; border-color: var(--accent);
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: bulb-shimmer 1.1s linear infinite;
+}
+@keyframes bulb-shimmer { from { background-position: 250% 0; } to { background-position: -250% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .bulb-launch.launching { animation: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+}
+.server-stop { color: var(--muted); }
+.server-stop:hover { color: var(--err); border-color: var(--err); }
+/* Elevation prompt (VS-Code-Workspace-Trust style) — a modal over the whole view, since a
+   denied capability is worth interrupting for. Backdrop dims; the card holds the choice. */
+.trust-back {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, .5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.trust-modal {
+  width: min(420px, 100%);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .5);
+  padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .6rem;
+}
+.trust-modal-h { font-size: 1rem; font-weight: 600; color: var(--fg); }
+.trust-modal-b { font-size: .85rem; color: var(--fg); line-height: 1.45; }
+.trust-modal-warn { font-size: .78rem; color: var(--muted); line-height: 1.4; }
+.trust-modal-acts { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .2rem; }
+.trust-no, .trust-yes {
+  font: inherit; font-size: .82rem; appearance: none; margin: 0; cursor: pointer;
+  padding: .35rem .8rem; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg);
+}
+.trust-no:hover { border-color: var(--fg); }
+.trust-yes {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.trust-yes:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+/* Drilled-in streaming console for one running server. It takes over the whole bulbs
+   popover (the list flips to it; ← back flips home), so it's wider than the list and its
+   body fills the popover's height. overflow:hidden lets the rounded popover border clip the
+   square head/body; the body scrolls internally. */
+.servers-pop.log-mode {
+  padding: 0;   /* same fixed width/height as the list (.servers-pop); only the chrome differs */
+}
+.servers-pop.log-mode:focus { outline: none; }
+.bulb-log-head {
+  display: flex; align-items: center; justify-content: flex-end; gap: .5rem;
+  padding: .3rem .5rem; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.bulb-log-back {
+  font: inherit; font-size: .76rem; appearance: none; margin: 0;
+  padding: .15rem .5rem; border-radius: 5px;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.bulb-log-back:hover { color: var(--accent); border-color: var(--accent); }
+.bulb-log-name { min-width: 0; color: var(--muted); font-size: .72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bulb-log-body {
+  flex: 1; min-height: 0;
+  margin: 0; padding: .5rem .6rem;
+  overflow: auto;                                  /* top-anchored normal flow — output reads top→down */
+  background: var(--bg);
+  font: .72rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--fg);
+}
+.bulb-log-text { white-space: pre-wrap; word-break: break-word; }
+/* messages */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  /* Content runs under the overlaid statusbar rather than stopping above it.
+     Gutters are symmetric: the turn stripe is absolutely positioned, so it claims no layout
+     width and the left gutter needs no extra room for it (see Invariants). The bottom is
+     larger to clear the overlaid statusbar pills (~2.1rem:
+     .4rem inset + 1.7rem pill) so the last line isn't hidden behind them. */
+  padding: 1.25rem 1.75rem 2.5rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.note {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  color: var(--muted);
+  font-size: .9rem;
+  max-width: var(--content-max);
+  width: 100%;
+  margin: 0 auto;
+}
+.bubble {
+  position: relative;
+  max-width: var(--content-max);
+  width: 100%;
+  margin: 0 auto;
+}
+.bubble.user {
+  background: var(--veil);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: .7rem .9rem;
+}
+/* Consecutive tool-only bubbles sit tight via negative margin (flex `gap`
+   can't be overridden per sibling pair). The adjacent-sibling selector leaves
+   the first tools-only bubble's gap intact, preserving the turn boundary. */
+.bubble.tools-only + .bubble.tools-only { margin-top: -.9rem; }
+
+/* Turn stripe — a 2px colored bar to the left of each bubble. All bubbles in
+   one user→assistant turn share a color; the palette cycles through 5 so
+   adjacent turns are visually distinct when scrolling. Sits outside the
+   bubble's left edge in the messages container's padding gutter.
+   By default top/bottom extend half a gap beyond the bubble so same-turn
+   neighbours' stripes meet seamlessly across the 1rem flex gap. The two
+   turn-boundary overrides below clip those extensions so a turn's stripe
+   starts at the top of its user bubble and ends at the bottom of its last
+   bubble — leaving the full 2rem inter-turn gap stripe-free as a separator.
+   --border-w compensates the 1px padding-edge offset that user bubbles' border
+   would otherwise introduce — without it, stripes alternate 1px inset between
+   user/assistant rows. */
+.bubble { --border-w: 0px; }
+.bubble.user { --border-w: 1px; }
+.bubble::before {
+  content: '';
+  position: absolute;
+  /* Offsets subtract --border-w: absolute positioning anchors to the
+     padding-edge (inside the border), so a user bubble's 1px border would
+     otherwise shave 1px off each stripe edge. */
+  /* Stripe hugs the column (1rem into the left gutter); absolute, so it consumes no layout width —
+     which is why the gutters can be symmetric (no asymmetric padding needed to "make room"), and
+     thus why breakouts need no nudge. - var(--border-w): a user bubble's 1px border pushes the
+     padding edge (the abs-pos anchor) 1px right, so without it that stripe sits 1px right of the
+     assistant bubbles' — compensate. */
+  left: calc(-1rem - var(--border-w));
+  top: calc(-.5rem - var(--border-w));
+  bottom: calc(-.5rem - var(--border-w));
+  width: 1px;
+  background: var(--turn-color, transparent);
+}
+/* Clip stripe at turn boundaries. A user bubble always starts a turn → no
+   upward extension. A bubble followed by a user bubble is the last of its
+   turn → no downward extension. Same for the very last bubble in the list
+   (an in-flight turn whose last assistant message is the end of the stream).
+   Same `0 - var(--border-w)` form as the default top/bottom so user bubbles'
+   1px border still aligns with the stripe edge. */
+.bubble.user::before { top: calc(0px - var(--border-w)); }
+.bubble:has(+ .bubble.user)::before,
+.bubble:last-child::before { bottom: calc(0px - var(--border-w)); }
+/* Extra gap before each new turn (user bubble preceded by anything). Combined
+   with the container's 1rem gap → ~2rem visible between turns vs ~1rem within
+   a turn. Doesn't fire on the very first bubble (no preceding sibling). */
+.bubble + .bubble.user { margin-top: 1rem; }
+.bubble.turn-0 { --turn-color: #4cb35a; }   /* green */
+.bubble.turn-1 { --turn-color: #e89a3c; }   /* amber */
+.bubble.turn-2 { --turn-color: #d36b9a; }   /* pink */
+.bubble.turn-3 { --turn-color: #9970d6; }   /* purple */
+.bubble.turn-4 { --turn-color: #3cb8b3; }   /* teal */
+
+/* rendered markdown */
+.md { word-break: break-word; }
+/* Markdown links (often many file:line citations per message) — restrained like
+   the rest of the bulb's links: accent, no persistent underline, reveal it only
+   on hover. Without this they'd carry the browser-default underline-on-every-one. */
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md :first-child { margin-top: 0; }
+.md :last-child { margin-bottom: 0; }
+.md p { margin: .5rem 0; }
+/* Thematic break — also the divider between merged consecutive user sends (see
+   applyUser); faint so the bubble still reads as one turn. */
+.md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: .55rem 0;
+  opacity: .5;
+}
+.md pre {
+  background: var(--veil);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .7rem .85rem;
+  overflow-x: auto;
+}
+/* A pasted image (server renders an <img> from a base64 block, see blockToMarkdown) is capped to the
+   column and never blows the layout — height follows the width. */
+.md img { max-width: 100%; height: auto; border-radius: 6px; }
+/* Blockquote: left bar + faint tint + muted text — a quiet "quoted" callout. The bar
+   is mixed toward --border so it stays distinct from the bright turn stripe in the
+   gutter, and the tint is light enough not to read as a code/output panel. */
+.md blockquote {
+  margin: .5rem 0;
+  padding: .35rem .85rem;
+  border-left: 3px solid var(--border);
+  background: var(--veil);
+  border-radius: 0 6px 6px 0;
+  color: var(--muted);
+}
+.md blockquote :first-child { margin-top: 0; }
+.md blockquote :last-child { margin-bottom: 0; }
+.md code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .88em;
+}
+.md :not(pre) > code {
+  background: var(--veil);
+  padding: .1em .35em;
+  border-radius: 5px;
+}
+.md table { border-collapse: collapse; }
+.md th, .md td { border: 1px solid var(--border); padding: .3rem .55rem; }
+/* A faint header band breaks the grid's monotony and gives the table a head/body structure — tonal
+   (`--veil`, the document-panel shade), never a hue, so it reads as structure not opinion and follows
+   the host light/dark theme. As a panel the veil steps one shade above the table's container, so the
+   header still reads when the table sits inside a bubble or callout. The header text stays `--fg`:
+   weight + the fill carry it, a tint would be the opinionated bit. Left-align to the body cells. */
+.md th { background: var(--veil); font-weight: 600; text-align: left; }
+/* Disclosure (<details>/<summary>) from the safe-HTML allowlist (markdown.ts): a quiet --veil container,
+   subtler than a code block — assistant prose sits directly on the page, so a fill stands out; keep it
+   restrained and let the border define it. Summary is the clickable caret row (native marker), accent
+   on hover like a link. */
+.md details {
+  margin: .5rem 0;
+  padding: .35rem .7rem;
+  background: var(--veil);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.md summary { cursor: pointer; font-weight: 600; }
+.md summary:hover { color: var(--accent); }
+
+/* The full-lane breakout geometry, defined ONCE and shared by the two breakouts (the mermaid
+   embed and a spread bulb). `100%` in --lane-ml resolves against each user's own containing block
+   (prose width) at point of use, so both centre on the column axis — which is the viewport centre,
+   since the gutters are symmetric. One home so the geometry can't drift between the two (the bug
+   that let an off-centre nudge survive in one rule after being removed from the other). */
+.md { --lane-w: calc(100vw - 2rem); --lane-ml: calc((100% - var(--lane-w)) / 2); }
+
+/* Full-lane breakout — the mermaid embed (whole element) and a SPREAD bulb's iframe step out of
+   the prose column to the transcript width so wide content gets room. Both use --lane-w/--lane-ml
+   and extend symmetrically from the column, which is viewport-centred (symmetric gutters), so
+   neither needs an off-centre nudge (see Invariants in Specs-Bulbs/Claude-Bulb/Claude-Bulb.md). A
+   bulb's *wrapper* never breaks out — only its inner surface does — so the wrapper and its controls
+   stay at prose-right. position + z-index:0 lift the box over the turn stripe it crosses; the
+   mermaid SVG is transparent so a bg backs it, the bulb iframe is opaque so it occludes the stripe. */
+.md .mermaid {
+  width: var(--lane-w);
+  /* Vertical gap must be >= the box-shadow spread (1rem below): a smaller gap lets the bg ring
+     paint over the half-line of prose above/below — the trap the opaque bulb embed dodges by
+     having no shadow, which the transparent mermaid can't. */
+  margin: 1rem 0;
+  margin-left: var(--lane-ml);
+  margin-right: auto;
+  position: relative;
+  z-index: 0;
+  background: var(--bg);
+}
+
+/* Diagram specifics: scroll when wider than the lane; `safe center` centres one that fits and
+   left-aligns one that overflows, so a wide flowchart scrolls from its start node. The SVG is
+   transparent, so the turn stripe the breakout crosses shows through it — a bg box-shadow backs
+   the diagram to occlude it (and clears the h-scrollbar edge). The bulb embed is opaque (its
+   iframe fills the box), so it occludes the stripe itself and gets NO shadow — a shadow there
+   would paint its 1rem ring over the half-line of prose just above the embed (the gap is .6rem). */
+.md .mermaid {
+  overflow-x: auto;
+  display: flex;
+  justify-content: safe center;
+  box-shadow: 0 0 0 1rem var(--bg);
+}
+/* flex-shrink:0: otherwise the SVG shrinks to the flex container and its viewBox
+   scales it down — no overflow, no scrollbar. Natural width is what scrolls. */
+.md .mermaid svg { max-width: none; height: auto; flex: 0 0 auto; }
+
+/* Raw ```svg``` embeds: no breakout — these are drawings (smiley, plot), not wide
+   diagrams, so keep them in the prose column, centred and capped at its width. They
+   share the `.embed` stripe-chop below (a drawing earns its own row like a bulb). */
+.md .svg-embed { justify-content: center; }
+.md .svg-embed svg { max-width: 100%; height: auto; }
+
+/* Markdown tables: chop in-column (the `.embed` rule below) and `safe center` — a table that fits its
+   box centres, and one that overflows falls back to left so it scrolls from its first column rather than
+   clipping. Centring holds in both modes: a small in-column table sits centred in the prose column, a
+   spread one centred in the lane. The scroll lives on the inner `.table-scroll`, not the `.embed`
+   wrapper, so a horizontal scrollbar rides above the chop's bottom padding instead of flush against the
+   next line (a scrollbar sits at its own container's bottom edge). It's the centred flex child, capped at
+   the box so it shrinks-to-fit and scrolls only what overflows; `max-width:100%` + the overflow-induced
+   0 min-width let it shrink below the table's natural width. `spread` widens the wrapper to the lane (the
+   mermaid geometry) for a table fitTableEmbeds found too wide for the column. The opaque `.embed`
+   padding/z-index still occludes the turn stripe the spread crosses — no box-shadow needed. */
+.md .table-embed { justify-content: safe center; }
+.md .table-embed .table-scroll { overflow-x: auto; max-width: 100%; }
+/* max-content keeps the table at its natural (unwrapped) width so it overflows `.table-scroll` and earns
+   a scrollbar, rather than wrapping its cells to fit — the bar is the point, and it now rides inside the
+   chop padding. */
+/* Two ceilings work together so a prose-heavy table neither scrolls forever nor squashes to mush:
+   - per-column (the cell `max-width` — in an auto-layout table every cell in a column shares one width,
+     so a cell cap *is* a column cap): no single column hogs; long text wraps at a readable measure.
+   - whole-table (`max-width: var(--lane-w)`): the table never grows past the lane, so when columns don't
+     all fit, the browser's auto-layout *shares* the lane among them — wrapping each to its slice rather
+     than scrolling. It only scrolls once even longest-word-only columns can't fit the lane (genuinely too
+     many columns). `width: max-content` is still the *preferred* width, so a small table stays natural
+     and a wide one spreads; the lane cap just bounds the worst case. The floor lever (a per-cell
+     `min-width`) — turn squash into scroll past some readable minimum — is deliberately left off until a
+     real table needs it. `word-break: normal` resets the global `.md { word-break: break-word }` (which
+     behaves like overflow-wrap:anywhere): left inherited, that global lets the lane cap squeeze a column
+     below its longest word and snap it mid-character ("status" → "statu·s"). Reset to word-boundary
+     wrapping so each column floors at its longest whole word and a too-tight table scrolls instead of
+     shattering text; a pathological no-space token (a long URL) then scrolls rather than breaking. */
+.md .table-embed table { margin: 0; width: max-content; max-width: var(--lane-w); }
+.md .table-embed th, .md .table-embed td { max-width: 40ch; word-break: normal; }
+.md .table-embed.spread {
+  width: var(--lane-w);
+  margin-left: var(--lane-ml);
+  margin-right: auto;
+}
+
+/* ````bulb```` embeds: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
+   borderless). No frame of our own — like the mermaid/svg embeds, it sits in the flow rather
+   than in a box, so it reads as part of the transcript; the rounded clip just tidies the corners
+   of a bulb that paints its own background. `fit` (default) keeps it in the prose column and
+   caps its height (below); `spread` adds full-lane breakout + spacing from the shared rule above.
+   position:relative anchors the controls overlay in BOTH modes (spread re-declares it for the
+   z-index lift). .err is the compile-failure fallback; .bulb-err-strip is a runtime-error strip
+   under a live embed (both monospace, muted red). */
+/* The stripe-chop, shared by every opaque in-column visual artifact (the fit bulb and a raw
+   `svg` — each opts in by carrying `.embed`). An opaque bg over position:relative + z-index:0
+   paints above .bubble::before; a -1rem left extension reaches the stripe in the gutter without a
+   full breakout (padding-left:1rem keeps the content in the prose column, and the box's right edge
+   stays at prose-right, so a bulb's controls anchored there don't move). The vertical gap is opaque
+   padding, not margin: it occludes the stripe top and bottom so the cut is flush with the prose (no
+   stub in a transparent gap), symmetric above/below to separate the artifact from surrounding text.
+   margin top/bottom are zeroed — and the abutting prose margins too (below) — so the gap butts the
+   text. Mermaid is NOT on this path: it's transparent and breaks out, occluding via box-shadow.
+   Per-artifact layout (flex direction, centring) lives on .bulb-embed / .svg-embed. */
+.md .embed {
+  display: flex;
+  position: relative;
+  z-index: 0;
+  background: var(--bg);
+  margin: 0 0 0 -1rem;
+  padding: 1.1rem 0 1.1rem 1rem;
+}
+/* A bulb stacks its controls/frame/code vertically; in spread mode the inner iframe's own
+   breakout covers the stripe too (the wrapper still chops in column). */
+.md .bulb-embed { flex-direction: column; }
+/* Inline (default): cap the embed's height so a tall bulb doesn't run away down the transcript.
+   Past the cap the embed scrolls internally (its own overflow, set by the host↔embed protocol —
+   the iframe element can't scroll its srcdoc from out here). spread removes the cap. */
+.md .bulb-embed.fit iframe { max-height: 80dvh; }
+/* The frame host is a layout-less wrapper (domeleon owns the node; we parent the live iframe into
+   it once) — display:contents lifts the iframe to be a flex child of .bulb-embed, so the sizing and
+   spread-breakout rules target it directly, exactly as when it was appended as a direct child. The
+   code toggle hides it via .code-open rather than unmounting, so the bulb keeps its state. */
+.bulb-frame { display: contents; }
+.md .bulb-embed.code-open .bulb-frame { display: none; }
+/* Spread: the inner surface (live iframe, or the code view behind the toggle) breaks out to the
+   lane while the wrapper stays in the prose column, so the controls hold at prose-right. Shares the
+   --lane-* geometry; centred on the column axis so toggling spread doesn't shift a column-fitting
+   bulb sideways. `width !important` beats createBulbFrame's inline width:100% on the iframe
+   (harmless on the code view, which has none); both opaque, so position/z-index:0 lift them over
+   the turn stripe they now cross. */
+.md .bulb-embed.spread iframe,
+.md .bulb-embed.spread > .bulb-code {
+  width: var(--lane-w) !important;
+  margin-left: var(--lane-ml);
+  margin-right: auto;
+  position: relative;
+  z-index: 0;
+}
+/* Kill the transparent margin between an embed and the prose it abuts (top and bottom):
+   the embed's own opaque padding is the gap, and a leftover prose margin would let the
+   turn stripe show through it as a stub past the last/next line of text. */
+.md :has(+ .embed) { margin-bottom: 0; }
+.md .embed + * { margin-top: 0; }
+/* The rounded clip lives on the inner surfaces, not the embed (whose padding is now the
+   gap), so the bulb's own card — the iframe, or the code view behind the toggle — is
+   what carries the corners. */
+.md .bulb-embed iframe,
+.md .bulb-embed > .bulb-code {
+  border-radius: 8px;
+}
+/* Overlay pill: a small hover-revealed control floated at a container's
+   bottom-right, shared by the embed breakout button and the message copy button.
+   Muted at rest, accent on hover (instant, matching the status pills). The
+   container supplies the reveal; per-button bits layer on top. */
+.overlay-pill {
+  position: absolute;
+  bottom: .5rem;
+  right: .5rem;
+  font: inherit;
+  font-size: .72rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: .12rem .45rem;
+  /* These are word buttons that swap labels in place (fit⇄spread, code⇄run, copy⇄copied), so a
+     min-width keeps the button from jumping as the word's length changes — "fit" is much narrower
+     than "spread". Centered text so the floor padding sits evenly. (An icon button wouldn't want
+     this, but every pill here is a word.) */
+  min-width: 3.5rem;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.overlay-pill:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Per-fence copy pill (code / svg / mermaid) — one reveal rule for every copyable block, since the
+   fence rule stamps `.copyable` on each. The svg/mermaid containers are already position:relative for
+   the chop/breakout; the code-block wrapper needs it for the absolute pill. The pill is positioned
+   (absolute), so it paints over the static fence content regardless of DOM order. */
+.md .copyable { position: relative; }
+.md .copyable:hover .copy-src,
+.md .copy-src:focus-visible { opacity: 1; }
+.md .copy-src.done { color: var(--accent); border-color: var(--accent); }
+/* The wrapper carries the code block's vertical rhythm (it, not the <pre>, is the `.md` flow child
+   now, so the first/last-child margin resets land on it); the <pre> sits flush inside. */
+.md .code-block { margin: .6rem 0; }
+.md .code-block pre { margin: 0; }
+
+/* Controls (code ⇄ run, then copy, then breakout) — a centered overlay straddling the
+   bulb's top edge: clear of the running bulb below, free to overlap the prose above.
+   Absolute, so toggling run↔code (which resizes the bulb below) never moves it, and so
+   the bulb's vertical gap stays small. Revealed on embed-hover or focus; inside the row
+   the shared .overlay-pill drops its own corner-anchoring. */
+.md .bulb-controls {
+  position: absolute;
+  top: 0;
+  right: .5rem;
+  z-index: 2;
+  display: flex;
+  gap: .4rem;
+  transform: translateY(-50%);
+}
+.md .bulb-controls .overlay-pill { position: static; }
+.md .bulb-embed:hover .bulb-controls .overlay-pill,
+.md .bulb-controls .overlay-pill:focus-visible { opacity: 1; }
+.md .bulb-breakout:disabled { cursor: default; opacity: 1; }
+/* Breakout in flight: shimmer through the ~2s write+spawn wait so the click reads as "working"
+   rather than dead — the same treatment (and shared keyframes) as the launcher's play button
+   (.bulb-launch.launching). :disabled already keeps it visible if the pointer leaves. */
+.md .bulb-breakout.launching {
+  color: var(--accent); border-color: var(--accent);
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: bulb-shimmer 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .md .bulb-breakout.launching { animation: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+}
+/* Copy pill "copied" flash — mirrors the message .copy.done accent cue, scoped to the
+   embed control so it doesn't pick up the bubble-hover reveal. */
+.md .bulb-copy.done { color: var(--accent); border-color: var(--accent); }
+/* Source view behind the toggle — the bulb's .bulb.md rendered as markdown (file
+   labels + fenced code panels via the shared .md rules). Just a scroll container
+   here, capped so a long bulb doesn't blow out the transcript. No `display` — the
+   [hidden] attribute the toggle flips drives visibility. */
+/* Code view: a streamlined source listing — one labeled bar per file with the code
+   flush beneath, not a stack of bordered panels. The container is just the scroll box;
+   the file-label bar is the only fill (overriding .md pre's panel chrome below). */
+.md .bulb-code {
+  margin: 0;
+  padding: 0;
+  max-height: 480px;
+  overflow: auto;
+  font-size: .85rem;
+  /* A distinct surface from the transcript: the live bulb blends into the flow, but the
+     code view reads as an inspector panel. Code panels (.md pre below) are transparent, so
+     they show this through. */
+  background: var(--tool-bg);
+}
+/* **file.ext** labels render as <p><strong>…</strong></p>; a bulb's source has no other
+   top-level prose, so styling the paragraph as a header bar only ever hits a label. */
+.md .bulb-code p {
+  margin: 0;
+  padding: .3rem .85rem;
+  /* A touch darker than the code surface so the file-label header stays distinct now
+     that the whole code view shares one background. */
+  background: color-mix(in srgb, var(--fg) 6%, var(--tool-bg));
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.md .bulb-code p:first-child { border-top: none; }
+.md .bulb-code p strong { font-weight: 600; color: var(--fg); }
+/* Code flush on the embed bg — drop the inherited .md pre box (border/bg/radius). */
+.md .bulb-code pre {
+  margin: 0;
+  padding: .5rem .85rem .85rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+}
+/* hljs token colors for the code view, mapped to the bulb's own theme vars (no hljs
+   theme stylesheet) so highlighting follows light/dark rather than baking a palette
+   that would clash in dark mode. Minimal token set — enough for legible TS/HTML/CSS/
+   JSON/markdown without chasing every grammar scope. */
+.bulb-code .hljs-comment, .bulb-code .hljs-quote { color: var(--muted); font-style: italic; }
+.bulb-code .hljs-keyword, .bulb-code .hljs-literal, .bulb-code .hljs-built_in { color: var(--accent); }
+.bulb-code .hljs-tag, .bulb-code .hljs-name, .bulb-code .hljs-selector-tag { color: var(--accent); }
+.bulb-code .hljs-string, .bulb-code .hljs-regexp, .bulb-code .hljs-meta .hljs-string {
+  color: color-mix(in srgb, var(--diff-add) 85%, var(--fg));
+}
+.bulb-code .hljs-number { color: color-mix(in srgb, var(--accent) 55%, var(--fg)); }
+.bulb-code .hljs-attr, .bulb-code .hljs-attribute, .bulb-code .hljs-property, .bulb-code .hljs-type {
+  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+}
+.bulb-code .hljs-title, .bulb-code .hljs-title.function_, .bulb-code .hljs-section {
+  color: var(--fg); font-weight: 600;
+}
+.bulb-code .hljs-symbol, .bulb-code .hljs-bullet, .bulb-code .hljs-punctuation { color: var(--muted); }
+.md .bulb-embed.err {
+  padding: .6rem .8rem;
+  font-family: ui-monospace, monospace;
+  font-size: .85em;
+  color: color-mix(in srgb, var(--err) 70%, var(--fg));
+  white-space: pre-wrap;
+}
+.md .bulb-err-strip {
+  padding: .45rem .7rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--err) 8%, var(--bg));
+  font-family: ui-monospace, monospace;
+  font-size: .8em;
+  color: color-mix(in srgb, var(--err) 75%, var(--fg));
+  white-space: pre-wrap;
+}
+
+/* tool calls */
+/* Closed tool: just a single-line row, no chrome — a tool-only turn stays a
+   tight list, not N stacked panels. Open tools get the panel treatment below. */
+.tool {
+  font-size: .85rem;
+}
+/* Clickable caret row, shared by tool heads and the collapsed-turn summary: a flex
+   row that's an unselectable click target. align-items:center centers the caret
+   against the label box (verb↔summary alignment is handled inside .tool-label). */
+.tool-head, .turn-summary {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .15rem 0;
+  cursor: pointer;
+  user-select: none;
+}
+.tool.open {
+  margin-top: .55rem;
+  background: var(--veil);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.tool.open .tool-head {
+  padding: .4rem .6rem;
+}
+/* line-height: 1 keeps the oversized caret's box from inflating the row height. */
+.tool-caret { color: var(--muted); font-size: 1.4rem; line-height: 1; width: 1ch; }
+.tool-name { font-weight: 600; color: var(--accent); }
+/* Errors here are routine (a first-read miss the retry fixes), so a failed tool
+   recolors just its verb rather than boxing the whole row — a quiet signal. */
+.tool.err .tool-name { color: var(--err); }
+
+/* Collapsed-turn summary strip (intermediate steps hidden behind the final
+   answer). Same caret/row shape as a tool head, italic muted label. */
+.turn-summary { color: var(--muted); font-size: .85rem; }
+.turn-summary-text { font-style: italic; }
+.turn-summary:hover .turn-summary-text { color: var(--fg); }
+
+/* A superseded embed (an earlier same-name version) folds to this "💡 <Name> — Version N" stub — it
+   reclaims the bulb's full height. Marker-green text (--fold-marker: lime in dark, deep green in light)
+   on a neutral gray fill (--panel) that hugs the text (width:max-content), no border: text-hugging and
+   borderless keeps it distinct from the page's full-width bordered panels and clear of the live bulb's
+   hover pills, and the colored title rides a gray pill rather than a green block. Its look never depends
+   on outcome: errors show only inside the embed when expanded, so the title never changes. Click to
+   expand the older bulb (rerun fresh) back in. */
+.bulb-fold {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  gap: .5rem;
+  padding: .3rem .55rem;
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fold-marker);
+  font-size: .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+/* The fold is the sole child of its `.md` wrapper, so the `.md :first-child`/`:last-child` margin
+   reset (above) would zero a plain `margin` here. Scope it under `.md` so it outweighs that reset
+   (equal specificity, later in source) and the stub actually gets its breathing room. */
+.md .bulb-fold { margin: .7rem 0; }
+.bulb-fold:hover { background: color-mix(in srgb, var(--fg) 8%, var(--panel)); }
+.bulb-fold .tool-caret { color: inherit; }   /* follow the accent row color */
+/* Verb + summary are inline siblings sharing one line box and font, so they sit
+   on a common baseline. Ellipsis truncation lives on the wrapper, not the
+   children — overflow:hidden on the summary itself skews its baseline. */
+.tool-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-sum {
+  margin-left: .5rem;
+  color: var(--muted);
+  /* Re-enable selection the .tool-head blankets off: the verb/caret stay an
+     unselectable click target, but the summary is real data (path, pattern,
+     command) worth copying. A drag selects; a plain click still toggles. */
+  user-select: text;
+}
+.tool-run { color: var(--muted); }
+
+/* Code-display panels inside an open tool card: raw input/output (.tool-in,
+   .tool-out) and per-hunk diff halves (.diff-old, .diff-new). All four share
+   the same monospace block geometry — padding, max-height with scroll,
+   pre-wrap with word-break, top-divider — so consolidating here means edits
+   to "how a code panel looks" land in one place. Color treatment is the only
+   per-variant difference. */
+.tool-in, .tool-out, .diff-old, .diff-new {
+  margin: 0;
+  padding: .55rem .7rem;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: .8rem;
+  max-height: 320px;
+  overflow: auto;
+}
+.tool-out { color: var(--muted); }
+/* The band carries the add/remove signal; text stays --fg so it's readable. Colouring the text the same
+   hue as its fill (red-on-red) is what washes a diff out — the band alone is the convention. */
+.diff-old {
+  background: color-mix(in srgb, var(--err) 24%, transparent);
+  color: var(--fg);
+}
+.diff-new {
+  background: color-mix(in srgb, var(--diff-add) 24%, transparent);
+  color: var(--fg);
+}
+
+/* Path link: plain accent, underline only on hover. skip-ink:none so the
+   underline stays solid under a path's descenders and slashes. */
+.tool-sum.link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.tool-sum.link:hover { text-decoration: underline; text-decoration-skip-ink: none; }
+
+.diff { display: flex; flex-direction: column; }
+.diff-step {
+  padding: .35rem .7rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.thinking { margin-bottom: .4rem; font-size: .82rem; color: var(--muted); }
+.thinking pre { white-space: pre-wrap; }
+
+/* Copy button: an .overlay-pill revealed on bubble-hover. */
+.bubble:hover .copy { opacity: 1; }
+/* "copied" flash: eases into accent on click (CopyButton is a Component, so its
+   node persists across re-renders and the transition actually runs). The color
+   transition lives only on .done, not the base pill, so hover stays instant — the
+   trade is the revert snaps back rather than easing out. */
+.copy.done {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+  transition: opacity .2s ease, color .5s ease, border-color .5s ease;
+}
+/* Assistant bubbles carry no padding, so the shared .5rem bottom would float the
+   pill above the last line — pin it to the text's bottom edge. */
+.bubble.assistant .copy { bottom: 0; }

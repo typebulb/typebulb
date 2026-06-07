@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./ai" },
+    { "path": "./format" },
+    { "path": "./resolver" },
+    { "path": "./dts" },
+    { "path": "./lint" },
+    { "path": "./transpile" },
+    { "path": "./cli" }
+  ]
+}

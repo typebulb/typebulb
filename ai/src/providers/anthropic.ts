@@ -1,0 +1,278 @@
+/**
+ * Anthropic Messages API (/v1/messages) — wire types and provider implementation.
+ */
+import type {
+  ChatMessageDto,
+  UpstreamErrorDto,
+  ReasoningDepth,
+  ChatStreamPieceDto,
+  ChatResponseDto,
+  ProviderResponseDto,
+  ProviderStreamEventDto
+} from '../protocol.js'
+import { AIProvider, type ChatRequestOpts } from '../aiProvider.js'
+
+// ── Wire types ───────────────────────────────────────────────────────
+
+export interface AnthropicTextContent {
+  type: 'text'
+  text: string
+}
+
+export interface AnthropicThinkingContent {
+  type: 'thinking'
+  thinking: string
+}
+
+// Anthropic non-streaming response format
+export interface AnthropicNonStreamingResponseDto extends ProviderResponseDto {
+  type: 'message'
+  content: Array<AnthropicTextContent | AnthropicThinkingContent>
+}
+
+// Error response
+export interface AnthropicErrorResponseDto {
+  type: 'error'
+  error: {
+    type: string
+    message: string
+  }
+}
+
+// SSE events (Anthropic style)
+export interface AnthropicContentBlockDeltaDto {
+  type: 'content_block_delta'
+  index: number
+  delta: { type: 'text_delta'; text: string } | { type: 'thinking_delta'; thinking: string }
+}
+
+export interface AnthropicContentBlockStartDto {
+  type: 'content_block_start'
+  index: number
+  content_block: { type: 'text'; text: string }
+}
+
+export interface AnthropicContentBlockStopDto {
+  type: 'content_block_stop'
+  index: number
+}
+
+export interface AnthropicMessageStartDto {
+  type: 'message_start'
+  message: Record<string, unknown>
+}
+
+export interface AnthropicMessageDeltaDto {
+  type: 'message_delta'
+  delta: Record<string, unknown>
+  usage?: Record<string, unknown>
+}
+
+export interface AnthropicMessageStopDto {
+  type: 'message_stop'
+}
+
+export interface AnthropicPingDto {
+  type: 'ping'
+}
+
+export type AnthropicSseEventDto =
+  | AnthropicContentBlockDeltaDto
+  | AnthropicContentBlockStartDto
+  | AnthropicContentBlockStopDto
+  | AnthropicMessageStartDto
+  | AnthropicMessageDeltaDto
+  | AnthropicMessageStopDto
+  | AnthropicPingDto
+  | AnthropicErrorResponseDto
+
+// ── Provider implementation ──────────────────────────────────────────
+
+/** Anthropic thinking (extended reasoning) */
+type AnthropicThinkingConfig =
+  | { type: 'enabled'; budget_tokens: number }
+  | { type: 'adaptive' }
+
+/** Anthropic web search tool definition */
+interface AnthropicWebSearchTool {
+  type: 'web_search_20250305'
+  name: 'web_search'
+  max_uses?: number
+}
+
+/** Ephemeral prompt-cache breakpoint */
+type CacheControl = { type: 'ephemeral' }
+
+/** Outbound text block with an optional cache breakpoint (request-side only) */
+type AnthropicTextBlock = { type: 'text'; text: string; cache_control?: CacheControl }
+
+/** Message whose content may be a plain string or block array (block form carries cache_control) */
+type AnthropicMessage = { role: ChatMessageDto['role']; content: string | AnthropicTextBlock[] }
+
+/** Anthropic request payload */
+export type AnthropicRequestPayload = {
+  model: string
+  messages: AnthropicMessage[]
+  max_tokens: number
+  stream: boolean
+  system?: string | AnthropicTextBlock[]
+  thinking?: AnthropicThinkingConfig
+  output_config?: { effort: 'low' | 'medium' | 'high' | 'max' }
+  tools?: AnthropicWebSearchTool[]
+}
+
+export class AnthropicProvider extends AIProvider {
+  protected readonly providerName = 'Anthropic'
+  readonly defaultBaseUrl = 'https://api.anthropic.com'
+  readonly path = '/v1/messages'
+
+  // ── Request building ─────────────────────────────────────────────
+
+  buildHeaders(apiKey: string): Record<string, string> {
+    return {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    }
+  }
+
+  buildPayload(
+    messages: ChatMessageDto[],
+    model: string,
+    opts: ChatRequestOpts,
+    stream: boolean
+  ): AnthropicRequestPayload {
+    const { system, conversationMessages } = this.extractSystemMessages(messages)
+
+    const payload: AnthropicRequestPayload = {
+      model,
+      max_tokens: this.getMaxTokens(model),
+      // Breakpoint on the last message caches the conversation prefix (extends each turn)
+      messages: this.withLastMessageCached(conversationMessages),
+      stream
+    }
+
+    // Enable web search by default, can be disabled via opts.webSearch = false
+    if (opts?.webSearch !== false) {
+      payload.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
+    }
+
+    if (system) {
+      // Breakpoint on the (stable) system block caches tools + system across turns
+      payload.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+    }
+
+    if (this.isReasoningEnabled(opts)) {
+      const depth = opts!.reasoning!
+      if (this.isModernModel(model)) {
+        // Opus 4.6+: adaptive thinking + effort parameter
+        const effortMap: Record<ReasoningDepth, 'low' | 'medium' | 'high' | 'max'> = {
+          0: 'low',
+          1: 'low',
+          2: 'medium',
+          3: 'high'
+        }
+        payload.thinking = { type: 'adaptive' }
+        payload.output_config = { effort: effortMap[depth] }
+      } else {
+        // Older models: manual thinking with budget_tokens
+        const budgetMap: Record<ReasoningDepth, number> = {
+          0: 0,
+          1: 2048,
+          2: 4096,
+          3: 8192
+        }
+        payload.thinking = {
+          type: 'enabled',
+          budget_tokens: budgetMap[depth]
+        }
+      }
+    }
+
+    return payload
+  }
+
+  parseError(errorText: string, status: number): UpstreamErrorDto {
+    return this.parseJsonError(errorText, status)
+  }
+
+  // ── Response parsing ─────────────────────────────────────────────
+
+  parseNonStreamingResponse(json: ProviderResponseDto): ChatResponseDto {
+    if (!this.isAnthropicResponse(json)) {
+      return { text: '' }
+    }
+
+    const text = json.content
+      .filter((block): block is AnthropicTextContent => block.type === 'text')
+      .map(block => block.text)
+      .join('')
+
+    const reasoning = json.content
+      .filter((block): block is AnthropicThinkingContent => block.type === 'thinking')
+      .map(block => block.thinking)
+      .join('\n\n')
+
+    return { text, reasoning: reasoning || undefined }
+  }
+
+  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
+    if (!this.isAnthropicEvent(json)) return null
+
+    switch (json.type) {
+      case 'content_block_delta':
+        if (json.delta.type === 'text_delta') {
+          return { text: json.delta.text || '' }
+        }
+        if (json.delta.type === 'thinking_delta') {
+          return { reasoning: json.delta.thinking || '' }
+        }
+        return null
+
+      case 'message_start':
+      case 'content_block_start':
+      case 'content_block_stop':
+      case 'message_delta':
+      case 'message_stop':
+      case 'ping':
+        return null
+
+      default:
+        return null
+    }
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────
+
+  /** Convert the final message to block form with a cache breakpoint; others pass through as-is. */
+  private withLastMessageCached(messages: ChatMessageDto[]): AnthropicMessage[] {
+    const last = messages.length - 1
+    return messages.map((m, i) =>
+      i === last
+        ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] }
+        : m
+    )
+  }
+
+  private isAnthropicResponse(json: unknown): json is AnthropicNonStreamingResponseDto {
+    return typeof json === 'object' && json !== null
+      && (json as AnthropicNonStreamingResponseDto).type === 'message'
+      && Array.isArray((json as AnthropicNonStreamingResponseDto).content)
+  }
+
+  private isAnthropicEvent(json: unknown): json is AnthropicSseEventDto {
+    return typeof json === 'object' && json !== null && 'type' in json
+  }
+
+  /** Claude 4.6+: adaptive thinking, higher output limit */
+  private isModernModel(model: string): boolean {
+    const m = model.match(/^claude-\w+-(\d+)-(\d+)/)
+    return !!m && (+m[1] > 4 || (+m[1] === 4 && +m[2] >= 6))
+  }
+
+  private getMaxTokens(model: string): number {
+    return this.isModernModel(model) ? 64000 : 32000
+  }
+
+}

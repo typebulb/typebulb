@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Explicit, not auto-discovered: under moduleResolution:"Bundler" + pnpm's symlinked
+    // node_modules, VS Code's tsserver fails to auto-include @types/node (tsc finds it fine),
+    // so node builtins (fs/promises, path, events…) show phantom editor-only errors. Naming
+    // 'node' resolves it via typeRoots deterministically. Don't remove.
+    "types": ["node"],
+    "rootDir": ".",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "outDir": ".tsbuild",
+    "esModuleInterop": true,
+    "strictFunctionTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "agents/**/*.ts"],
+  "references": [
+    { "path": "../ai" },
+    { "path": "../format" },
+    { "path": "../resolver" },
+    { "path": "../dts" },
+    { "path": "../lint" },
+    { "path": "../transpile" }
+  ]
+}

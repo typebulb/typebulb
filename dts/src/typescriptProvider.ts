@@ -1,0 +1,155 @@
+import { resolve as resolveExports } from 'resolve.exports'
+import { PackageRef, type CdnClient } from 'typebulb/resolver'
+import { TypeProvider, type TypeFetchResult } from './typeProvider.js'
+import { DECLARATION_EXTENSIONS, DTS_REGEX, makeDeclarationCandidates } from './dtsConfig.js'
+import { fetchWithRetry } from './httpFetch.js'
+import type { FetchDtsWithCache } from './fetchDts.js'
+
+type ResolutionKind = 'types' | 'probe'
+type ResolutionResult = { kind: ResolutionKind; path: string }
+
+type PackageJson = {
+  name?: string
+  version?: string
+  types?: string
+  typings?: string
+  exports?: unknown
+}
+
+export class TypescriptProvider extends TypeProvider {
+  constructor(fetchDts: FetchDtsWithCache, private cdnClient: CdnClient) {
+    super(fetchDts)
+  }
+
+  private async loadPackageAtVersionedRoot(root: string, version?: string) {
+    const url = this.cdnClient.packageJson(new PackageRef({ name: root, version }))
+    const resp = await fetchWithRetry(url)
+    if (!resp?.ok) return undefined
+    let pkg: PackageJson | undefined
+    try { pkg = await resp.json() as PackageJson } catch { return undefined }
+    if (!pkg) return undefined
+    return {
+      pkg,
+      baseDir: this.cdnClient.baseDir(new PackageRef({ name: root, version: version ?? pkg.version })),
+      version,
+    }
+  }
+
+  private extractPathFromResult(result: unknown) {
+    if (typeof result === 'string') return result
+    if (Array.isArray(result)) return result.find(x => typeof x === 'string')
+    return undefined
+  }
+
+  private async tryUntilSuccess<T>(items: T[], fn: (item: T) => Promise<TypeFetchResult | undefined>) {
+    for (const item of items) {
+      const res = await fn(item)
+      if (res) return res
+    }
+  }
+
+  private async resolveFromSelected(
+    sel: ResolutionResult,
+    fetchCandidate: (rel: string) => Promise<TypeFetchResult | undefined>,
+  ) {
+    if (sel.kind === 'types') {
+      const clean = this.cdnClient.normalizeRelative(sel.path)
+      if (!clean || clean === '/' || clean === '.') {
+        return this.tryUntilSuccess([...DECLARATION_EXTENSIONS], fetchCandidate)
+      }
+      if (!DTS_REGEX.test(clean)) {
+        const res = await this.tryUntilSuccess(this.declarationCandidatesFor(clean), fetchCandidate)
+        if (res) return res
+      }
+      return fetchCandidate(clean)
+    }
+    const others = this.declarationCandidatesFor(sel.path)
+    return this.tryUntilSuccess([...DECLARATION_EXTENSIONS, ...others], fetchCandidate)
+  }
+
+  private toResolutionResult(path: string): ResolutionResult {
+    return { kind: DTS_REGEX.test(path) ? 'types' : 'probe', path }
+  }
+
+  private resolveExportsPath(pkg: PackageJson, subpath: string) {
+    const key = subpath || '.'
+    const pkgRecord = pkg as unknown as Record<string, unknown>
+
+    try {
+      const typesPath = this.extractPathFromResult(
+        resolveExports(pkgRecord, key, { conditions: ['types'] }),
+      )
+      if (typesPath) return typesPath
+    } catch {}
+
+    try {
+      return this.extractPathFromResult(
+        resolveExports(pkgRecord, key, {
+          browser: true,
+          conditions: ['import', 'default', 'module', 'browser', 'node'],
+        }),
+      )
+    } catch { return undefined }
+  }
+
+  async resolve(packageRef: string) {
+    try {
+      const parsed = PackageRef.parse(packageRef)
+      const { pkg, baseDir } = await this.loadPackageAtVersionedRoot(parsed.name, parsed.version) || {}
+      if (!pkg || !baseDir) return undefined
+
+      const resolvedBase = { name: parsed.name, version: parsed.version }
+      const resolvedRootPkg = new PackageRef(resolvedBase).format()
+      const resolvedFullPkg = new PackageRef({ ...resolvedBase, subpath: parsed.subpath }).format()
+
+      const fetcher = (rel: string) => this.fetchCandidateFrom(baseDir, parsed.name, rel)
+
+      if (parsed.subpath) {
+        const key = this.cdnClient.ensureLeadingDotSlash(parsed.subpath)
+        const expPath = this.resolveExportsPath(pkg, key)
+
+        if (expPath) {
+          const res = await this.resolveFromSelected(this.toResolutionResult(expPath), fetcher)
+          if (res) return { ...res, resolvedPkg: resolvedFullPkg }
+        }
+
+        const res = await this.tryUntilSuccess(this.declarationCandidatesFor(key), fetcher)
+        if (res) return { ...res, resolvedPkg: resolvedFullPkg }
+      }
+
+      const declared = pkg.types ?? pkg.typings
+      if (declared) {
+        const res = await this.resolveFromSelected({ kind: 'types', path: declared }, fetcher)
+        if (res) return { ...res, resolvedPkg: resolvedRootPkg }
+      }
+
+      const rootExport = this.resolveExportsPath(pkg, '.')
+      if (rootExport) {
+        const res = await this.resolveFromSelected(this.toResolutionResult(rootExport), fetcher)
+        if (res) return { ...res, resolvedPkg: resolvedRootPkg }
+      }
+
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async fetchCandidateFrom(baseDir: string, root: string, rel: string) {
+    const relNorm = this.cdnClient.normalizeRelative(rel)
+    const url = new URL(relNorm, baseDir).toString()
+    const out = await this.fetchDtsText(url)
+    return out ? { dts: out.dts, url: out.url, resolvedPkg: root } : undefined
+  }
+
+  declarationCandidatesFor(runtimePath: string) {
+    if (!runtimePath || runtimePath === './' || runtimePath === '/') {
+      return [...DECLARATION_EXTENSIONS]
+    }
+    const base = runtimePath.replace(/\.(mjs|cjs|js|mts|cts|ts)$/i, '')
+    const candidates = makeDeclarationCandidates(base)
+    const trailingBase = base.endsWith('/') ? base : `${base}/`
+    candidates.push(...makeDeclarationCandidates(`${trailingBase}index`))
+    return candidates
+  }
+}

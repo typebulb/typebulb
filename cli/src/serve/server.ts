@@ -1,0 +1,519 @@
+/**
+ * Local HTTP server for serving bulbs.
+ * Uses Hono for routing, consistent with the main Typebulb server.
+ */
+
+import { Hono, type Context } from 'hono'
+import { serve } from '@hono/node-server'
+import { streamSSE } from 'hono/streaming'
+import * as fs from 'fs/promises'
+import * as path from 'path'
+import type { EventEmitter } from 'events'
+import type { ProviderProtocol } from 'typebulb/ai'
+import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, ProviderStreamError, type ResolvedAIProvider } from 'typebulb/ai'
+import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
+import { recordDenial } from './serverRegistry.js'
+import { PROVIDER_ENV_KEYS, getFilteredModels } from './modelCatalog.js'
+
+// The CLI is a local tool: the server binds loopback only and is never reachable
+// off-machine. Sharing / other-device access is typebulb.com's job, not the CLI's.
+const LOOPBACK = '127.0.0.1'
+
+// Hostnames that address THIS machine. Since the server binds loopback only, a
+// legitimate request's Host/Origin is always one of these; anything else (e.g. a
+// DNS-rebinding domain pointed at 127.0.0.1) addresses us by a name we don't own.
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+
+/** Hostname of a `Host` header (`127.0.0.1:3000`) or an `Origin` (`http://…:3000`),
+ *  port and IPv6 brackets stripped. undefined if absent/unparseable. */
+function hostnameOf(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  try { return new URL(value.includes('://') ? value : `http://${value}`).hostname } catch { return undefined }
+}
+
+/** Does this Host/Origin value address the local machine? */
+function isLocalAddress(value: string | undefined): boolean {
+  const host = hostnameOf(value)
+  return !!host && LOCAL_HOSTS.has(host)
+}
+
+/** Message text for a caught unknown, for JSON error bodies. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : 'Unknown error'
+}
+
+export interface ServerOptions {
+  getHtml: () => string
+  basePath: string
+  port: number
+  reloadEmitter?: EventEmitter
+  getServerExports?: () => Record<string, Function> | null
+  /** Local package override: serve `<name>`'s bytes read-only from `serveDir`. */
+  localOverride?: { name: string; serveDir: string }
+  /** Whether the bulb was launched with `--trust`. When false (the default),
+   *  the three privileged endpoints (`/__fs`, `/__api`, `/__ai`) are hard-denied
+   *  server-side — the airtight half of default-deny (Specs/Typebulb-CLI-Trust.md),
+   *  independent of the sandboxed-frame origin isolation that also fences them off.
+   *  `trustHint` is the re-run command surfaced in the 403 for non-browser callers. */
+  trusted?: boolean
+  trustHint?: string
+  /** Serve a built asset directory read-only under `mount` (e.g. the agent viewer's
+   *  bundled client at `/agents/claude/`). Like `localOverride` but not tied to the
+   *  `--replace` mechanism — just static bytes from disk, content-typed and
+   *  traversal-guarded. The global COOP/COEP middleware wraps these too. */
+  staticAssets?: { mount: string; dir: string }
+}
+
+export interface ServerInstance {
+  port: number
+  close: () => void
+}
+
+/** Start the local HTTP server */
+export async function startServer(options: ServerOptions): Promise<ServerInstance> {
+  const { getHtml, basePath, port, reloadEmitter, getServerExports, localOverride, trusted = false, trustHint, staticAssets } = options
+
+  const app = new Hono()
+
+  // DNS-rebinding guard (global): the `server.ts` RPC + `tb.fs` routes run with
+  // the user's full Node/filesystem privileges, so a request arriving under a
+  // non-local Host header is a rebinding attempt — reject it before any route
+  // runs. Legitimate browsers reaching 127.0.0.1 always send a local Host.
+  app.use('*', async (c, next) => {
+    if (!isLocalAddress(c.req.header('host'))) return c.text('Forbidden: untrusted Host', 403)
+    await next()
+  })
+
+  // Cross-origin isolation headers — required for SharedArrayBuffer
+  app.use('*', async (c, next) => {
+    await next()
+    c.res.headers.set('Cross-Origin-Opener-Policy', 'same-origin')
+    c.res.headers.set('Cross-Origin-Embedder-Policy', 'credentialless')
+  })
+
+  // The capability boundary (Specs/Typebulb-CLI-Trust.md, Invariant 2): the only
+  // routes that touch the user's filesystem, API keys, or Node. Both guards below
+  // apply to exactly this set — defining it once keeps "these three are privileged"
+  // a single source of truth.
+  const PRIVILEGED_ROUTES = ['/__fs/*', '/__api/*', '/__ai']
+
+  // Trust gate (default-deny). Without `--trust`, the privileged endpoints are
+  // hard-denied here — the contract of Specs/Typebulb-CLI-Trust.md. This is
+  // belt-and-suspenders to the sandboxed-frame mechanism that already fences these
+  // off by origin: the gate holds regardless of how the request arrives (raw
+  // fetch, curl, a future non-iframe path), so default-deny never depends on
+  // browser semantics. Runs before the CSRF guard so the denial that names the
+  // unlock wins. The 403 body names `--trust` for non-browser callers; the
+  // in-page shim throws its own `--trust` message before a fetch is ever made.
+  const trustGate = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+    if (!trusted) {
+      // Record which capability was denied so a host (the launcher) can offer to relaunch
+      // trusted. Fire-and-forget — never block the 403 on a registry write.
+      const p = new URL(c.req.url).pathname
+      const cap = p.startsWith('/__fs') ? 'the filesystem'
+        : p === '/__ai' ? 'AI (your API keys)'
+        : 'server-side code (server.ts)'
+      void recordDenial(process.pid, cap)
+      const hint = trustHint ? `\n  ${trustHint}` : ''
+      return c.text(`Forbidden: this capability requires --trust.${hint}`, 403)
+    }
+    await next()
+  }
+
+  // CSRF guard. A malicious website open in the same browser can POST here (the
+  // Host is the real `localhost`, so the rebinding guard above passes it), but the
+  // browser stamps it `Sec-Fetch-Site: cross-site` — or, on older clients, a
+  // foreign `Origin`. Same-origin shim calls and non-browser callers (curl, tests:
+  // neither header) pass untouched.
+  const csrfGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+    const site = c.req.header('sec-fetch-site')
+    if (site) {
+      if (site === 'cross-site') return c.text('Forbidden: cross-site request', 403)
+    } else {
+      const origin = c.req.header('origin')
+      if (origin && !isLocalAddress(origin)) return c.text('Forbidden: cross-origin request', 403)
+    }
+    await next()
+  }
+
+  for (const route of PRIVILEGED_ROUTES) {
+    app.use(route, trustGate)
+    app.use(route, csrfGuard)
+  }
+
+  // Diagnostic log — `tb.server.log`. Deliberately NOT a privileged route: it only ever runs the
+  // built-in `console.log` (below), never a user `server.ts` export, so it spends no keys, touches
+  // no fs, and runs no user Node — it crosses no capability boundary. That's why it's ungated: a
+  // Restricted bulb can still print debug output (the FAQ's recommended debugging path) without
+  // tripping the trust gate (and so without raising a spurious elevation prompt for a plain log).
+  // Still CSRF-guarded, so a cross-site page can't spam the console; the same-origin shim passes.
+  app.use('/__log', csrfGuard)
+  app.post('/__log', async (c) => {
+    try {
+      const { args } = await c.req.json<{ args: unknown[] }>()
+      console.log(...(args || []))
+    } catch { /* malformed body — never error a fire-and-forget log */ }
+    return c.json({ ok: true })
+  })
+
+  // Main page - serve the compiled bulb HTML (dynamic for hot reload)
+  app.get('/', (c) => {
+    return c.html(getHtml())
+  })
+
+  // Filesystem API - read file. Returns raw bytes; the shim decodes text or
+  // hands back a Uint8Array. No utf-8 decode here, so binary survives intact.
+  app.post('/__fs/read', async (c) => {
+    try {
+      const { path: reqPath } = await c.req.json<{ path: string }>()
+      const resolved = resolvePath(reqPath, basePath)
+      const data = await fs.readFile(resolved)
+      return new Response(new Uint8Array(data), {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      })
+    } catch (e) {
+      const message = errorMessage(e)
+      return c.json({ error: message }, 400)
+    }
+  })
+
+  // Filesystem API - write file. Path is a query param so the body can carry
+  // raw bytes (binary) or UTF-8 text without a JSON envelope.
+  app.post('/__fs/write', async (c) => {
+    try {
+      const reqPath = c.req.query('path')
+      if (!reqPath) return c.json({ error: 'Missing path' }, 400)
+      const resolved = resolvePath(reqPath, basePath)
+
+      // Ensure parent directory exists
+      await fs.mkdir(path.dirname(resolved), { recursive: true })
+      await fs.writeFile(resolved, Buffer.from(await c.req.arrayBuffer()))
+
+      return c.json({ success: true })
+    } catch (e) {
+      const message = errorMessage(e)
+      return c.json({ error: message }, 400)
+    }
+  })
+
+  // Built-in server functions (user exports override these)
+  const BUILTINS: Record<string, Function> = {
+    log: console.log,
+  };
+
+  // Server API - call exported functions from **server.ts**
+  app.post('/__api/:name', async (c) => {
+    try {
+      const exports = getServerExports?.()
+      const name = c.req.param('name')
+      const fn = exports?.[name] ?? BUILTINS[name]
+      if (!fn || typeof fn !== 'function') {
+        return c.json({ error: `API function '${name}' not found` }, 404)
+      }
+      const { args } = await c.req.json<{ args: unknown[] }>()
+      const result = await fn(...(args || []))
+      return c.json({ result })
+    } catch (e) {
+      const message = errorMessage(e)
+      return c.json({ error: message }, 500)
+    }
+  })
+
+  // AI endpoint - tb.ai() calls AI providers directly using env API keys
+  app.post('/__ai', async (c) => {
+    try {
+      const { messages, system, reasoning, provider: reqProvider, model: reqModel, webSearch } = await c.req.json<{
+        messages: Array<{ role: string; content: string }>
+        system?: string
+        reasoning?: number
+        provider?: string
+        model?: string
+        webSearch?: boolean
+      }>()
+
+      if (!messages || !Array.isArray(messages) || messages.length === 0) {
+        return c.json({ message: 'messages array is required', code: 'unknown', retryable: false }, 400)
+      }
+
+      const resolved = resolveLocalProvider(reqProvider, reqModel)
+      if (typeof resolved === 'string') {
+        return c.json({ message: resolved, code: 'unknown', retryable: false }, 400)
+      }
+
+      // AiMessage → ChatMessageDto: prepend system as system message
+      const chatMessages = [
+        ...(system ? [{ role: 'system' as const, content: system }] : []),
+        ...messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+      ]
+
+      const response = await sendAIRequest(resolved, {
+        model: resolved.model,
+        messages: chatMessages,
+        stream: true,
+        reasoning: (reasoning ?? 0) as 0 | 1 | 2 | 3,
+        webSearch: webSearch ?? true
+      })
+
+      if (!response.ok) {
+        const error = await normalizeUpstreamError(response, resolved.protocol)
+        return c.json(error, response.status as any)
+      }
+
+      const text = await consumeStreamText(response, resolved.protocol)
+
+      if (!text) {
+        console.warn('[tb.ai] Empty response from provider')
+      }
+
+      return c.json({ text })
+    } catch (e) {
+      if (e instanceof ProviderStreamError) {
+        return c.json({ message: e.message, code: e.code, retryable: e.retryable }, 500)
+      }
+      const message = errorMessage(e)
+      return c.json({ message, code: 'unknown', retryable: false }, 500)
+    }
+  })
+
+  // Model discovery - fetches catalog from typebulb.com, filtered by local env API keys
+  app.get('/__models', async (c) => {
+    try {
+      const models = await getFilteredModels()
+      return c.json(models)
+    } catch {
+      return c.json([], 200)
+    }
+  })
+
+  // CDN proxy — same-origin serving for Web Workers, WASM, AND all package
+  // fetches that the import map routes here. Disk-cached so repeated runs
+  // (and offline use) don't re-fetch.
+  const PROXY_ALLOWED_HOSTS = ['esm.sh', 'unpkg.com', 'cdn.jsdelivr.net', 'cdnjs.cloudflare.com']
+  const proxyCache = new FsProxyCache()
+
+  app.get('/proxy/*', async (c) => {
+    // Reconstruct pathname + query as the browser saw it, then strip /proxy/
+    // and locate the last "https://" — handles double-wrapped proxy URLs.
+    const reqUrl = new URL(c.req.url)
+    const pathAndQuery = reqUrl.pathname + reqUrl.search
+    const raw = pathAndQuery.slice('/proxy/'.length)
+    const idx = raw.lastIndexOf('https://')
+    if (idx === -1) return c.text('Invalid proxy URL', 400)
+    return proxyToUrl(c, raw.slice(idx))
+  })
+
+  // Local package override — serve the overridden package's built bytes read-only from
+  // disk (Specs/Typebulb-CLI-Replace.md). Registered only when an override is active.
+  if (localOverride) serveStaticDir(app, `/local/${localOverride.name}/`, localOverride.serveDir)
+
+  // Static asset directory (the debulbified agent viewer's bundled client) — read-only
+  // bytes from disk under `mount`, independent of `--replace`.
+  if (staticAssets) serveStaticDir(app, staticAssets.mount, staticAssets.dir)
+
+  async function proxyToUrl(c: Context, targetUrl: string): Promise<Response> {
+    let parsed: URL
+    try { parsed = new URL(targetUrl) } catch { return c.text('Invalid URL', 400) }
+    if (parsed.protocol !== 'https:') return c.text('HTTPS only', 400)
+    if (!PROXY_ALLOWED_HOSTS.includes(parsed.hostname)) return c.text('Host not allowed', 403)
+
+    const hit = await proxyCache.get(targetUrl)
+    if (hit) {
+      return new Response(hit.body as BodyInit, { status: 200, headers: buildProxyResponseHeaders(hit.contentType, hit.cacheControl) })
+    }
+
+    try {
+      const resp = await fetch(targetUrl, {
+        headers: { 'Accept': c.req.header('Accept') || '*/*' },
+        redirect: 'follow',
+      })
+      if (!resp.ok) return c.text(`Upstream ${resp.status}`, resp.status as any)
+
+      const contentType = resp.headers.get('Content-Type') || undefined
+      const cacheControl = resp.headers.get('Cache-Control') || undefined
+
+      // Tee the upstream stream so the browser sees bytes as they arrive
+      // while we drain the second branch to disk in the background. Without
+      // tee, large WASM (~30MB ffmpeg-core) would block until fully buffered.
+      if (resp.body) {
+        const [forClient, forCache] = resp.body.tee()
+        void (async () => {
+          try {
+            const ab = await new Response(forCache).arrayBuffer()
+            await proxyCache.set(targetUrl, { body: Buffer.from(ab), contentType, cacheControl })
+          } catch {}
+        })()
+        return new Response(forClient, { status: resp.status, headers: buildProxyResponseHeaders(contentType, cacheControl) })
+      }
+
+      // Empty body — nothing to stream or cache.
+      return new Response(null, { status: resp.status, headers: buildProxyResponseHeaders(contentType, cacheControl) })
+    } catch (e) {
+      return c.text(`Proxy fetch failed: ${e instanceof Error ? e.message : e}`, 502)
+    }
+  }
+
+  // Hot reload SSE endpoint
+  if (reloadEmitter) {
+    app.get('/__reload', (c) => {
+      return streamSSE(c, async (stream) => {
+        const handler = () => {
+          stream.writeSSE({ event: 'reload', data: '' })
+        }
+        reloadEmitter.on('reload', handler)
+        stream.onAbort(() => {
+          reloadEmitter.removeListener('reload', handler)
+        })
+
+        // Keep connection alive
+        while (true) {
+          await stream.sleep(30000)
+        }
+      })
+    })
+  }
+
+  // Catch unmatched paths that look like esm.sh-emitted absolute imports
+  // (e.g. `/preact@10.29.2/es2022/preact.mjs`, `/node/buffer.mjs`) and proxy
+  // them. Browsers resolve those against the page origin (localhost), so
+  // without this fallback transitive imports 404.
+  //
+  // The regex matches ONLY URL shapes esm.sh actually emits:
+  //   /v<n>/...           — versioned build prefix
+  //   /stable/...         — stable build prefix
+  //   /node/...           — Node built-in polyfills (buffer, stream, ...)
+  //   /gh/...             — GitHub release builds
+  //   /@<scope>/<pkg>@... — scoped package with version
+  //   /<pkg>@...          — bare package with version
+  // Plain word paths (`/favicon.ico`, `/about`, `/main.css.map`, SPA routes)
+  // intentionally DO NOT match — they get a real 404 from the local server
+  // instead of being silently relayed upstream.
+  const ESM_PATH_RE = /^\/(v\d+\/|stable\/|node\/|gh\/|@[^/]+\/[^@/]+@|[^@/]+@)/
+  app.notFound(async (c) => {
+    if (c.req.method !== 'GET') return c.text('Not Found', 404)
+    const reqUrl = new URL(c.req.url)
+    if (!ESM_PATH_RE.test(reqUrl.pathname)) return c.text('Not Found', 404)
+    return proxyToUrl(c, 'https://esm.sh' + reqUrl.pathname + reqUrl.search)
+  })
+
+  // Bind loopback only. The privileged fs/RPC routes run with the user's full
+  // Node/filesystem rights, so the port must never be reachable from the LAN.
+  const server = serve({
+    fetch: app.fetch,
+    port,
+    hostname: LOOPBACK,
+  })
+
+  return {
+    port,
+    close: () => server.close(),
+  }
+}
+
+/**
+ * Resolve provider and model for a tb.ai() call.
+ *
+ * Both provider and model must be specified — either via env vars
+ * (TB_AI_PROVIDER, TB_AI_MODEL) or per-call overrides.
+ */
+function resolveLocalProvider(reqProvider?: string, reqModel?: string): ResolvedAIProvider | string {
+  const protocol = reqProvider as ProviderProtocol | undefined
+    ?? process.env.TB_AI_PROVIDER as ProviderProtocol | undefined
+  const model = reqModel ?? process.env.TB_AI_MODEL
+
+  if (!protocol) return 'No provider specified. Set TB_AI_PROVIDER in your .env file or pass provider in the tb.ai() call.'
+  if (!model) return 'No model specified. Set TB_AI_MODEL in your .env file or pass model in the tb.ai() call.'
+
+  let spec
+  try { spec = getProvider(protocol) } catch { return `Unknown provider '${protocol}'.` }
+  const envKey = PROVIDER_ENV_KEYS[protocol]
+  const apiKey = process.env[envKey]
+  if (!apiKey) return `No API key for '${protocol}'. Set ${envKey} in your .env file.`
+
+  return { apiKey, baseUrl: spec.defaultBaseUrl, protocol, model, isFreeModel: false }
+}
+
+function buildProxyResponseHeaders(contentType?: string, cacheControl?: string): Headers {
+  const headers = new Headers()
+  if (contentType) headers.set('Content-Type', contentType)
+  if (cacheControl) headers.set('Cache-Control', cacheControl)
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
+  return headers
+}
+
+/**
+ * Register a read-only static-file route: serve bytes from `dir` under the URL prefix
+ * `mount`, content-typed and path-traversal guarded. The route globs `mount`'s subtree;
+ * the handler re-checks the exact prefix and 404s anything outside it. resolvePath throws
+ * on traversal and readFile on a missing file — either way the asset isn't servable → 404.
+ * Backs both `--replace`'s `/local/<name>/` route and the agent viewer's bundled-client
+ * assets; the global COOP/COEP middleware wraps these responses too, so workers/WASM stay
+ * cross-origin isolated.
+ */
+function serveStaticDir(app: Hono, mount: string, dir: string): void {
+  app.get(`${mount}*`, async (c) => {
+    const { pathname } = new URL(c.req.url)
+    if (!pathname.startsWith(mount)) return c.text('Not Found', 404)
+    const rel = decodeURIComponent(pathname.slice(mount.length))
+    try {
+      const abs = resolvePath(rel, dir)
+      const body = await fs.readFile(abs)
+      return new Response(body as unknown as BodyInit, { headers: { 'Content-Type': contentTypeFor(abs) } })
+    } catch {
+      return c.text('Not Found', 404)
+    }
+  })
+}
+
+/**
+ * Content type for a file served from the local-override route. `.wasm` must be
+ * `application/wasm` for `WebAssembly.instantiateStreaming`.
+ */
+function contentTypeFor(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.js':
+    case '.mjs': return 'text/javascript'
+    case '.wasm': return 'application/wasm'
+    case '.json':
+    case '.map': return 'application/json'
+    default: return 'application/octet-stream'
+  }
+}
+
+/** Resolve a path relative to base, with security check */
+function resolvePath(requestedPath: string, basePath: string): string {
+  // Resolve the path relative to basePath
+  const resolved = path.resolve(basePath, requestedPath)
+
+  // Security: ensure resolved path is within base directory. The separator
+  // boundary stops a sibling-prefix escape (e.g. base `…/dist` vs `…/dist-evil`).
+  const normalizedBase = path.normalize(basePath)
+  const normalizedResolved = path.normalize(resolved)
+
+  if (normalizedResolved !== normalizedBase && !normalizedResolved.startsWith(normalizedBase + path.sep)) {
+    throw new Error('Path traversal detected - access denied')
+  }
+
+  return resolved
+}
+
+/** Find an available port starting from the preferred port, probing loopback so
+ *  the check matches the interface the server actually binds. */
+export async function findAvailablePort(preferred: number): Promise<number> {
+  const net = await import('net')
+
+  return new Promise((resolve) => {
+    const server = net.createServer()
+
+    server.listen(preferred, LOOPBACK, () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : preferred
+      server.close(() => resolve(port))
+    })
+
+    server.on('error', () => {
+      // Port in use, try next
+      resolve(findAvailablePort(preferred + 1))
+    })
+  })
+}
