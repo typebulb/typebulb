@@ -1,7 +1,7 @@
 /**
  * `typebulb skill` — emit the bulb-authoring skill to stdout, so a cold agent bootstraps with no
  * ecosystem knowledge: "tell your agent to run `npx typebulb skill`" works against any agent that
- * understands the cross-agent Agent Skills format (Specs/Typebulb-CLI-Skill.md).
+ * understands the cross-agent Agent Skills format (TB-Skill.md).
  *
  * The skill IS the package README, in full — one source of truth, no separate SKILL.md to drift. The
  * README carries no YAML frontmatter of its own (so it renders clean on npm/GitHub); the

@@ -5,7 +5,7 @@
  * instead of a CDN, so an unreleased build of an npm package can be run and
  * type-checked against a bulb without publishing it first.
  *
- * Invariants (see Specs/Typebulb-CLI-Replace.md):
+ * Invariants (see TB-Replace.md):
  *  - CLI-only; never the web client. Lives entirely in this package.
  *  - Override lives only in the flag, never in the bulb. No residue on disk.
  *  - Exactly one override, unscoped name, both runtime bytes AND type defs.

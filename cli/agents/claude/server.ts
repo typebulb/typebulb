@@ -10,7 +10,7 @@ function errorMessage(err: unknown): string {
 
 // The bulb tails CC's on-disk JSONL transcript and renders it; it drives nothing.
 // Native only: it mirrors the real ~/.claude transcripts your terminal CC writes.
-// See Specs/Typebulb-CLI-Agent-Viewer.md for the architecture.
+// See TB-Agent-Mirror.md for the architecture.
 
 // Only the fields we read; real lines carry many more.
 interface JsonlEntry {
@@ -71,7 +71,7 @@ function sanitizePath(p: string): string {
   return p.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
-// Native only: transcripts come from the real ~/.claude. Everything the viewer
+// Native only: transcripts come from the real ~/.claude. Everything the mirror
 // writes itself (per-session locks) lives under <cwd>/.typebulb/ — the same
 // project-local scratch convention a bulb run uses for its compiled cache.
 const RUNTIME_DIR = '.typebulb'
@@ -135,7 +135,7 @@ function claimLock(cwd: string, sessionId: string) {
     console.error('[lock] claim failed:', errorMessage(err))
   }
 }
-// One-time migration: the locks dir used to be `.claude-bulb/` (vestige of when the viewer
+// One-time migration: the locks dir used to be `.claude-bulb/` (vestige of when the mirror
 // was a bulb). Now it lives under `.typebulb/` with everything else; drop the orphaned
 // dotdir so it doesn't linger in users' projects. Best-effort — locks are ephemeral, so a
 // failed removal costs nothing.
@@ -429,7 +429,7 @@ function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
 }
 
-// A turn the viewer never shows: a sub-agent sidechain, or one of CC's isMeta
+// A turn the mirror never shows: a sub-agent sidechain, or one of CC's isMeta
 // injections (a launched skill's full body — which would otherwise dump 20 pages
 // next to the collapsed Skill row that already names it — plus command caveats and
 // /loop resume nudges). Display-only: the entry stays in the chain (so it can be a
@@ -492,7 +492,7 @@ function applyEntry(entry: JsonlEntry) {
     // Overwrite, never accumulate: the chip shows the CURRENT context window —
     // the last response's usage, bounded by the model window — not a session sum.
     // Summing every turn double-counts as the window grows (CC's tokens.ts flags
-    // this) and unmoors the number from anything a viewer can interpret.
+    // this) and unmoors the number from anything a mirror can interpret.
     const usage = entry.message?.usage ?? entry.usage
     if (usage) {
       s.latest = {
@@ -522,7 +522,7 @@ export async function poll(cursor: number) {
   return { events: s.buffer.slice(cursor), cursor: s.buffer.length, working: chainWorking(s) }
 }
 
-// The viewer host's embed-error forward (Specs/Typebulb-CLI-Agent-Viewer-Embed-Iterate.md Invariant 7,
+// The mirror host's embed-error forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7,
 // Guard B). The client captures the error and formats the line (so it matches the `⚠` strip verbatim —
 // Invariant 1); we own the idempotency. `console.log` tees to `<pid>.log` exactly like a local bulb's own
 // log, but the dedup lives here, off the shared `/__log` channel, so a refresh can't pile the line up and a
@@ -676,7 +676,7 @@ export async function breakout(source: string) {
 }
 
 // The running bulb dev servers for the status-bar pill — scoped to *this project* (state.cwd), the
-// same project whose sessions and files we mirror. The registry is machine-global, but a viewer for
+// same project whose sessions and files we mirror. The registry is machine-global, but a mirror for
 // one CC project shouldn't surface another project's bulbs (or another project's claude.bulb); the
 // cwd scope mirrors the file walk and keeps projects from bleeding into each other. listBulbServers
 // prunes dead entries on read; the UI still drops this host's own pid (see info()).
@@ -696,12 +696,12 @@ export async function stopBreakout(pid: number) {
 //
 // Trust memory now lives in the CLI's store (isBulbTrusted/setBulbTrusted from typebulb/servers),
 // not here — so the launcher toggle, a bare `typebulb <file>`, and `typebulb trust` all share one
-// source of truth (Specs/Typebulb-CLI-Trust.md). The launcher just reads/writes that store; it no
+// source of truth (TB-Trust.md). The launcher just reads/writes that store; it no
 // longer keeps its own `.claude-bulb/trust.json`.
 
 // The project's *.bulb.md candidates for the launcher. The walk (listProjectBulbFiles) is the typebulb
-// capability; it lists every project bulb. The viewer itself is no longer a bulb (it's CLI code), so
-// there's nothing to exclude from this file walk — the running viewer is dropped from the *server*
+// capability; it lists every project bulb. The mirror itself is no longer a bulb (it's CLI code), so
+// there's nothing to exclude from this file walk — the running mirror is dropped from the *server*
 // list by its `agent` field, not here. The host only overlays each bulb's remembered trust tier.
 export async function listBulbFiles() {
   return listProjectBulbFiles(state.cwd)
@@ -723,8 +723,8 @@ export async function launchBulb(file: string, trust?: boolean) {
 }
 
 // Scan a bulb for privileged tb.* usage BEFORE launching, so the launcher can raise the trust
-// offer at the decision point rather than after the spawned server registers (Specs/Typebulb-CLI-
-// Trust.md "Proactive prediction"). Returns a capability label or undefined; a hint, never a gate.
+// offer at the decision point rather than after the spawned server registers (TB-Trust.md
+// "Proactive prediction"). Returns a capability label or undefined; a hint, never a gate.
 export async function predictTrustOf(file: string) {
   return { cap: await predictBulbTrust(file) }
 }

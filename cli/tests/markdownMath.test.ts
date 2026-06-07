@@ -6,7 +6,7 @@ import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
  * own lines include a bare `=` (or `-`) line would otherwise be mis-read as a setext-heading
  * underline — the opening `$$` promoted into an <h1>, the closing `$$` stranded in the next
  * paragraph — so the inline rule never sees a matched pair and the TeX renders literally
- * (Specs/Typebulb-CLI-Agent-Viewer.md, "Rendering").
+ * (TB-Agent-Mirror.md, "Rendering").
  */
 
 const matrix = [

@@ -5,7 +5,7 @@ import * as path from 'path'
 import { loadEnv, referencedEnvKeys } from '../src/env.js'
 
 // Test keys are deleted from process.env after each case so loadEnv's `??=` (first writer
-// wins) sees them unset on the next run. See Specs/Typebulb-CLI-Env.md for the ladder.
+// wins) sees them unset on the next run. See TB-Env.md for the ladder.
 const KEYS = ['TB_T_BASE', 'TB_T_WIN', 'TB_T_SHELL']
 
 describe('loadEnv precedence ladder', () => {

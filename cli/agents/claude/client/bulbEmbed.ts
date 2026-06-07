@@ -10,7 +10,7 @@ import { mdPlain } from './markdown.js'
 //
 // Mounting is host-driven: the embed is a state object holding "do I have a compiled frame", and the
 // host (MessageList) calls setMounted() from the same-name chain so only a run's live tail compiles —
-// superseded versions fold to a stub and unmount (Specs/Typebulb-CLI-Agent-Viewer-Embed-Iterate.md).
+// superseded versions fold to a stub and unmount (TB-Agent-Mirror-Embed-Iterate.md).
 export class BulbEmbed extends Component {
   spread = false
   showingCode = false
@@ -86,8 +86,8 @@ export class BulbEmbed extends Component {
     }
   }
 
-  // Forward an embed error to the viewer's own server log, name-tagged, so `typebulb logs claude` reads
-  // back exactly what the user sees (Embed-Iterate Invariant 1). Routed through the viewer host's own
+  // Forward an embed error to the mirror's own server log, name-tagged, so `typebulb logs claude` reads
+  // back exactly what the user sees (Embed-Iterate Invariant 1). Routed through the mirror host's own
   // `logEmbedError` (not the shared `tb.server.log`) so the host owns the name-keyed idempotency that keeps
   // a refresh from piling up the same line (Invariant 7, Guard B). Diagnostics only — fire-and-forget,
   // drives nothing (Invariant 2).

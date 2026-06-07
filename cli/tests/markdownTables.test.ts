@@ -7,7 +7,7 @@ import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
  * so it inherits the stripe-chop. Gated to assistant turns — a table in a user prompt (env.userMessage)
  * stays a plain `<table>` inside the opaque user card, where the chop would clash. Spread (lane breakout)
  * is a mount-time measurement (fitTableEmbeds), so it's not visible in this DOM-less render
- * (Specs/Typebulb-CLI-Agent-Viewer.md, "Rendering").
+ * (TB-Agent-Mirror.md, "Rendering").
  */
 
 const table = ['| a | b |', '| - | - |', '| 1 | 2 |'].join('\n')

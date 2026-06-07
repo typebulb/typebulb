@@ -150,7 +150,7 @@ export class MessageList extends Component {
     })
   }
 
-  // Recompute same-name chain state (Specs/Typebulb-CLI-Agent-Viewer-Embed-Iterate.md): mark superseded
+  // Recompute same-name chain state (TB-Agent-Mirror-Embed-Iterate.md): mark superseded
   // embeds and set each embed's mount state — only a run's live tail (or one the user re-expanded) stays
   // mounted; the rest unmount so they stop taking height and processing. Runs when embeds are added or an
   // expansion toggles, never during render (setMounted has side effects).

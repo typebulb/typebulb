@@ -93,7 +93,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // Serve the bulb directly as a top-level page on localhost:<port> — a real origin, so
   // storage / SharedArrayBuffer / Workers / clipboard all work. (Untrusted launches used to
   // mount the bulb in an opaque-origin `allow-scripts` iframe; that origin has none of those
-  // — see Specs/Typebulb-CLI-Trust.md.) Default-deny on the privileged tier does NOT need the
+  // — see TB-Trust.md.) Default-deny on the privileged tier does NOT need the
   // frame: the server-side trustGate 403s /__fs, /__ai, /__api when untrusted — the protection
   // that actually matters on a single-user loopback box, where each bulb is already
   // origin-isolated by its own port. The shim turns that 403 into a `--trust` message (the
@@ -110,7 +110,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   })
 
   // Env is already loaded into process.env by the caller (index.ts runWeb/runConsole) from the
-  // cwd cascade, before this import — see Specs/Typebulb-CLI-Env.md. The caller also owns where the
+  // cwd cascade, before this import — see TB-Env.md. The caller also owns where the
   // `.typebulb` cache lives via serverCacheDir (the bulb's parent dir).
   //
   // server.ts top-level code runs in Node the moment it's imported — that's the

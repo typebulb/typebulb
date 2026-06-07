@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EmbedErrorDedup } from '../agents/claude/embedErrorLog.js'
 
 /**
- * The viewer's name-keyed embed-error forward (Specs/Typebulb-CLI-Agent-Viewer-Embed-Iterate.md Invariant 7,
+ * The mirror's name-keyed embed-error forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7,
  * Guard B): a refresh re-forwards a still-broken embed's identical error, so repeats collapse per tag while
  * distinct failures still log.
  */

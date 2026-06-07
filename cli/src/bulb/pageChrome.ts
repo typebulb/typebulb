@@ -1,6 +1,6 @@
 /**
  * Shared HTML page chrome for the two server-rendered pages: the bulb template
- * (template.ts) and the agent viewer (agentViewer/page.ts). Both emit the same
+ * (template.ts) and the agent mirror (agentViewer/page.ts). Both emit the same
  * no-flash theme engine, the same base reset, and the same `escapeHtml`; one copy
  * keeps the security-sensitive inline theme script from drifting between them.
  * Pure string assembly, isomorphic (no node builtins), so it lives in bulb/.
@@ -24,8 +24,16 @@ export function escapeHtml(str: string): string {
  *  last child's vertical margin (author's, or a UA default like `<h1>`'s) can't
  *  collapse out through body — the embed auto-height reports `body.scrollHeight`
  *  (template.ts), and an escaped margin sizes the frame short → clipped content +
- *  premature scrollbar (Agent-Viewer-Embed Invariant 3). Don't drop it. */
+ *  premature scrollbar (TB-Agent-Mirror-Embed.md Invariant 3). Don't drop it.
+ *
+ *  `canvas { max-width: 100% }` keeps a canvas inside its container the way
+ *  responsive `img` does: a canvas's backing store is `devicePixelRatio`-scaled, so
+ *  code that sizes the buffer but not the CSS box (e.g. three's `setSize(w, h, false)`)
+ *  otherwise lays the element out at buffer size — `dpr`× too wide — and overflows.
+ *  Height already defaults to `auto`, so clamping width pulls height down the intrinsic
+ *  ratio with it. Base-level, so a bulb that sets its own canvas size still wins. */
 export const baseResetStyle = `    *, *::before, *::after { box-sizing: border-box; }
+    canvas { max-width: 100%; }
     body { margin: 0; display: flow-root; font-family: system-ui, -apple-system, sans-serif; }
     html[data-theme="dark"]  { color-scheme: dark; }
     html[data-theme="light"] { color-scheme: light; }`

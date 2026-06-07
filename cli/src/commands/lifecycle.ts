@@ -8,11 +8,11 @@ import { listBulbServers, readServerLog, stopBulbServer, type BulbServer } from 
 // just watching alongside.
 
 /** Resolve a `[file|pid]` arg to a running server: all-digits ⇒ pid; a reserved agent name
- *  (`claude`) ⇒ that viewer, preferring the one whose cwd is the current project, so `logs claude`
- *  reads the viewer for the project you're in rather than another project's viewer that happens to sit
+ *  (`claude`) ⇒ that mirror, preferring the one whose cwd is the current project, so `logs claude`
+ *  reads the mirror for the project you're in rather than another project's mirror that happens to sit
  *  earlier in the machine-global registry (the embed-error readback in
- *  Specs/Typebulb-CLI-Agent-Viewer-Embed-Iterate.md depends on hitting *this* project's viewer). `stop`
- *  addresses the viewer with `--agent` instead (one viewer per project, so no name is needed); else a
+ *  TB-Agent-Mirror-Embed-Iterate.md depends on hitting *this* project's mirror). `stop`
+ *  addresses the mirror with `--agent` instead (one mirror per project, so no name is needed); else a
  *  resolved file path (compared via the registry's canonical key, so either spelling of the path matches). */
 function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServer | undefined {
   if (/^\d+$/.test(arg)) return servers.find(s => s.pid === parseInt(arg, 10))
@@ -57,8 +57,8 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
   // No arg ⇒ list *this project's* running servers (scoped to cwd, like claude.bulb's launcher).
   // With an arg, target globally: a pid (or built-in name) names a specific process anywhere.
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb logs <file|pid>` to print one server\'s console.'); return }
-  // A reserved agent name (`claude`) targets the running viewer by its `agent` field (findServer),
-  // preferring this cwd's viewer; a pid or path targets any server globally.
+  // A reserved agent name (`claude`) targets the running mirror by its `agent` field (findServer),
+  // preferring this cwd's mirror; a pid or path targets any server globally.
   const server = requireServer(await listBulbServers(), arg, 'logs', process.cwd())
 
   const snap = readServerLog(server.pid)
@@ -100,13 +100,13 @@ export async function runStop(arg: string | undefined): Promise<void> {
 
 /**
  * `typebulb stop --bulbs|--agent|--global` — batch reaping by category, instead of one file/pid target:
- *  - `bulbs`:  this project's bulbs. The cwd-scoped list already drops viewers (Agent-Viewer Inv. 3),
- *              so the viewer survives — the everyday "clear the scratch, keep watching" reap.
- *  - `agent`:  this project's viewer. It's the entry the cwd-scoped list *hides*, so it's pulled from
+ *  - `bulbs`:  this project's bulbs. The cwd-scoped list already drops mirrors (TB-Agent-Mirror.md Inv. 3),
+ *              so the mirror survives — the everyday "clear the scratch, keep watching" reap.
+ *  - `agent`:  this project's mirror. It's the entry the cwd-scoped list *hides*, so it's pulled from
  *              the global list and filtered to this cwd's `agent` entry; the bulbs survive.
- *  - `global`: every bulb AND viewer, all projects — the housekeeping verb for the orphan pile detached,
+ *  - `global`: every bulb AND mirror, all projects — the housekeeping verb for the orphan pile detached,
  *              terminal-surviving servers accumulate (Specs/Typebulb-CLI.md "Server lifecycle & the
- *              reap"). Unscoped on purpose: it sees the viewers and other projects' bulbs the per-
+ *              reap"). Unscoped on purpose: it sees the mirrors and other projects' bulbs the per-
  *              project list hides — the very orphans no single launcher can reach.
  * Only `global` crosses projects; `bulbs`/`agent` stay in this cwd, the same scope as no-arg `stop`.
  */
@@ -117,7 +117,7 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
     : scope === 'bulbs' ? await listBulbServers(cwd)
     : (await listBulbServers()).filter(s =>
         s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd))
-  const noun = scope === 'global' ? 'server' : scope === 'agent' ? 'viewer' : 'bulb'
+  const noun = scope === 'global' ? 'server' : scope === 'agent' ? 'mirror' : 'bulb'
   if (!servers.length) {
     console.log(scope === 'global' ? 'No running bulb servers.' : `No running ${noun}s for this project.`)
     return

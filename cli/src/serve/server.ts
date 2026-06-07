@@ -14,6 +14,7 @@ import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, 
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
 import { PROVIDER_ENV_KEYS, getFilteredModels } from './modelCatalog.js'
+import { resolveServerFn } from './builtins.js'
 
 // The CLI is a local tool: the server binds loopback only and is never reachable
 // off-machine. Sharing / other-device access is typebulb.com's job, not the CLI's.
@@ -52,12 +53,12 @@ export interface ServerOptions {
   localOverride?: { name: string; serveDir: string }
   /** Whether the bulb was launched with `--trust`. When false (the default),
    *  the three privileged endpoints (`/__fs`, `/__api`, `/__ai`) are hard-denied
-   *  server-side — the airtight half of default-deny (Specs/Typebulb-CLI-Trust.md),
+   *  server-side — the airtight half of default-deny (TB-Trust.md),
    *  independent of the sandboxed-frame origin isolation that also fences them off.
    *  `trustHint` is the re-run command surfaced in the 403 for non-browser callers. */
   trusted?: boolean
   trustHint?: string
-  /** Serve a built asset directory read-only under `mount` (e.g. the agent viewer's
+  /** Serve a built asset directory read-only under `mount` (e.g. the agent mirror's
    *  bundled client at `/agents/claude/`). Like `localOverride` but not tied to the
    *  `--replace` mechanism — just static bytes from disk, content-typed and
    *  traversal-guarded. The global COOP/COEP middleware wraps these too. */
@@ -91,14 +92,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     c.res.headers.set('Cross-Origin-Embedder-Policy', 'credentialless')
   })
 
-  // The capability boundary (Specs/Typebulb-CLI-Trust.md, Invariant 2): the only
+  // The capability boundary (TB-Trust.md, Invariant 2): the only
   // routes that touch the user's filesystem, API keys, or Node. Both guards below
   // apply to exactly this set — defining it once keeps "these three are privileged"
   // a single source of truth.
   const PRIVILEGED_ROUTES = ['/__fs/*', '/__api/*', '/__ai']
 
   // Trust gate (default-deny). Without `--trust`, the privileged endpoints are
-  // hard-denied here — the contract of Specs/Typebulb-CLI-Trust.md. This is
+  // hard-denied here — the contract of TB-Trust.md. This is
   // belt-and-suspenders to the sandboxed-frame mechanism that already fences these
   // off by origin: the gate holds regardless of how the request arrives (raw
   // fetch, curl, a future non-iframe path), so default-deny never depends on
@@ -196,18 +197,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   })
 
-  // Built-in server functions (user exports override these)
-  const BUILTINS: Record<string, Function> = {
-    log: console.log,
-  };
-
   // Server API - call exported functions from **server.ts**
   app.post('/__api/:name', async (c) => {
     try {
-      const exports = getServerExports?.()
       const name = c.req.param('name')
-      const fn = exports?.[name] ?? BUILTINS[name]
-      if (!fn || typeof fn !== 'function') {
+      const fn = resolveServerFn(getServerExports?.(), name)
+      if (!fn) {
         return c.json({ error: `API function '${name}' not found` }, 404)
       }
       const { args } = await c.req.json<{ args: unknown[] }>()
@@ -303,10 +298,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   })
 
   // Local package override — serve the overridden package's built bytes read-only from
-  // disk (Specs/Typebulb-CLI-Replace.md). Registered only when an override is active.
+  // disk (TB-Replace.md). Registered only when an override is active.
   if (localOverride) serveStaticDir(app, `/local/${localOverride.name}/`, localOverride.serveDir)
 
-  // Static asset directory (the debulbified agent viewer's bundled client) — read-only
+  // Static asset directory (the debulbified agent mirror's bundled client) — read-only
   // bytes from disk under `mount`, independent of `--replace`.
   if (staticAssets) serveStaticDir(app, staticAssets.mount, staticAssets.dir)
 
@@ -446,7 +441,7 @@ function buildProxyResponseHeaders(contentType?: string, cacheControl?: string):
  * `mount`, content-typed and path-traversal guarded. The route globs `mount`'s subtree;
  * the handler re-checks the exact prefix and 404s anything outside it. resolvePath throws
  * on traversal and readFile on a missing file — either way the asset isn't servable → 404.
- * Backs both `--replace`'s `/local/<name>/` route and the agent viewer's bundled-client
+ * Backs both `--replace`'s `/local/<name>/` route and the agent mirror's bundled-client
  * assets; the global COOP/COEP middleware wraps these responses too, so workers/WASM stay
  * cross-origin isolated.
  */

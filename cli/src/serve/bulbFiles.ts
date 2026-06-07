@@ -1,6 +1,6 @@
 /**
  * Discover a project's `*.bulb.md` files — the read-only walk a launcher host
- * (the agent viewer's bulbs pill, a future codex viewer's, …) would otherwise copy verbatim.
+ * (the agent mirror's bulbs pill, a future codex mirror's, …) would otherwise copy verbatim.
  * The capability half of "list the project's bulbs"; the host overlays its own
  * concerns (trust memory, MRU, the running registry) and renders the UI.
  *

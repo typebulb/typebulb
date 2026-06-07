@@ -1,4 +1,4 @@
-// Pure formatting / path helpers shared across the viewer's components — no DOM, no domeleon, no tb.
+// Pure formatting / path helpers shared across the mirror's components — no DOM, no domeleon, no tb.
 
 // Tool inputs are heterogeneous JSON; narrow to string at the point of use.
 export const asStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)

@@ -18,7 +18,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **CLI logging** — `tb.server.log(...)` prints to the CLI's stdout
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
-- **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb and exits non-zero on errors. Useful for AI editors / CI.
+- **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
 - **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes) for local files. Requires `--trust`.
 - **Hot reload** — Recompiles on save and refreshes the browser (on by default; disable with `--no-watch`)
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
@@ -27,7 +27,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **AI calls** — `tb.ai()` for general-purpose AI (chatbots, agents, experiments). `tb.models()` lists available models. Set API keys in `.env` (see below). Requires `--trust`.
 - **Sandboxed by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces sandboxed for a single run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
-- **Agent viewer** — `typebulb agent:claude` opens the agent viewer, a browser view over a Claude Code session that renders embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs (see [Claude](#claude)). `typebulb agent` (no target) is the first command an agent runs: it tells the agent how to show a bulb inline or build one locally. `typebulb skill` prints this whole README as an Agent Skill the agent can read and save.
+- **Agent mirror** — `typebulb agent:claude` opens the agent mirror, a browser view over a Claude Code session that renders embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs (see [Claude](#claude)). `typebulb agent` (no target) is the first command an agent runs: it tells the agent how to show a bulb inline or build one locally. `typebulb skill` prints this whole README as an Agent Skill the agent can read and save.
 
 ## Quick Start
 
@@ -117,18 +117,19 @@ npm install -g typebulb
 
 ```
 typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
-typebulb agent:claude          Open the agent viewer (a Claude Code session)
+typebulb agent:claude          Open the agent mirror (a Claude Code session)
 typebulb agent                 Start here — how to show a bulb inline or build one locally
-                               (prints the viewer URL when one is up); always exits 0
+                               (prints the mirror URL when one is up); always exits 0
 typebulb skill                 Print this README as an Agent Skill on stdout
+typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
 typebulb check [file.bulb.md]  Type-check a bulb without running it
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
 typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail)
 typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
-typebulb stop --bulbs          Stop this project's bulbs; the agent viewer keeps running
-typebulb stop --agent          Stop this project's agent viewer; its bulbs keep running
-typebulb stop --global         Stop every running bulb and viewer, all projects (housekeeping)
+typebulb stop --bulbs          Stop this project's bulbs; the agent mirror keeps running
+typebulb stop --agent          Stop this project's agent mirror; its bulbs keep running
+typebulb stop --global         Stop every running bulb and mirror, all projects (housekeeping)
 typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted bulbs)
 typebulb untrust <file>        Forget a bulb's trust (back to sandboxed)
 typebulb --no-watch <file>     Disable hot reload
@@ -198,7 +199,7 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 | `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
 | `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()` — a typebulb.com feature; not supported locally. |
 | `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
-| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. **Local only.** |
+| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Plain Node — no `tb`; log with `console.log`. **Local only.** |
 
 ## The `tb.*` API, by target
 
@@ -228,7 +229,7 @@ A local `.bulb.md` can be re-imported into typebulb.com. If it has a `**server.t
 
 ## Claude
 
-The agent viewer currently supports Claude Code only. `npx typebulb agent:claude` gives the user a great scratchpad experience:
+The agent mirror currently supports Claude Code only. `npx typebulb agent:claude` gives the user a great scratchpad experience:
 
 * a view over the Claude Code session, where assistant messages containing bulbs render as sandboxed embedded bulbs inline in the conversation, alongside KaTeX math, mermaid diagrams and svg.
 * run and stop any bulb in their project.
@@ -241,7 +242,7 @@ To keep this skill on hand across sessions, run `npx typebulb skill` and copy it
 ### When Claude should output local vs embedded bulbs
 
 - **First, can it even embed?** A bulb needing `tb.ai`, `tb.fs`, or `server.ts` must be **local** — embeds are client-only, so those calls fail there. The choice below is only for client-only bulbs.
-- **Is anyone watching?** An embed only renders live when the agent viewer is open; with none it shows as raw text. `typebulb agent` tells you which case you're in. If no viewer is up and you want to show something inline, start it yourself — `npx typebulb agent:claude --no-open` — and share the link; don't make the user do it.
+- **Is anyone watching?** An embed only renders live when the agent mirror is open; with none it shows as raw text. `typebulb agent` tells you which case you're in. If no mirror is up and you want to show something inline, start it yourself — `npx typebulb agent:claude --no-open` — and share the link; don't make the user do it.
 - **Something to see right now, in the flow of the conversation** — a chart of some numbers, a quick simulation, an illustrative widget. → **embedded**: emit it in a `bulb` block so it renders live inline.
 - **A tool worth keeping** — something to reuse, run on its own, or refine over several turns. → **local**: write a `.bulb.md` file run with `npx typebulb`. An embedded block is throwaway and can't be edited in place, so it's the wrong fit for anything iterative.
 
@@ -249,21 +250,21 @@ To keep this skill on hand across sessions, run `npx typebulb skill` and copy it
 
 To render a bulb live inline, wrap the **entire** bulb — frontmatter and all blocks — in a fenced code block whose opening line is **four backticks immediately followed by `bulb`**, and whose closing line is four backticks. Four, not three, so the bulb's own triple-backtick code fences nest inside without prematurely closing the outer block.
 
-The agent viewer turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and sandboxed unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`, no storage.
+The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and sandboxed unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`, no storage.
 
-**Fixing a broken embed?** Re-emit it under the *same* `name:` — the viewer folds the old version into a stub and keeps your fix as the live one. (A rename is treated as a new bulb.)
+**Fixing a broken embed?** Re-emit it under the *same* `name:` — the mirror folds the old version into a stub and keeps your fix as the live one. (A rename is treated as a new bulb.)
 
-**A broken embed reads back.** Emit it and move on; embeds usually just work. If the user says one broke, the viewer has already forwarded its compile/runtime error to `typebulb logs claude`, name-tagged (`[embed <name>]`) — pull it from there and fix, instead of asking the user to copy-paste.
+**A broken embed reads back.** Emit it and move on; embeds usually just work. If the user says one broke, the mirror has already forwarded its compile/runtime error to `typebulb logs claude`, name-tagged (`[embed <name>]`) — pull it from there and fix, instead of asking the user to copy-paste.
 
 ## Sizing
 
 The host owns a bulb's **width**; you own its **height**.
 
-**Width is the host's.** Standalone, a bulb fills its browser window; in the agent viewer, an embed fits the conversation column by default, with a per-embed *spread* toggle to the full transcript width — and a cap so a tall embed doesn't run away down the transcript. Don't set a width or guess how much room you'll get.
+**Width is the host's.** Standalone, a bulb fills its browser window; in the agent mirror, an embed fits the conversation column by default, with a per-embed *spread* toggle to the full transcript width — and a cap so a tall embed doesn't run away down the transcript. Don't set a width or guess how much room you'll get.
 
-**Height follows your content.** Prose, a form, a chart flow to their natural height — set none. A full-bleed canvas has no natural height: give its root `height: 100dvh` **and** a pixel floor like `min-height: 420px`. Both are needed — `100dvh` fills its own window if the bulb is broken out, and the floor holds a definite band when embedded. Without the floor a bare `100dvh` collapses to zero embedded, because the viewer sizes an embed to its content height and `100dvh` gives it nothing to measure against.
+**Height follows your content.** Prose, a form, a chart flow to their natural height — set none. A full-bleed canvas has no natural height: give its root `height: 100dvh` **and** a pixel floor like `min-height: 420px`. Both are needed — `100dvh` fills its own window if the bulb is broken out, and the floor holds a definite band when embedded. Without the floor a bare `100dvh` collapses to zero embedded, because the mirror sizes an embed to its content height and `100dvh` gives it nothing to measure against.
 
-**When embedded, keep vertical space on the root in `padding`, not `margin`.** The viewer measures an embed by `document.body.scrollHeight`, and the runtime makes `body` a block formatting context so a root child's vertical margin (yours, or a UA default like `<h1>`'s) is contained rather than escaping the measurement — so you no longer have to get this exactly right. It's still cleaner to keep the horizontal `auto` for centering and move the vertical space to padding:
+**When embedded, keep vertical space on the root in `padding`, not `margin`.** The mirror measures an embed by `document.body.scrollHeight`, and the runtime makes `body` a block formatting context so a root child's vertical margin (yours, or a UA default like `<h1>`'s) is contained rather than escaping the measurement — so you no longer have to get this exactly right. It's still cleaner to keep the horizontal `auto` for centering and move the vertical space to padding:
 
 ```css
 .wrap { margin: 0 auto; padding: 24px 16px; }   /* not: margin: 24px auto */
@@ -274,13 +275,14 @@ The host owns a bulb's **width**; you own its **height**.
 - **`config.json` `description`** is the bulb's SEO meta description — keep it to one or two plain sentences (~150–160 chars), or it gets truncated.
 - **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`).
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a sandboxed bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
+- **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`.** Bare imports (`react`, `d3`, `three`, …) auto-resolve from a CDN — no install step. Declare them in `config.json` `dependencies` anyway: that's what lets `npx typebulb check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`) and pins versions.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
 - **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, reasoning?, provider?, model?, webSearch? })` → `Promise<{ text }>` (non-streaming). `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off.
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
-- **Math renders live in the viewer** — write inline math as `$…$` and display math as `$$…$$` (the viewer renders KaTeX; a plain terminal chat doesn't, so reach for real math here). Prefer `$y = x^2$` over inline-code or a Unicode superscript (`y = x²`).
+- **Math renders live in the mirror** — write inline math as `$…$` and display math as `$$…$$` (the mirror renders KaTeX; a plain terminal chat doesn't, so reach for real math here). Prefer `$y = x^2$` over inline-code or a Unicode superscript (`y = x²`).
 - **`tb.json<T>(n)` is generic** — `tb.json<Album[]>(0)` returns typed parsed JSON; `tb.data(n)` returns the raw string.
 - **`tb.proxy()` is for same-origin Web Worker / WASM loads** — e.g. ffmpeg or tesseract: `tb.proxy("https://unpkg.com/...")` routes the CDN URL through the local server's origin.
 - **Prefer an `index.html` fragment** over a full HTML document — usually just the mount stub (`<div id="root"></div>`).

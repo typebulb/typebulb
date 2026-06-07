@@ -6,7 +6,7 @@ import { buildSkill, skillFrontmatter, freshnessNote } from '../src/skill.js'
 
 /**
  * The skill is the entire package README with the discovery frontmatter wrapped on at emit time
- * (Specs/Typebulb-CLI-Skill.md). There is no body split — the human-facing intro, the Quick Start
+ * (TB-Skill.md). There is no body split — the human-facing intro, the Quick Start
  * example, and the usage list are all part of the emitted skill.
  */
 

@@ -1,9 +1,9 @@
 /**
- * Reserved agent viewers the CLI can launch via `agent:<name>`.
+ * Reserved agent mirrors the CLI can launch via `agent:<name>`.
  *
- * An agent viewer is a browser view over a coding-agent's session — it tails the on-disk
+ * An agent mirror is a browser view over a coding-agent's session — it tails the on-disk
  * transcript and renders the bulbs the agent emits inline. Its code lives under `agents/<name>/`
- * (Specs/Typebulb-CLI-Agent-Viewer.md). `claude` is the canonical — and, for now, only — agent. Adding
+ * (TB-Agent-Mirror.md). `claude` is the canonical — and, for now, only — agent. Adding
  * one is a one-line entry here, plus its `agents/<name>/` code and a dispatch case in `index.ts`.
  */
 const AGENTS = new Set(['claude'])

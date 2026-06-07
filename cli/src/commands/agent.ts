@@ -3,14 +3,14 @@ import { listBulbServers, type BulbServer } from '../serve/serverRegistry.js'
 import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
 
 /**
- * Find the agent viewer serving THIS project, optionally narrowed to a specific agent (`agent:<name>`).
+ * Find the agent mirror serving THIS project, optionally narrowed to a specific agent (`agent:<name>`).
  *
- * Scope to the cwd, not the machine: a viewer mirrors the cwd it was launched in (it tails that
- * project's CC sessions), so only a viewer for this cwd will render this agent's embeds — one open for
+ * Scope to the cwd, not the machine: a mirror reflects the cwd it was launched in (it tails that
+ * project's CC sessions), so only a mirror for this cwd will render this agent's embeds — one open for
  * a *different* project is a false "up". Match on the registered launch cwd plus the entry's `agent`
- * field — a viewer has no project path to match on (Specs/Typebulb-CLI-Agent-Viewer.md).
- * A pre-cwd entry (no `s.cwd`) can't be claimed, so it's skipped. With `agent`, match that viewer;
- * without, any viewer.
+ * field — a mirror has no project path to match on (TB-Agent-Mirror.md).
+ * A pre-cwd entry (no `s.cwd`) can't be claimed, so it's skipped. With `agent`, match that mirror;
+ * without, any mirror.
  */
 export async function findProjectViewer(cwd: string, agent?: string): Promise<BulbServer | undefined> {
   const here = normalizeBulbPath(cwd)
@@ -21,14 +21,14 @@ export async function findProjectViewer(cwd: string, agent?: string): Promise<Bu
 
 /**
  * `typebulb agent` (no `:target`) — the first command an agent runs. It prints two sections
- * (Specs/Typebulb-CLI-Skill.md): a **neutral status line** — the agent-viewer's URL when one is up,
+ * (TB-Skill.md): a **neutral status line** — the agent-mirror's URL when one is up,
  * or how to start one (`agent:claude --no-open`) when none is — phrased so it reads sensibly to agent
  * or user alike, then, after a blank line, an **`Agents:`-tagged directive** to read the authoring
- * skill (assembled via `typebulb skill`, or its two on-disk parts) before writing a bulb. The viewer
+ * skill (assembled via `typebulb skill`, or its two on-disk parts) before writing a bulb. The mirror
  * line is positioning needed up front, not after: it is the surface embedded bulbs render in, and its
- * localhost link opens the viewer. The status depends on whether a viewer is running **for this
- * project** — when one is, the line carries its URL so it can be opened without polling the viewer's
- * startup output. It always exits 0: this is a status report, and "no viewer running" is a normal,
+ * localhost link opens the mirror. The status depends on whether a mirror is running **for this
+ * project** — when one is, the line carries its URL so it can be opened without polling the mirror's
+ * startup output. It always exits 0: this is a status report, and "no mirror running" is a normal,
  * benign state (a switched-off lamp isn't a broken one), not a failure an agent should treat as one.
  */
 export async function runAgent(): Promise<void> {
@@ -36,9 +36,9 @@ export async function runAgent(): Promise<void> {
   const running = viewer?.agent
 
   const status = running
-    ? `Viewer '${running}' is up at ${viewer?.url} — the embedded bulbs render live there.`
-    : 'No viewer is running — to render embedded bulbs live inline, start one with ' +
-      '`npx typebulb agent:claude --no-open`; it prints a localhost link that opens the viewer.'
+    ? `Mirror '${running}' is up at ${viewer?.url} — the embedded bulbs render live there.`
+    : 'No mirror is running — to render embedded bulbs live inline, start one with ' +
+      '`npx typebulb agent:claude --no-open`; it prints a localhost link that opens the mirror.'
   const lines = [
     status,
     '',

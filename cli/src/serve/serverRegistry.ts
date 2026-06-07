@@ -1,7 +1,7 @@
 /**
  * Machine-global registry of running `typebulb` dev servers, plus the cross-platform
  * launch/stop boilerplate every host that breaks bulbs out would otherwise rewrite.
- * The capability half of breakout — see Specs/Typebulb-CLI-Agent-Viewer-Embed.md "Breakout".
+ * The capability half of breakout — see TB-Agent-Mirror-Embed.md "Breakout".
  *
  * One file per server (`<pid>.json`) under ~/.typebulb/servers/. Like claude.bulb's
  * lock dir, a per-PID file sidesteps concurrent-write races on a shared index. The
@@ -23,9 +23,9 @@ export interface BulbServer {
   url: string
   /** Absolute path to the .bulb.md being served. */
   file: string
-  /** The cwd the server was launched in — the project it belongs to. A viewer mirrors this cwd's CC
-   *  sessions, so `typebulb agent` matches a running viewer to the current project by this, not by
-   *  `file` (a viewer serves a whole project, not one bulb). */
+  /** The cwd the server was launched in — the project it belongs to. A mirror reflects this cwd's CC
+   *  sessions, so `typebulb agent` matches a running mirror to the current project by this, not by
+   *  `file` (a mirror serves a whole project, not one bulb). */
   cwd?: string
   /** Epoch ms the server began listening. */
   startedAt: number
@@ -33,15 +33,15 @@ export interface BulbServer {
   trust?: boolean
   /** Human label of a capability the proactive scan predicts this (untrusted) bulb will need,
    *  set at register time from predictTrust. Probabilistic, NOT enforcement — it only lets a
-   *  host offer --trust before the bulb trips the gate (Specs/Typebulb-CLI-Trust.md). */
+   *  host offer --trust before the bulb trips the gate (TB-Trust.md). */
   predicted?: string
   /** Human label of a privileged capability this (untrusted) server denied, set by the
    *  trust gate so a host can offer to relaunch trusted. Bulb code never sets it. */
   denied?: string
-  /** The reserved agent name this entry is a viewer for (e.g. `'claude'`), set only by the
-   *  agent viewer runner. A viewer has no `.bulb.md` path, so this field is its identity instead —
-   *  `findProjectViewer` matches on it, and the scoped list drops viewers by it so a launcher never
-   *  shows the viewer as a project bulb (Specs/Typebulb-CLI-Agent-Viewer.md). Absent on ordinary bulbs. */
+  /** The reserved agent name this entry is a mirror for (e.g. `'claude'`), set only by the
+   *  agent mirror runner. A mirror has no `.bulb.md` path, so this field is its identity instead —
+   *  `findProjectViewer` matches on it, and the scoped list drops mirrors by it so a launcher never
+   *  shows the mirror as a project bulb (TB-Agent-Mirror.md). Absent on ordinary bulbs. */
   agent?: string
 }
 
@@ -164,12 +164,12 @@ export async function unregisterServer(pid: number): Promise<void> {
  * effect, so the list self-heals and a host never shows a server it can't reach.
  *
  * Pass `cwd` to scope the result to that project — the registry is machine-global (a PID is a
- * machine resource), but *discovery* should mirror what the viewer / a CC agent cares about: the
+ * machine resource), but *discovery* should mirror what the mirror / a CC agent cares about: the
  * bulbs of the project it's working in (see isUnderProject). The scoped list also drops agent
- * viewers (entries with an `agent` field): a viewer is package infrastructure, never a project bulb
- * to list, so it must not surface in any launcher's running-server menu (Typebulb-CLI-Agent-Viewer.md). Omit
+ * mirrors (entries with an `agent` field): a mirror is package infrastructure, never a project bulb
+ * to list, so it must not surface in any launcher's running-server menu (TB-Agent-Mirror.md). Omit
  * `cwd` for the global list — explicit pid/agent targeting (`stop`/`logs <name>`), launch-idempotency,
- * and the one-viewer-per-project check all need to see the viewer, and address it by reserved name
+ * and the one-mirror-per-project check all need to see the mirror, and address it by reserved name
  * (`agent:<name>`) rather than from a menu.
  */
 export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
@@ -225,7 +225,7 @@ function binPath(): string {
  * unpinned `npx typebulb`, which resolves to whatever is on PATH / in the npx cache and so could be
  * a *different* version than the host. Version skew there silently breaks state the two share through
  * disk: most sharply the trust store, whose path keys and very existence are version-specific, so a
- * skewed child can read a bulb the host shows as Trusted as Restricted (Specs/Typebulb-CLI-Trust.md).
+ * skewed child can read a bulb the host shows as Trusted as Restricted (TB-Trust.md).
  * Pure (constructs, never spawns) so the pin is unit-testable without a real process.
  */
 export function bulbServerCommand(

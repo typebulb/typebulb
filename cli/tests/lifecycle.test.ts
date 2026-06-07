@@ -38,7 +38,7 @@ describe('runStopScope — the batch reaps', () => {
   const here = process.cwd()
   const other = path.resolve(here, '..', 'tb-other-project')
 
-  // A viewer + a bulb for THIS project, and a viewer + a bulb for ANOTHER project — the four-way set
+  // A mirror + a bulb for THIS project, and a mirror + a bulb for ANOTHER project — the four-way set
   // that distinguishes all three scopes. Returns the pids by role for the assertions.
   async function registerFour() {
     const hereView = spawnSleeper(), hereBulb = spawnSleeper(), otherView = spawnSleeper(), otherBulb = spawnSleeper()
@@ -64,7 +64,7 @@ describe('runStopScope — the batch reaps', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('--bulbs stops this project\'s bulbs only — viewer and other projects survive', async () => {
+  it('--bulbs stops this project\'s bulbs only — mirror and other projects survive', async () => {
     const p = await registerFour()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await runStopScope('bulbs')
@@ -73,16 +73,16 @@ describe('runStopScope — the batch reaps', () => {
     expect(isAlive(p.hereView) && isAlive(p.otherView) && isAlive(p.otherBulb)).toBe(true) // the rest live
   })
 
-  it('--agent stops this project\'s viewer only — its bulbs and other projects survive', async () => {
+  it('--agent stops this project\'s mirror only — its bulbs and other projects survive', async () => {
     const p = await registerFour()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await runStopScope('agent')
     log.mockRestore()
-    expect(await until(() => !isAlive(p.hereView))).toBe(true)            // this project's viewer died
+    expect(await until(() => !isAlive(p.hereView))).toBe(true)            // this project's mirror died
     expect(isAlive(p.hereBulb) && isAlive(p.otherView) && isAlive(p.otherBulb)).toBe(true) // the rest live
   })
 
-  it('--global reaps every bulb and viewer across all projects, and empties the registry', async () => {
+  it('--global reaps every bulb and mirror across all projects, and empties the registry', async () => {
     const p = await registerFour()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await runStopScope('global')

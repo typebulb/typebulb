@@ -4,7 +4,7 @@ import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
 /**
  * Raw HTML is parsed (html:true) but funnelled through a tiny tag allowlist in markdown.ts, so the
  * agent's natural <details>/<summary> renders while every other tag stays escaped. The allowlist is the
- * security boundary, not the parser flag (Specs/Typebulb-CLI-Agent-Viewer.md, "Rendering").
+ * security boundary, not the parser flag (TB-Agent-Mirror.md, "Rendering").
  */
 
 const details = [

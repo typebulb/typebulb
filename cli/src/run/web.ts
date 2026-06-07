@@ -30,7 +30,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   const reloadEmitter = args.watch ? new EventEmitter() : undefined
 
   // Load the cwd .env cascade before loadAndCompile — it imports server.ts, which reads
-  // process.env at import time (Specs/Typebulb-CLI-Env.md). Report after, once the bulb is read.
+  // process.env at import time (TB-Env.md). Report after, once the bulb is read.
   const envResult = loadEnv(args.mode)
 
   // Initial compile
@@ -55,7 +55,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
 
   const url = `http://localhost:${port}`
 
-  // Proactive trust prediction (Specs/Typebulb-CLI-Trust.md): when running untrusted, scan the
+  // Proactive trust prediction (TB-Trust.md): when running untrusted, scan the
   // bulb for privileged tb.* usage so a host (and the terminal message below) can offer --trust
   // BEFORE the bulb runs and trips the gate — sparing the failed-first-run that ~20% of bulbs
   // (fs/ai/server) would otherwise show. Probabilistic, never a gate: a miss just falls through
@@ -65,7 +65,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Self-register so hosts (and other terminals) can discover/stop this server — the
   // machine-global registry that breakout's launch/list/stop builds on. We're listening
   // now, so the port is the TRUE one. unregistered in cleanup; a crash leaves a stale
-  // entry, reaped by listBulbServers's liveness prune (Specs/Typebulb-CLI-Agent-Viewer-Embed.md).
+  // entry, reaped by listBulbServers's liveness prune (TB-Agent-Mirror-Embed.md).
   await registerServer({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, predicted })
   console.log(`\n  ${bulb.name}`)
   console.log(`  ${url}`)

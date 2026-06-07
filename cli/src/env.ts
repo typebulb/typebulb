@@ -10,7 +10,7 @@ export interface EnvLoadResult {
   loaded: string[]
 }
 
-/** The cascade filenames for a mode, highest precedence first (Specs/Typebulb-CLI-Env.md). */
+/** The cascade filenames for a mode, highest precedence first (TB-Env.md). */
 function cascade(mode?: string): string[] {
   return [...(mode ? [`.env.${mode}.local`, `.env.${mode}`] : []), '.env.local', '.env']
 }
@@ -19,7 +19,7 @@ function cascade(mode?: string): string[] {
  * Load the `.env` cascade from `cwd` into `process.env`, highest precedence first.
  * "First writer wins" (`??=` semantics), so an exported shell var and a higher-precedence
  * file are never overwritten by a lower one — which is why we walk top-down. The cascade
- * is rooted at cwd ONLY, never the bulb's directory (Specs/Typebulb-CLI-Env.md).
+ * is rooted at cwd ONLY, never the bulb's directory (TB-Env.md).
  */
 export function loadEnv(mode?: string, cwd: string = process.cwd()): EnvLoadResult {
   const sources: Record<string, string> = {}
@@ -64,7 +64,7 @@ export function referencedEnvKeys(serverSource: string): string[] {
 
 /**
  * Print the env provenance line and the three predictable warnings to stdout, keys only,
- * never values (Specs/Typebulb-CLI-Env.md "Legibility"). This is the runtime half of the
+ * never values (TB-Env.md "Legibility"). This is the runtime half of the
  * design: it lets the docs stay one sentence by saying at launch what loaded, what a typo'd
  * mode missed, which sibling `.env` was ignored, and which key a `server.ts` expects but
  * didn't get.

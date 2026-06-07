@@ -26,7 +26,7 @@ await build({
     'open', 'chokidar',
     'semver', 'es-module-lexer',
     'fflate', 'lru-cache', 'p-limit', 'resolve.exports',
-    // The agent viewer dynamically imports esbuild to rebuild its client bundle on a source
+    // The agent mirror dynamically imports esbuild to rebuild its client bundle on a source
     // change (dev hot reload, repo only — see agentViewer/serve.ts). External so it resolves from
     // node_modules at runtime rather than being bundled (esbuild ships a native binary).
     'esbuild',
@@ -59,7 +59,7 @@ await build({
   banner: { js: nodeRequireBanner },
 })
 
-// Agent viewer client (Specs/Typebulb-CLI-Agent-Viewer.md): the browser UI, bundled self-contained
+// Agent mirror client (TB-Agent-Mirror.md): the browser UI, bundled self-contained
 // (NO externals — katex/markdown-it/beautiful-mermaid/dompurify/highlight.js and the internal
 // `../../../src/render.ts` it imports are all inlined). Served as a static asset by runAgentViewer.
 const clientBuildOpts = {
@@ -71,7 +71,7 @@ const clientBuildOpts = {
   minify: true,
 }
 
-// The viewer's two non-bundled assets — the inlined stylesheet and the mount stub — copied next to
+// The mirror's two non-bundled assets — the inlined stylesheet and the mount stub — copied next to
 // the client bundle so runAgentViewer reads them from `dist/` at runtime and they ship via
 // `files: ["dist"]`. The server half (`agents/claude/server.ts`) needs no copy: it's bundled into
 // `dist/index.js` transitively (runAgentViewer dynamically imports it).
@@ -219,7 +219,7 @@ export declare function openInEditor(filePath: string, line?: number): void
 // and typebulb.com imports them on its published-bulb hot path. Nothing structurally stops one from
 // importing code it shouldn't, which would silently bloat that hot path — the catastrophe being a
 // "hello world" published bulb dragging in the three ENORMOUS things it must never touch: the CLI /
-// agent viewer (`cli/`), the full TypeScript compiler (`typescript`), and Monaco (`monaco-editor`).
+// agent mirror (`cli/`), the full TypeScript compiler (`typescript`), and Monaco (`monaco-editor`).
 // Sucrase IS condoned (typebulb/transpile uses it). Bundle each entry (no externals) purely to read
 // its import graph; metafile-only (write:false) — no artifact, no new dev dep.
 const CORE_ENTRIES = {
@@ -231,7 +231,7 @@ const CORE_ENTRIES = {
   transpile: 'transpile/src/index.ts',
 }
 // Packages a core area (hence the published hot path) must never pull. The first two are the enormous
-// ones the firewall exists for; the rest are CLI / agent-viewer only — pocket change by comparison, but
+// ones the firewall exists for; the rest are CLI / agent-mirror only — pocket change by comparison, but
 // still out of place in a core area. Sucrase is intentionally NOT here (it's condoned).
 const FORBIDDEN_DEPS = [
   'typescript', 'monaco-editor',

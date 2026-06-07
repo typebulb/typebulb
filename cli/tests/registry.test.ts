@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { isKnownAgent, listAgentNames } from '../src/agentViewer/registry.js'
 
 /**
- * The agents registry (Specs/Typebulb-CLI-Agent-Viewer.md): the set of reserved agent names the dispatch
+ * The agents registry (TB-Agent-Mirror.md): the set of reserved agent names the dispatch
  * validates `agent:<name>` against.
  */
 describe('isKnownAgent', () => {

@@ -3,12 +3,12 @@ import { readFileSync, readdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 
 /**
- * The agent viewer is no longer a bulb, so the bulb runtime no longer *physically* separates its
+ * The agent mirror is no longer a bulb, so the bulb runtime no longer *physically* separates its
  * browser half from its node half, nor fences it off from the CLI's internals. This test re-imposes,
  * as a build-time check, the two boundaries the bulb format used to enforce for free
- * (Specs/Typebulb-CLI-Agent-Viewer.md) — so keeping them clean isn't a matter of remembering to:
+ * (TB-Agent-Mirror.md) — so keeping them clean isn't a matter of remembering to:
  *
- *  - The viewer reaches the CLI ONLY through the two public entries — `render` (browser) and
+ *  - The mirror reaches the CLI ONLY through the two public entries — `render` (browser) and
  *    `servers` (node) — never a deep `src/**` internal. (The same surface it consumed as the
  *    published `typebulb` package; debulbify made that a local import, not an open door to all of src.)
  *  - The client (the `client/` browser bundle, every module) stays browser-pure: it imports
@@ -35,7 +35,7 @@ const srcImports = (specs: string[]) => specs.filter(s => /(?:^|\/)src\//.test(s
 const NODE_BUILTINS = ['fs', 'path', 'os', 'events', 'child_process', 'crypto', 'stream', 'util', 'url', 'http', 'https', 'net', 'zlib', 'readline', 'assert', 'buffer']
 const isNodeBuiltin = (s: string) => s.startsWith('node:') || NODE_BUILTINS.includes(s) || NODE_BUILTINS.some(b => s.startsWith(`${b}/`))
 
-describe('agent viewer boundary (replaces the bulb format’s hard client/server + viewer/CLI split)', () => {
+describe('agent mirror boundary (replaces the bulb format’s hard client/server + mirror/CLI split)', () => {
   it('the client crosses into the CLI only via the public render entry — no deep internals', () => {
     expect([...new Set(srcImports(clientImports()))]).toEqual(['../../../src/render.js'])
   })

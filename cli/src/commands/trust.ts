@@ -3,7 +3,7 @@ import { setBulbTrusted, listTrustedBulbs } from '../serve/trustStore.js'
 
 /**
  * `typebulb trust [file]` / `typebulb untrust <file>` — set or clear a bulb's remembered trust in the
- * CLI's store (Specs/Typebulb-CLI-Trust.md). The agent-facing policy lever: trust a bulb once and a
+ * CLI's store (TB-Trust.md). The agent-facing policy lever: trust a bulb once and a
  * later `typebulb <file>` grants fs/AI/server.ts without `--trust`. No-arg `trust` lists the
  * remembered set. The store is shared with claude.bulb's launcher, so GUI and CLI agree.
  */

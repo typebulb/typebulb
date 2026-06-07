@@ -5,7 +5,7 @@ import { renderHtml } from '../src/bulb/template.js'
  * The standalone top-level page (CLI server) gets a `html, body { height: 100% }` chain so a
  * fill bulb (`height: 100%` root) resolves against the window instead of collapsing to zero; the
  * embed srcdoc (renderBulb) must NOT, or `body` stops being content-height and the auto-height
- * protocol can no longer shrink the frame to its content (Specs/Typebulb-CLI-Agent-Viewer-Embed.md).
+ * protocol can no longer shrink the frame to its content (TB-Agent-Mirror-Embed.md).
  */
 const base = {
   name: 'T', code: '', css: '', html: '<div id="root"></div>',

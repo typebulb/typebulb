@@ -35,12 +35,25 @@ import { runLogs, runStop, runStopScope } from './commands/lifecycle.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
 import { runConsole } from './run/console.js'
+import { runCall } from './run/call.js'
 
 // Replaced at build time by esbuild's `define`. The `tsc --build` step (used
 // for typechecking only — esbuild owns the bundle) needs a fallback string,
 // so we declare and assign it; esbuild will overwrite the literal during bundling.
 declare const __TYPEBULB_VERSION__: string
 const VERSION: string = typeof __TYPEBULB_VERSION__ !== 'undefined' ? __TYPEBULB_VERSION__ : '0.0.0-dev'
+
+/**
+ * Server execution (the `server.ts` block) runs arbitrary local Node with no sandbox possible, so —
+ * unlike a web run, which degrades to Restricted — it is refused outright without trust (TB-Trust.md).
+ * The single gate shared by the two paths that import and run server.ts: `--server`/console mode and
+ * `call`.
+ */
+function requireServerTrust(trusted: boolean, trustHint: string): void {
+  if (trusted) return
+  console.error(`This bulb runs server-side Node code (server.ts), which --trust must authorize:\n  ${trustHint}`)
+  process.exit(1)
+}
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
@@ -75,24 +88,24 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'agent') {
-    // Bare `agent` → print the what-to-do guidance and stop. `agent:<name>` launches that viewer.
+    // Bare `agent` → print the what-to-do guidance and stop. `agent:<name>` launches that mirror.
     if (!args.agentTarget) {
       await runAgent()
       return
     }
-    // `agent:<name>` → serve that viewer (Specs/Typebulb-CLI-Agent-Viewer.md).
+    // `agent:<name>` → serve that mirror (TB-Agent-Mirror.md).
     // Reject an unknown agent up front rather than emitting a cryptic "file not found".
     if (!isKnownAgent(args.agentTarget)) {
       console.error(`Unknown agent '${args.agentTarget}'. Known: ${listAgentNames().join(', ')}.`)
       process.exit(1)
     }
-    // At most ONE viewer per project: a viewer mirrors the CC session in the cwd it was launched in, so
+    // At most ONE mirror per project: a mirror reflects the CC session in the cwd it was launched in, so
     // it has a 1-1 relationship with that project — a second one binds a fresh port, tails the same
-    // sessions, and (until reaped) piles up as an orphaned server. So if a live viewer for this agent
+    // sessions, and (until reaped) piles up as an orphaned server. So if a live mirror for this agent
     // already serves this cwd, re-use it (re-open its tab unless --no-open) instead of spawning another.
     const existing = await findProjectViewer(process.cwd(), args.agentTarget)
     if (existing) {
-      console.log(`Viewer '${args.agentTarget}' is already running for this project:\n  ${existing.url}`)
+      console.log(`Mirror '${args.agentTarget}' is already running for this project:\n  ${existing.url}`)
       if (args.open) await openBrowser(existing.url)
       return
     }
@@ -119,14 +132,14 @@ async function main(): Promise<void> {
     bulbPath = path.resolve(args.file)
   }
 
-  // Local path wins: an arg that resolves to a real file is run as-is. An agent viewer resolves ONLY
+  // Local path wins: an arg that resolves to a real file is run as-is. An agent mirror resolves ONLY
   // via `agent:<name>` (handled above) — never a bare token, so `typebulb claude` is not a second,
   // undocumented way in. A bare token that happens to name an agent gets pointed at the real command
   // instead of a cryptic "file not found".
   const exists = await fs.access(bulbPath).then(() => true, () => false)
   if (!exists) {
     if (listAgentNames().includes(args.file)) {
-      console.error(`To open the ${args.file} agent viewer, run: npx typebulb agent:${args.file}`)
+      console.error(`To open the ${args.file} agent mirror, run: npx typebulb agent:${args.file}`)
       process.exit(1)
     }
     console.error(`File not found: ${bulbPath}`)
@@ -140,7 +153,7 @@ async function main(): Promise<void> {
   }
 
   // The exact command to re-run with the privileged tier granted. Surfaced in the in-page denial
-  // bar, the server-side 403, and the `predict` command below (Specs/Typebulb-CLI-Trust.md).
+  // bar, the server-side 403, and the `predict` command below (TB-Trust.md).
   const displayPath = args.file && args.file !== '.' ? args.file : path.relative(process.cwd(), bulbPath) || path.basename(bulbPath)
   const trustHint = `npx typebulb --trust ${displayPath.includes(' ') ? `"${displayPath}"` : displayPath}`
 
@@ -154,11 +167,11 @@ async function main(): Promise<void> {
     return
   }
 
-  // Trust resolution. Apply remembered trust (Specs/Typebulb-CLI-Trust.md): a bulb elevated via
+  // Trust resolution. Apply remembered trust (TB-Trust.md): a bulb elevated via
   // `typebulb trust` (or the launcher) runs trusted on a bare run too — that's the point of the CLI
   // owning the policy. `--trust` forces it on for this run; `--no-trust` forces it off even if
   // remembered. A bulb you've never trusted stays Restricted, so secure-by-default still holds for
-  // unvetted code. (The agent viewer is privileged by construction and never reaches here — it's
+  // unvetted code. (The agent mirror is privileged by construction and never reaches here — it's
   // served by runAgentViewer above, not the bulb path.)
   const remembered = !args.noTrust && isBulbTrusted(bulbPath)
   if (remembered && !args.trust) console.log('trust: granted from memory (run `typebulb untrust` to revoke)')
@@ -184,8 +197,9 @@ async function main(): Promise<void> {
       process.exit(1)
     }
 
-    // The override is a client-runtime concept; it does nothing in server mode.
-    if (bulbInfo && (!bulbInfo.bulb.code || args.server)) {
+    // The override is a client-runtime concept; it does nothing in --server's web-less mode. (`call`
+    // is excepted: it runs server.ts through importServerModule, which DOES apply the server override.)
+    if (bulbInfo && args.subcommand !== 'call' && (!bulbInfo.bulb.code || args.server)) {
       console.warn('warning: --replace has no effect in server mode (the override is client-only).')
     }
 
@@ -205,20 +219,29 @@ async function main(): Promise<void> {
     return
   }
 
-  // Server mode (--server flag, or server.ts without code.tsx): run server.ts
-  // directly in Node — arbitrary local code, no sandbox possible. So it's the one
-  // path that refuses without --trust rather than degrading to a sandboxed run
-  // (Specs/Typebulb-CLI-Trust.md). A malformed bulb leaves bulbInfo undefined and
-  // falls through to web mode, where loadAndCompile throws the real error.
-  // Where the CLI's `.typebulb` cache (compiled server.mjs + auto-installed node_modules) lives:
-  // the bulb's own parent dir.
+  // The CLI's `.typebulb` cache (compiled server.mjs + auto-installed node_modules) lives in the
+  // bulb's own parent dir; shared by the call, console, and web modes below.
   const serverCacheDir = path.dirname(bulbPath)
 
+  // `call` — invoke one server.ts export headlessly (TB-Call.md): the terminal-facing twin of the
+  // browser bridge. Dispatched here, after remembered-trust resolution, so it's gated like --server.
+  if (args.subcommand === 'call') {
+    requireServerTrust(args.trust, trustHint)
+    await runCall(
+      bulbPath,
+      { fn: args.fn!, positional: args.callArgs, argsJson: args.argsJson, hasArgsFlag: args.hasArgsFlag },
+      args.mode,
+      local,
+      serverCacheDir,
+    )
+    return
+  }
+
+  // Server mode (--server flag, or a server.ts-only bulb): run server.ts directly in Node. A
+  // malformed bulb leaves bulbInfo undefined and falls through to web mode, where the real parse
+  // error surfaces.
   if (bulbInfo && bulbInfo.bulb.server && (!bulbInfo.bulb.code || args.server)) {
-    if (!args.trust) {
-      console.error(`This bulb runs server-side Node code (server.ts), which --trust must authorize:\n  ${trustHint}`)
-      process.exit(1)
-    }
+    requireServerTrust(args.trust, trustHint)
     await runConsole(bulbPath, args.watch, args.mode, local, serverCacheDir)
     return
   }

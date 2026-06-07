@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { isHiddenTurn } from '../agents/claude/server.js'
 
 /**
- * The viewer hides non-conversational turns structurally (Specs/Typebulb-CLI-Agent-Viewer.md):
+ * The mirror hides non-conversational turns structurally (TB-Agent-Mirror.md):
  * sub-agent sidechains and CC's isMeta injections — a launched skill's full body, slash-command
  * caveats, /loop resume nudges. This is what keeps a `Skill claude-api` row from being followed by
  * 20 pages of the skill's body. Anchored on CC's own flags, not a content heuristic.

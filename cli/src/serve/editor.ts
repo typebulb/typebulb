@@ -1,13 +1,13 @@
 /**
  * Cross-platform editor launcher — the agent-agnostic sibling of browser.ts's openBrowser.
- * Any viewer bulb that renders file citations wants click-to-open, so the detached-spawn
- * boilerplate and editor resolution live here once rather than being re-derived per viewer.
+ * Any mirror bulb that renders file citations wants click-to-open, so the detached-spawn
+ * boilerplate and editor resolution live here once rather than being re-derived per mirror.
  */
 
 import { spawn } from 'child_process'
 import { basename } from 'path'
 
-// The editor to open file citations in: VS Code (`code`) by default — claude.bulb's viewer runs in a
+// The editor to open file citations in: VS Code (`code`) by default — claude.bulb's mirror runs in a
 // VS Code context, and `code` also fronts the Cursor/codium-family forks. Overridable ONLY by the
 // typebulb-specific `TYPEBULB_EDITOR`. We deliberately do NOT consult `$VISUAL`/`$EDITOR`: those name
 // the *git / terminal commit* editor (vim, or on Windows often Notepad), which is the wrong tool for

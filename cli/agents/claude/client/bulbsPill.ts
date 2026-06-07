@@ -288,7 +288,7 @@ export class BulbsPill extends ComboboxPill {
     )
   }
 
-  // Shared modal chrome for both trust prompts (Specs/Typebulb-CLI-Trust.md). It lives here, in the
+  // Shared modal chrome for both trust prompts (TB-Trust.md). It lives here, in the
   // launcher — a surface the launched bulb's page can't script — so a bulb can trigger a prompt but
   // never self-grant (Trust spec Invariant 3). Backdrop click runs onDismiss.
   trustModal(cfg: { heading: string; body: string; warn: string; noLabel: string; yesLabel: string; onNo: () => void; onYes: () => void; onDismiss: () => void }) {

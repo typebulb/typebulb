@@ -6,7 +6,7 @@ import { parseLocalFlag, resolveLocalOverride, assertSelfContained, rewriteServe
 import type { ResolvedLocalOverride } from '../src/localOverride.js'
 
 /**
- * Tests for the `--replace` local-package override (Specs/Typebulb-CLI-Replace.md).
+ * Tests for the `--replace` local-package override (TB-Replace.md).
  * Covers flag parsing, browser-entry/types resolution, and the self-contained
  * guard — including the invariants we hard-enforce (CJS rejection, bare-import
  * rejection, unresolvable exports).

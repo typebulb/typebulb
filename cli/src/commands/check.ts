@@ -63,6 +63,12 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   }
 
   if (anyFailed) process.exit(1)
+
+  // Success is otherwise silent (tsc-style), which leaves an agent unable to tell "passed" from
+  // "did nothing". Emit a one-line all-clear naming the blocks checked — on stderr, so stdout stays
+  // empty for composition (`check && deploy`) and anything parsing it.
+  const checked = [bulb.code && 'code.tsx', bulb.server && 'server.ts'].filter(Boolean).join(', ')
+  console.error(`✓ no issues (${checked})`)
 }
 
 /** Print lint issues role-prefixed (the same `role\tline` shape as the tsc output) and report whether

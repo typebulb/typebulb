@@ -7,8 +7,8 @@ import { listBulbFiles } from '../src/serve/bulbFiles.js'
 /**
  * The project walk lists every `*.bulb.md` under cwd with its frontmatter name. No filename is
  * special-cased: a user file named `claude.bulb.md` is an ordinary user bulb, listed like any other.
- * (Self-exclusion of the running viewer lives in the server registry via the `agent` field, not in
- * this file walk — Specs/Typebulb-CLI-Agent-Viewer.md.)
+ * (Self-exclusion of the running mirror lives in the server registry via the `agent` field, not in
+ * this file walk — TB-Agent-Mirror.md.)
  */
 describe('listBulbFiles', () => {
   let dir: string

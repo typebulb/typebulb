@@ -1,9 +1,17 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
 export interface CliArgs {
-  subcommand: 'run' | 'check' | 'predict' | 'logs' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models'
   file: string
-  /** For `agent:<name>` — the agent to launch a viewer for (e.g. `claude`). Bare `agent` (no
+  /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
+  fn?: string
+  /** `call`: positional args after `<fn>`, captured verbatim (each JSON-or-string-parsed at call time). */
+  callArgs: string[]
+  /** `call --args <json>`: the whole argument list as one JSON array (`-` reads it from stdin). */
+  argsJson?: string
+  /** Whether `--args` was passed (distinguishes an empty array from "use positionals"). */
+  hasArgsFlag: boolean
+  /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
    *  target) prints what-to-do guidance instead of launching; `typebulb skill` prints the skill. */
   agentTarget?: string
   port: number
@@ -11,21 +19,21 @@ export interface CliArgs {
   open: boolean
   server: boolean
   /** Grant the privileged capability tier (fs + ai + server.ts) for THIS run. Default false —
-   *  bulbs run sandboxed unless explicitly trusted (Specs/Typebulb-CLI-Trust.md). A bulb that was
+   *  bulbs run sandboxed unless explicitly trusted (TB-Trust.md). A bulb that was
    *  remembered-trusted (`typebulb trust`) also runs trusted without this flag. */
   trust: boolean
   /** Force Restricted for this run even if the bulb is remembered-trusted (overrides the store). */
   noTrust: boolean
   /** `--mode <name>`: also load `.env.<name>` (+ `.env.<name>.local`) on top of the base cascade.
-   *  Free-form; selects nothing by default (Specs/Typebulb-CLI-Env.md). */
+   *  Free-form; selects nothing by default (TB-Env.md). */
   mode?: string
   /** `logs --follow`: stream new console output until interrupted (default: snapshot). */
   follow: boolean
   /** `logs --lines N`: print only the last N lines (default: the whole captured log). */
   lines?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
-   *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its viewer); `global` reaps every
-   *  bulb and viewer across all projects — the housekeeping verb for the orphan pile. */
+   *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
+   *  bulb and mirror across all projects — the housekeeping verb for the orphan pile. */
   stopScope?: 'bulbs' | 'agent' | 'global'
   help: boolean
   version: boolean
@@ -46,11 +54,13 @@ export function parseArgs(args: string[]): CliArgs {
     follow: false,
     help: false,
     version: false,
+    callArgs: [],
+    hasArgsFlag: false,
   }
 
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
-  // `:<name>` target (`agent:claude` launches that viewer; bare `agent` emits the skill + status).
-  const SUBCOMMANDS = ['check', 'predict', 'logs', 'stop', 'trust', 'untrust', 'skill', 'models'] as const
+  // `:<name>` target (`agent:claude` launches that mirror; bare `agent` emits the skill + status).
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'stop', 'trust', 'untrust', 'skill', 'models'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -64,6 +74,10 @@ export function parseArgs(args: string[]): CliArgs {
     result.subcommand = first as CliArgs['subcommand']
     args = args.slice(1)
   }
+
+  // `call <file> <fn> [arg…]` — collect bare positionals in order, then split file/fn/args below.
+  // (For every other subcommand the last bare token is the file, as before.)
+  const callPositionals: string[] = []
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -126,9 +140,31 @@ export function parseArgs(args: string[]): CliArgs {
         console.error(e instanceof Error ? e.message : String(e))
         process.exit(1)
       }
+    } else if (arg === '--args' || arg.startsWith('--args=')) {
+      // The escape hatch: the entire argument list as one JSON array (`-` reads it from stdin).
+      // `--args -` deliberately consumes the bare `-` as its value, not as a positional.
+      result.hasArgsFlag = true
+      const value = arg.startsWith('--args=') ? arg.slice('--args='.length) : args[++i]
+      if (value === undefined) {
+        console.error('Missing value for --args (a JSON array, or - to read it from stdin)')
+        process.exit(1)
+      }
+      result.argsJson = value
     } else if (!arg.startsWith('-')) {
-      result.file = arg
+      if (result.subcommand === 'call') callPositionals.push(arg)
+      else result.file = arg
     }
+  }
+
+  // call <file> <fn> [arg…]: first bare token is the file, second the fn, the rest the call's args.
+  if (result.subcommand === 'call') {
+    if (callPositionals.length < 2) {
+      console.error('Usage: typebulb call <file> <fn> [arg…]')
+      process.exit(1)
+    }
+    result.file = callPositionals[0]
+    result.fn = callPositionals[1]
+    result.callArgs = callPositionals.slice(2)
   }
 
   return result
@@ -141,12 +177,17 @@ typebulb - Local bulb runner for Typebulb
 Usage:
   typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
   typebulb agent                 Start here — tells the agent how to show a bulb inline
-                                 or build one locally; prints the viewer URL when one is
+                                 or build one locally; prints the mirror URL when one is
                                  up. Always exits 0 (it's a status report, not a check).
-  typebulb agent:claude          Open the agent viewer (a browser view over a Claude
+  typebulb agent:claude          Open the agent mirror (a browser view over a Claude
                                  Code session; 'agent:<name>' selects which agent).
   typebulb skill                 Print this README as an Agent Skill (stdout), for the
                                  agent to read and copy into its own skills folder.
+  typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints
+                                 its return as JSON to stdout, logs/errors to
+                                 stderr. Gated by trust like --server. Args after
+                                 <fn> are JSON-or-string; --args '<json-array>'
+                                 (or --args - for stdin) is the escape hatch.
   typebulb check [file.bulb.md]  Type-check a bulb without running it
   typebulb predict [file]        Report the capability a bulb probably needs
                                  (fs / AI / server.ts) without running it.
@@ -159,8 +200,8 @@ Usage:
   typebulb stop [file|pid]       Stop a running bulb server (no arg: list this
                                  project's running servers; a pid/path stops any).
                                  Batch flags: --bulbs (this project's bulbs, the
-                                 viewer survives), --agent (this project's viewer),
-                                 --global (every bulb + viewer, all projects).
+                                 mirror survives), --agent (this project's mirror),
+                                 --global (every bulb + mirror, all projects).
   typebulb trust [file]          Remember a bulb as Trusted, so a later run grants
                                  fs/AI/server.ts without --trust (no arg: list the
                                  remembered-trusted bulbs).
@@ -184,6 +225,9 @@ Options:
                               of .env / .env.local. Free-form name; loads no mode
                               file by default.
   --server                    Run server.ts only, no web server (needs --trust)
+  --args <json-array>         For 'call': the whole argument list as one JSON
+                              array (strict). '--args -' reads it from stdin,
+                              sidestepping shell quoting.
   --replace <name>=<path>     Replace a declared dependency with a local built
                               package folder instead of a CDN (dev only).
                               Applies to both run and check. Watched for

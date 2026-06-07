@@ -20,8 +20,8 @@ const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
 
 // Syntax highlighting for the code view: a custom hljs core build registering only
 // the grammars a bulb actually uses — keeps the dep to ~tens of KB vs hljs's full
-// ~1MB bundle. esbuild bundles these into the viewer's client.js (no import map, no
-// proxy — the viewer is CLI code, not a bulb). No hljs theme stylesheet either — token
+// ~1MB bundle. esbuild bundles these into the mirror's client.js (no import map, no
+// proxy — the mirror is CLI code, not a bulb). No hljs theme stylesheet either — token
 // colors come from our own CSS vars (.bulb-code .hljs-*) so they follow the host
 // light/dark theme instead of baking a palette.
 hljs.registerLanguage('typescript', hljsTypescript)

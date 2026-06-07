@@ -53,17 +53,17 @@ describe('serverRegistry', () => {
     expect(await listBulbServers()).toEqual([])
   })
 
-  // Self-exclusion (Specs/Typebulb-CLI-Agent-Viewer.md): the cwd-scoped list — what a launcher's
-  // running-server menu shows — must drop an agent viewer, identified by its `agent` field (a viewer
-  // has no project path). The global list keeps it, so the one-viewer-per-project dedup and
+  // Self-exclusion (TB-Agent-Mirror.md): the cwd-scoped list — what a launcher's
+  // running-server menu shows — must drop an agent mirror, identified by its `agent` field (a mirror
+  // has no project path). The global list keeps it, so the one-mirror-per-project dedup and
   // `stop claude` can still find it.
-  it('cwd-scoped list drops an agent viewer (by its `agent` field) but the global list keeps it', async () => {
+  it('cwd-scoped list drops an agent mirror (by its `agent` field) but the global list keeps it', async () => {
     const project = path.join(dir, 'proj')
     const userBulb = path.join(project, 'my.bulb.md')
     await registerServer({ pid: process.pid, port: 3000, url: 'http://localhost:3000', file: 'agent:claude', cwd: project, startedAt: 1, agent: 'claude' })
     await registerServer({ pid: process.ppid, port: 3001, url: 'http://localhost:3001', file: userBulb, cwd: project, startedAt: 2 })
 
-    // Scoped to the project (the menu): only the user bulb — the viewer is excluded by `agent`.
+    // Scoped to the project (the menu): only the user bulb — the mirror is excluded by `agent`.
     const scoped = await listBulbServers(project)
     expect(scoped.map(s => s.file)).toEqual([userBulb])
 
