@@ -207,7 +207,7 @@ interface State {
   buffer: Event[]
   partial: string                          // tail leftover (incomplete trailing line)
   offset: number                           // last byte offset read from `file`
-  totals: { in: number; out: number; cached: number; cacheCreate: number }
+  latest: { in: number; out: number; cached: number; cacheCreate: number }   // last response's usage = current window, NOT a session sum
   everAttached: boolean                    // we've committed to ≥1 session; gates the fresh-boot auto-attach
   // The JSONL is a tree (parentUuid); the live chain is the walk from the latest
   // leaf to root. entries indexes uuid→entry; chainLastUuid is the last-emitted
@@ -227,7 +227,7 @@ const state: State = {
   buffer: [],
   partial: '',
   offset: 0,
-  totals: { in: 0, out: 0, cached: 0, cacheCreate: 0 },
+  latest: { in: 0, out: 0, cached: 0, cacheCreate: 0 },
   everAttached: false,
   entries: new Map(),
 }
@@ -312,7 +312,7 @@ function attachTo(found: { sessionId: string; file: string }) {
   s.everAttached = true
   s.partial = ''
   s.offset = 0
-  s.totals = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
+  s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   s.entries = new Map()
   s.chainLastUuid = undefined
   s.buffer.push({ type: 'cleared' })
@@ -382,7 +382,7 @@ function drainFile() {
     if (s.chainLastUuid !== undefined) {
       s.buffer.push({ type: 'cleared' })
       s.buffer.push({ type: 'session', sessionId: s.sessionId })
-      s.totals = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
+      s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
     }
     for (let i = walked.length - 1; i >= 0; i--) processEntry(walked[i])
   }
@@ -489,13 +489,19 @@ function applyEntry(entry: JsonlEntry) {
       const live = !isNaN(ts) && ts >= s.sessionStartMs
       s.buffer.push({ type: 'assistant', text, thinking, tools, live })
     }
+    // Overwrite, never accumulate: the chip shows the CURRENT context window —
+    // the last response's usage, bounded by the model window — not a session sum.
+    // Summing every turn double-counts as the window grows (CC's tokens.ts flags
+    // this) and unmoors the number from anything a viewer can interpret.
     const usage = entry.message?.usage ?? entry.usage
     if (usage) {
-      s.totals.in += usage.input_tokens ?? 0
-      s.totals.out += usage.output_tokens ?? 0
-      s.totals.cached += usage.cache_read_input_tokens ?? 0
-      s.totals.cacheCreate += usage.cache_creation_input_tokens ?? 0
-      s.buffer.push({ type: 'usage', ...s.totals })
+      s.latest = {
+        in: usage.input_tokens ?? 0,
+        out: usage.output_tokens ?? 0,
+        cached: usage.cache_read_input_tokens ?? 0,
+        cacheCreate: usage.cache_creation_input_tokens ?? 0,
+      }
+      s.buffer.push({ type: 'usage', ...s.latest })
     }
   }
   // Ignore: mode, permission-mode, file-history-snapshot, system metadata, summary, etc.

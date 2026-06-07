@@ -108,7 +108,7 @@ body {
    + fixed height centers the glyph run by the box, not by the inherited line-box.
    Opaque so they read cleanly over the message text the transparent strip lets
    through. */
-.pill, .working {
+.pill, .working, .token {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -145,7 +145,7 @@ body {
    doubling the visible gap between its neighbours. Collapse the empties so the
    cluster spaces evenly regardless of which pills are present. */
 .token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty { display: none; }
-.token-pop, .picker, .servers-pop {
+.picker, .servers-pop {
   position: absolute;
   bottom: calc(100% + .35rem);
   right: 0;
@@ -155,24 +155,6 @@ body {
   border-radius: 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
-.token-pop {
-  min-width: 360px;
-  max-width: 92vw;
-  padding: .35rem;
-  font-size: .85rem;
-}
-/* Each row: left text block, number pushed to the right edge. Sizing/rhythm matches .picker-row
-   (font .85rem, row padding .45rem .55rem) so the three status-bar popovers read as one family. */
-.token-line {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: .6rem;
-  padding: .45rem .55rem;
-}
-.token-line-title { font-weight: 600; color: var(--fg); margin-right: .5rem; }
-.token-line-lbl { color: var(--muted); font-size: .72rem; }
-.token-line-num { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* "working…" indicator: CC is mid-turn. Passive — driven by the live-chain leaf,
    not a live token stream (the JSONL is flushed in batches, so this can sit lit
@@ -189,7 +171,7 @@ body {
 @keyframes working-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .working-dot { animation: none; opacity: .8; } }
 
-/* Session list — shares the popover chrome (.token-pop, .picker above); these are
+/* Session list — shares the popover chrome (.picker above); these are
    just its own dimensions. */
 .picker {
   width: min(440px, calc(100vw - 2rem));

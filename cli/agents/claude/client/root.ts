@@ -33,7 +33,6 @@ export class Root extends Component implements IRoot {
   // click closers never fire on their own).
   closePopups(except?: unknown) {
     if (this.sessionPicker !== except) this.sessionPicker.close()
-    if (this.tokenPill !== except) this.tokenPill.close()
     if (this.bulbsPill !== except) this.bulbsPill.close()
   }
 
@@ -102,15 +101,16 @@ export class Root extends Component implements IRoot {
     )
   }
 
-  // Bottom strip: a right-aligned cluster of working indicator, session switcher,
-  // token count (working sits leftmost of the three).
+  // Bottom strip: a right-aligned cluster. Left→right: the agent-scoped trio
+  // (optional working indicator, token count, session picker), then the bulbs
+  // pill set apart on the right — it's about this project's bulbs, not the agent.
   statusbar() {
     return div({ class: 'statusbar' },
       div({ class: 'statusbar-actions' },
         this.working ? div({ class: 'working' }, span({ class: 'working-dot' }), 'working…') : null,
-        this.bulbsPill.view(),
-        this.sessionPicker.view(),
         this.tokenPill.view(),
+        this.sessionPicker.view(),
+        this.bulbsPill.view(),
       ),
     )
   }
