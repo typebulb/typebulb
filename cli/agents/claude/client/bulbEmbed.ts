@@ -165,7 +165,7 @@ export class BulbEmbed extends Component {
       window.dispatchEvent(new CustomEvent('tb-breakout'))
     } catch (err) {
       this.#breakoutResult = 'breakout failed'
-      console.error('[claude-bulb] breakout failed', err)
+      console.error('[mirror] breakout failed', err)
     }
     this.#breakoutState = 'done'               // resolved — stop the shimmer, show the result, stay disabled
     this.update()

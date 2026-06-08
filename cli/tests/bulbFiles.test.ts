@@ -17,12 +17,12 @@ describe('listBulbFiles', () => {
 
   it('lists user bulbs with their frontmatter names, skipping node_modules', async () => {
     await writeFile(path.join(dir, 'my-app.bulb.md'), '---\nname: My App\n---\n')
-    await writeFile(path.join(dir, 'claude.bulb.md'), '---\nname: Claude Bulb\n---\n')   // just a user bulb now
+    await writeFile(path.join(dir, 'claude.bulb.md'), '---\nname: My Notes\n---\n')   // named `claude` yet not special-cased — an ordinary user bulb
     await mkdir(path.join(dir, 'node_modules', 'pkg'), { recursive: true })
     await writeFile(path.join(dir, 'node_modules', 'pkg', 'dep.bulb.md'), '---\nname: Dep\n---\n')
 
     const names = listBulbFiles(dir).map(f => f.name).sort()
-    expect(names).toEqual(['Claude Bulb', 'My App'])   // both user bulbs; node_modules skipped
+    expect(names).toEqual(['My App', 'My Notes'])   // both user bulbs; node_modules skipped
     expect(names).not.toContain('Dep')
   })
 })

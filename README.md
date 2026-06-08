@@ -252,7 +252,7 @@ To render a bulb live inline, wrap the **entire** bulb — frontmatter and all b
 
 The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and sandboxed unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`, no storage.
 
-**Fixing a broken embed?** Re-emit it under the *same* `name:` — the mirror folds the old version into a stub and keeps your fix as the live one. (A rename is treated as a new bulb.)
+**Iterating on an embed?** Re-emit under the *same* `name:` to refine it (a different `name:` starts a separate bulb) — the mirror keeps the latest version live and folds each earlier one into an expandable stub in place, so the transcript shows the bulb's evolution, not a stack of repeated renders. Same move fixes a broken embed.
 
 **A broken embed reads back.** Emit it and move on; embeds usually just work. If the user says one broke, the mirror has already forwarded its compile/runtime error to `typebulb logs claude`, name-tagged (`[embed <name>]`) — pull it from there and fix, instead of asking the user to copy-paste.
 
@@ -282,7 +282,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, reasoning?, provider?, model?, webSearch? })` → `Promise<{ text }>` (non-streaming). `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off.
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
-- **Math renders live in the mirror** — write inline math as `$…$` and display math as `$$…$$` (the mirror renders KaTeX; a plain terminal chat doesn't, so reach for real math here). Prefer `$y = x^2$` over inline-code or a Unicode superscript (`y = x²`).
+- **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
 - **`tb.json<T>(n)` is generic** — `tb.json<Album[]>(0)` returns typed parsed JSON; `tb.data(n)` returns the raw string.
 - **`tb.proxy()` is for same-origin Web Worker / WASM loads** — e.g. ffmpeg or tesseract: `tb.proxy("https://unpkg.com/...")` routes the CDN URL through the local server's origin.
 - **Prefer an `index.html` fragment** over a full HTML document — usually just the mount stub (`<div id="root"></div>`).

@@ -83,7 +83,7 @@ export class BulbsPill extends ComboboxPill {
       this.servers = servers
       if (changed) this.update()
     } catch (err) {
-      console.error('[claude-bulb] server list refresh failed', err)
+      console.error('[mirror] server list refresh failed', err)
     }
   }
 
@@ -98,7 +98,7 @@ export class BulbsPill extends ComboboxPill {
       this.files = files
       if (changed) this.update()
     } catch (err) {
-      console.error('[claude-bulb] bulb list refresh failed', err)
+      console.error('[mirror] bulb list refresh failed', err)
     }
   }
 
@@ -150,7 +150,7 @@ export class BulbsPill extends ComboboxPill {
     if (!trusted) {
       let cap: string | undefined
       try { cap = (await tb.server.predictTrustOf(path) as { cap?: string }).cap }
-      catch (err) { console.error('[claude-bulb] predictTrustOf failed', err) }
+      catch (err) { console.error('[mirror] predictTrustOf failed', err) }
       if (cap) { this.pendingLaunch = { path, name: this.displayName(path), cap }; this.update(); return }
     }
     await this.doLaunch(path)
@@ -168,7 +168,7 @@ export class BulbsPill extends ComboboxPill {
     this.launching.add(key); this.update()
     let pid: number | undefined
     try { pid = (await tb.server.launchBulb(path, trust) as { pid?: number }).pid }
-    catch (err) { console.error('[claude-bulb] launchBulb failed', err) }
+    catch (err) { console.error('[mirror] launchBulb failed', err) }
     finally { this.launching.delete(key) }
     if (suppressNag && pid) this.dismissedDenials.add(pid)
     await this.refresh()
@@ -189,7 +189,7 @@ export class BulbsPill extends ComboboxPill {
     if (this.openLog?.pid === pid) this.closeLog()
     this.dismissedDenials.delete(pid)
     try { await tb.server.stopBreakout(pid) }
-    catch (err) { console.error('[claude-bulb] stopBreakout failed', err) }
+    catch (err) { console.error('[mirror] stopBreakout failed', err) }
     await this.refresh()
   }
 
@@ -211,7 +211,7 @@ export class BulbsPill extends ComboboxPill {
     try {
       await tb.server.stopBreakout(s.pid)
       await tb.server.launchBulb(s.file, true)
-    } catch (err) { console.error('[claude-bulb] elevate failed', err) }
+    } catch (err) { console.error('[mirror] elevate failed', err) }
     await this.refresh()
   }
 
@@ -229,7 +229,7 @@ export class BulbsPill extends ComboboxPill {
         await tb.server.stopBreakout(r.running.pid)
         await tb.server.launchBulb(r.path, next)
       }
-    } catch (err) { console.error('[claude-bulb] toggleTrust failed', err) }
+    } catch (err) { console.error('[mirror] toggleTrust failed', err) }
     await this.refresh()
   }
 
@@ -265,7 +265,7 @@ export class BulbsPill extends ComboboxPill {
         log.offset = offset                            // file trimmed/rotated — resync silently
       }
     } catch (err) {
-      console.error('[claude-bulb] readBulbLog failed', err)
+      console.error('[mirror] readBulbLog failed', err)
     }
   }
 

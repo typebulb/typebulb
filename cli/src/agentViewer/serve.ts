@@ -49,7 +49,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // Re-read the page assets per request so a hot-reload (rebuilt styles/mount) is picked
   // up without restarting — the client bundle itself is re-fetched by the browser on reload.
   const getHtml = () => buildAgentHtml({
-    name: 'Claude Bulb',
+    name: 'Claude Mirror',
     styles: readFileSync(stylesPath, 'utf8'),
     mountHtml: readFileSync(mountPath, 'utf8'),
     watch: args.watch,
@@ -86,7 +86,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     agent: 'claude',
   })
 
-  console.log('\n  Claude Bulb')
+  console.log('\n  Claude Mirror')
   console.log(`  ${url}`)
   if (port !== args.port) console.log(`  (port ${args.port} was busy)`)
   if (args.watch) console.log('  Watching for changes...\n')

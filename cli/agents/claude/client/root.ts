@@ -46,16 +46,16 @@ export class Root extends Component implements IRoot {
     this.pump()
   }
 
-  // Tab title "<session preview> — <cwd basename>" so multiple bulbs are
-  // distinguishable; falls back to the cwd basename, then "Claude Bulb".
+  // Tab title "<session preview> — <cwd basename>" so multiple mirrors are
+  // distinguishable; falls back to the cwd basename, then "Claude Mirror".
   updateTitle() {
     const base = basename(this.cwd)
     const preview = this.sessionPicker.currentPreview()
     const short = truncate(preview, 40)
     document.title = short && base ? `${short} — ${base}`
       : short ? short
-      : base ? `Claude Bulb — ${base}`
-      : 'Claude Bulb'
+      : base ? `Claude Mirror — ${base}`
+      : 'Claude Mirror'
   }
 
   // Poll the buffer every 600ms; the terminal drives turns, so entries pop in
@@ -73,7 +73,7 @@ export class Root extends Component implements IRoot {
         if (events.length || workingChanged) this.update()
         if (events.length) this.messageList.scrollSoon()
       } catch (err) {
-        console.error('[claude-bulb] poll failed', err)
+        console.error('[mirror] poll failed', err)
       }
       setTimeout(tick, 600)
     }

@@ -444,7 +444,7 @@ export function isHiddenTurn(entry: { isSidechain?: boolean; isMeta?: boolean })
 // (not just the turn). Skip the bad entry, keep draining the rest of the batch.
 function processEntry(entry: JsonlEntry) {
   try { applyEntry(entry) }
-  catch (err) { console.error('[claude-bulb] skipped malformed entry:', errorMessage(err)) }
+  catch (err) { console.error('[mirror] skipped malformed entry:', errorMessage(err)) }
 }
 
 function applyEntry(entry: JsonlEntry) {

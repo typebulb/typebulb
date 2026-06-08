@@ -55,7 +55,7 @@ export class SessionPicker extends ComboboxPill {
       this.parent.updateTitle()
       this.update()
     } catch (err) {
-      console.error('[claude-bulb] listSessions failed', err)
+      console.error('[mirror] listSessions failed', err)
     }
     // Armed after the load, not before: the list is in place, matching the prior behaviour.
     this.armClose()
