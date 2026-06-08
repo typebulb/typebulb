@@ -79,6 +79,7 @@ ${embedProtocol}
 
 <script type="module">
 ${escapeScript(code)}
+${embedded ? 'globalThis.__tbEntryRan = true; /* load-failure backstop — see embedProtocol */' : ''}
 </script>
 </body>
 </html>`
@@ -141,17 +142,25 @@ const embedProtocol = `<script>
   };
   var update = function () { if (!raf) raf = requestAnimationFrame(apply); };
   de.style.overflow = 'hidden';
+  var errorPosted = false;
+  var postError = function (message) { errorPosted = true; post({ __typebulbEmbed: true, kind: 'error', message: String(message) }); };
+  // Capture phase: a resource/module load failure (a <script>/<link>/<img> that 404s) does NOT
+  // bubble, so it reaches window only here, carrying the failing element as e.target (no message).
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    if (t && t !== window && (t.src || t.href)) postError('Failed to load ' + (t.src || t.href));
+  }, true);
   window.addEventListener('error', function (e) {
     var m = String((e && e.message) || (e && e.error) || 'Error');
     // The benign "ResizeObserver loop completed…" notice surfaces as a window error in
     // some browsers; it's not a bulb fault, so don't forward it to the host as one.
     if (m.indexOf('ResizeObserver') !== -1) return;
-    post({ __typebulbEmbed: true, kind: 'error', message: m });
+    postError(m);
   });
   window.addEventListener('unhandledrejection', function (e) {
     var r = e && e.reason;
     var msg = r && r.message ? r.message : (r == null ? 'Unhandled rejection' : r);
-    post({ __typebulbEmbed: true, kind: 'error', message: String(msg) });
+    postError(msg);
   });
   // Run at load (module mounted → real content, not the empty pre-mount body that would
   // collapse the frame and snap back). Observe BOTH body (content growth) and the root
@@ -160,6 +169,12 @@ const embedProtocol = `<script>
     update();
     if (window.ResizeObserver) {
       try { var ro = new ResizeObserver(update); ro.observe(document.body); ro.observe(de); } catch (e) {}
+    }
+    // Load-failure backstop: if the entry module never evaluated — its import graph failed to
+    // resolve (a 404'd dependency, which throws nothing catchable) — surface it. A module that
+    // only renders asynchronously still evaluates its top level, so this won't fire on a slow bulb.
+    if (!window.__tbEntryRan && !errorPosted) {
+      postError('Bulb failed to load: a module or dependency could not be fetched (see the browser console for the failing URL).');
     }
   });
 })();

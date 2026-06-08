@@ -15,6 +15,7 @@ import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
 import { PROVIDER_ENV_KEYS, getFilteredModels } from './modelCatalog.js'
 import { resolveServerFn } from './builtins.js'
+import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 
 // The CLI is a local tool: the server binds loopback only and is never reachable
 // off-machine. Sharing / other-device access is typebulb.com's job, not the CLI's.
@@ -367,26 +368,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     })
   }
 
-  // Catch unmatched paths that look like esm.sh-emitted absolute imports
-  // (e.g. `/preact@10.29.2/es2022/preact.mjs`, `/node/buffer.mjs`) and proxy
-  // them. Browsers resolve those against the page origin (localhost), so
-  // without this fallback transitive imports 404.
-  //
-  // The regex matches ONLY URL shapes esm.sh actually emits:
-  //   /v<n>/...           — versioned build prefix
-  //   /stable/...         — stable build prefix
-  //   /node/...           — Node built-in polyfills (buffer, stream, ...)
-  //   /gh/...             — GitHub release builds
-  //   /@<scope>/<pkg>@... — scoped package with version
-  //   /<pkg>@...          — bare package with version
-  // Plain word paths (`/favicon.ico`, `/about`, `/main.css.map`, SPA routes)
-  // intentionally DO NOT match — they get a real 404 from the local server
-  // instead of being silently relayed upstream.
-  const ESM_PATH_RE = /^\/(v\d+\/|stable\/|node\/|gh\/|@[^/]+\/[^@/]+@|[^@/]+@)/
+  // Re-proxy absolute imports an esm.sh module body emits — they resolve against localhost (the
+  // page origin) and 404 without this. Which shapes count lives in isEsmAbsoluteImportPath
+  // (esmProxyPaths.ts, specs/Proxy.md Invariant 3); non-esm paths (/favicon.ico, .map, SPA routes)
+  // fall through to a real 404 rather than a silent upstream relay.
   app.notFound(async (c) => {
     if (c.req.method !== 'GET') return c.text('Not Found', 404)
     const reqUrl = new URL(c.req.url)
-    if (!ESM_PATH_RE.test(reqUrl.pathname)) return c.text('Not Found', 404)
+    if (!isEsmAbsoluteImportPath(reqUrl.pathname, reqUrl.search)) return c.text('Not Found', 404)
     return proxyToUrl(c, 'https://esm.sh' + reqUrl.pathname + reqUrl.search)
   })
 

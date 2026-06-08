@@ -272,9 +272,10 @@ body {
   color: var(--accent); text-decoration: none; cursor: pointer;
 }
 .server-name:hover { text-decoration: underline; }
-/* Port is a link to the running server (localhost:<port>), same target as the name. */
-.server-port { color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; text-decoration: none; text-align: right; margin-right: .4rem; }
-a.server-port:hover { color: var(--accent); text-decoration: underline; }
+/* Port links to the running server (localhost:<port>) — accent like the name, so a running
+   bulb's clickable :port reads as live against a stopped bulb's muted last-run time. */
+.server-port { color: var(--accent); font-size: .76rem; font-variant-numeric: tabular-nums; text-decoration: none; text-align: right; margin-right: .4rem; }
+a.server-port:hover { text-decoration: underline; }
 /* Logs reads like a link (flips to this server's console), not a button. */
 .server-logs { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; margin-left: .5rem; }
 .server-logs:hover, .server-logs.on { color: var(--accent); text-decoration: underline; }
