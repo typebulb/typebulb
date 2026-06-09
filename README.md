@@ -289,6 +289,57 @@ The host owns a bulb's **width**; you own its **height**.
 - **`config.json` → `ts.jsxImportSource`** — the one supported `ts` option; defaults to `react`. Set it to use a different JSX runtime (e.g. `preact`).
 - **Never invent a connection string or API key** — a `server.ts` that needs a database or API reads it from `.env` (loaded from the directory you run in). Ask the user for the value; don't fabricate one or commit it.
 
+## Trust Model
+
+Typebulb has 3 trust tiers for a bulb, captured by 2 axes:
+
+|  | browser: **iframe** | browser: **top-level** |
+|---|:---:|:---:|
+| node access: **no** | **Embedded** | **Restricted** |
+| node access: **yes** | — | **Trusted** |
+
+The 3 Tiers from least to most powerful:
+
+* **Embedded**: These bulbs live in an iframe, and have the most restricted capability. They're created by Typebulb's Agent Mirror when rendering chat files. When bulb-markdown is detected in your agent's replies, they're rendered as embedded bulbs. 
+* **Restricted**: These bulbs are launched as localhost pages. Unlike embedded bulbs, they can also access storage, cookies, web workers, WebGPU etc.
+* **Trusted**: These bulbs are the most powerful and must be explicitly marked as trusted. Unlike restricted bulbs, they can access node via your `server.ts` or via privileged `tb.*` functions such as `tb.fs` or `tb.ai`. To grant, call typebulb with `--trust` for one run, or `typebulb trust <file>` to remember it — per file, for your user account, across all your projects. Revoke a remembered grant with `typebulb untrust <file>`; `--no-trust` forces a single sandboxed run without forgetting the grant.
+
+Here's a state transition diagram for the trust tiers:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Embedded
+    [*] --> Restricted
+    Embedded --> Restricted: breakout
+    Restricted --> Trusted: trust
+    Trusted --> Restricted: untrust
+```
+**Capability Summary Table**:
+
+| Capability | Embedded | Restricted | Trusted |
+|---|:--:|:--:|:--:|
+| Run code in browser, access network including localhost | ✅ | ✅ | ✅ |
+| Use storage, cookies, background threads, and the GPU | 🚫 | ✅ | ✅ |
+| Read local files, run node code with `server.ts`, use your AI keys | 🚫 | 🚫 | ✅ |
+
+## Bulb Imports
+
+Imports in `code.tsx` can only use bare specifiers (otherwise the linter will error):
+
+```ts
+import React, { useState } from "react"
+```
+
+Which must be declared in the dependencies section:
+```json
+  "dependencies": {
+    "react": "^19.2.9"
+  }
+```
+
+Typebulb has a package resolver that will load and cache these packages from `esm.sh` when the bulb runs.
+
 ## License
 
 MIT

@@ -1,5 +1,5 @@
 /**
- * Machine-global registry of running `typebulb` dev servers, plus the cross-platform
+ * Cross-project registry of running `typebulb` dev servers, plus the cross-platform
  * launch/stop boilerplate every host that breaks bulbs out would otherwise rewrite.
  * The capability half of breakout — see TB-Agent-Mirror-Embed.md "Breakout".
  *
@@ -33,7 +33,7 @@ export interface BulbServer {
   trust?: boolean
   /** Human label of a capability the proactive scan predicts this (untrusted) bulb will need,
    *  set at register time from predictTrust. Probabilistic, NOT enforcement — it only lets a
-   *  host offer --trust before the bulb trips the gate (TB-Trust.md). */
+   *  host offer --trust before the bulb trips the gate (TB-Security.md). */
   predicted?: string
   /** Human label of a privileged capability this (untrusted) server denied, set by the
    *  trust gate so a host can offer to relaunch trusted. Bulb code never sets it. */
@@ -163,8 +163,8 @@ export async function unregisterServer(pid: number): Promise<void> {
  * Every live server, oldest first. Dead PIDs are pruned (files unlinked) as a side
  * effect, so the list self-heals and a host never shows a server it can't reach.
  *
- * Pass `cwd` to scope the result to that project — the registry is machine-global (a PID is a
- * machine resource), but *discovery* should mirror what the mirror / a CC agent cares about: the
+ * Pass `cwd` to scope the result to that project — the registry is per-user, cross-project (a PID is
+ * a machine resource), but *discovery* should mirror what the mirror / a CC agent cares about: the
  * bulbs of the project it's working in (see isUnderProject). The scoped list also drops agent
  * mirrors (entries with an `agent` field): a mirror is package infrastructure, never a project bulb
  * to list, so it must not surface in any launcher's running-server menu (TB-Agent-Mirror.md). Omit
@@ -225,7 +225,7 @@ function binPath(): string {
  * unpinned `npx typebulb`, which resolves to whatever is on PATH / in the npx cache and so could be
  * a *different* version than the host. Version skew there silently breaks state the two share through
  * disk: most sharply the trust store, whose path keys and very existence are version-specific, so a
- * skewed child can read a bulb the host shows as Trusted as Restricted (TB-Trust.md).
+ * skewed child can read a bulb the host shows as Trusted as Restricted (TB-Security.md).
  * Pure (constructs, never spawns) so the pin is unit-testable without a real process.
  */
 export function bulbServerCommand(

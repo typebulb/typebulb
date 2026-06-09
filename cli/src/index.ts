@@ -45,7 +45,7 @@ const VERSION: string = typeof __TYPEBULB_VERSION__ !== 'undefined' ? __TYPEBULB
 
 /**
  * Server execution (the `server.ts` block) runs arbitrary local Node with no sandbox possible, so —
- * unlike a web run, which degrades to Restricted — it is refused outright without trust (TB-Trust.md).
+ * unlike a web run, which degrades to Restricted — it is refused outright without trust (TB-Security.md).
  * The single gate shared by the two paths that import and run server.ts: `--server`/console mode and
  * `call`.
  */
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   }
 
   // The exact command to re-run with the privileged tier granted. Surfaced in the in-page denial
-  // bar, the server-side 403, and the `predict` command below (TB-Trust.md).
+  // bar, the server-side 403, and the `predict` command below (TB-Security.md).
   const displayPath = args.file && args.file !== '.' ? args.file : path.relative(process.cwd(), bulbPath) || path.basename(bulbPath)
   const trustHint = `npx typebulb --trust ${displayPath.includes(' ') ? `"${displayPath}"` : displayPath}`
 
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
     return
   }
 
-  // Trust resolution. Apply remembered trust (TB-Trust.md): a bulb elevated via
+  // Trust resolution. Apply remembered trust (TB-Security.md): a bulb elevated via
   // `typebulb trust` (or the launcher) runs trusted on a bare run too — that's the point of the CLI
   // owning the policy. `--trust` forces it on for this run; `--no-trust` forces it off even if
   // remembered. A bulb you've never trusted stays Restricted, so secure-by-default still holds for

@@ -3,7 +3,7 @@ import * as net from 'net'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
 
 /**
- * Default-deny contract (TB-Trust.md, Invariant 1): a server
+ * Default-deny contract (TB-Security.md, Trust Invariant 1): a server
  * started without `trusted` must hard-deny the three privileged endpoints
  * (/__fs, /__api, /__ai) regardless of how the request arrives — the server-side
  * half of the gate, independent of the sandboxed-frame origin isolation. Benign

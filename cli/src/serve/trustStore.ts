@@ -1,13 +1,16 @@
 /**
- * Per-machine trust memory: which bulbs have been elevated to Trusted, so a later run doesn't
+ * Per-user trust memory: which bulbs this OS account has elevated to Trusted, so a later run doesn't
  * re-require `--trust`. This is the *policy* layer that pairs with the CLI's trust *gate* (the
  * enforcement, in server.ts) — moved here, into the CLI, so it isn't a GUI concern: an agent can
  * query and set it from the terminal (`typebulb trust`/`untrust`), and a bare `typebulb <file>`
  * honours a remembered decision. claude.bulb's launcher delegates to this same store, so the GUI
  * and the CLI share one source of truth instead of two.
  *
- * Global (one list across projects), a sibling of the server registry under ~/.typebulb/. Keys are
- * absolute, normalized paths (lowercased on win32 — case-insensitive FS — and forward-slashed).
+ * Scope is per-user and cross-project: one list spanning all of this account's projects, stored
+ * under the OS account's home (~/.typebulb/, a sibling of the server registry). NOT per-machine —
+ * a second OS account (its own homedir) has its own store and inherits nothing. Keys are absolute,
+ * normalized paths, case-canonicalized through the real filesystem so two casings of one file can't
+ * split a trust decision on a case-insensitive volume (see normalizeBulbPath).
  * Written ONLY by explicit user/agent action; never by bulb code (a bulb can't grant itself trust).
  */
 

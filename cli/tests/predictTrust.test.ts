@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { predictTrust } from '../src/bulb/predictTrust.js'
 
 /**
- * The proactive trust predictor (TB-Trust.md "Proactive prediction").
+ * The proactive trust predictor (TB-Security.md "Proactive prediction").
  * It is a hint, not a gate: a clean result NEVER means "safe" (the server-side trustGate
  * enforces), and a false positive is intentionally cheap. These tests pin the common
  * positives, the ungated-log carve-out, and that benign client-only code stays clean.

@@ -35,12 +35,19 @@ export function editorCommand(filePath: string, line?: number): { command: strin
 }
 
 /** Open `filePath` (optionally at `line`) in the user's editor, detached. Defaults to VS Code
- *  (`code`); override with `TYPEBULB_EDITOR`. Fire-and-forget (a launch failure logs, never throws). */
+ *  (`code`); override with `TYPEBULB_EDITOR`. Fire-and-forget (a launch failure logs, never throws).
+ *
+ *  No shell, ever: `filePath` rides an attacker-influenced transcript citation (M5,
+ *  TB-Security-Attacks.md), and a `shell:true` spawn let `src/app.ts & <cmd>` execute `<cmd>` on a
+ *  click. The path is an inert argv entry instead. Windows needs the cmd.exe hop because `code` is
+ *  `code.cmd`, which Node refuses to spawn shell-less; passing the editor and its args as SEPARATE
+ *  arguments lets Node quote them, so cmd can't split on a metacharacter in the path. detached+unref
+ *  so it outlives the caller; stdio ignored so it holds none of the caller's streams. */
 export function openInEditor(filePath: string, line?: number): void {
   const { command, args } = editorCommand(filePath, line)
-  // shell:true so Windows resolves `code.cmd`/`cursor.cmd`; detached+unref so it outlives the
-  // caller; stdio ignored so it holds none of the caller's streams.
-  const proc = spawn(command, args, { shell: true, detached: true, stdio: 'ignore' })
+  const proc = process.platform === 'win32'
+    ? spawn('cmd.exe', ['/d', '/s', '/c', command, ...args], { detached: true, stdio: 'ignore', windowsHide: true })
+    : spawn(command, args, { detached: true, stdio: 'ignore' })
   proc.on('error', err => console.error('[typebulb] editor launch failed:', (err as Error)?.message ?? err))
   proc.unref()
 }

@@ -1,6 +1,6 @@
 {
   "name": "typebulb",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
   "license": "MIT",
   "repository": {
@@ -8,7 +8,9 @@
     "url": "git+https://github.com/typebulb/typebulb.git"
   },
   "homepage": "https://typebulb.com",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "bin": {
     "typebulb": "./dist/index.js"
@@ -58,6 +60,7 @@
   "scripts": {
     "typecheck": "tsc --build",
     "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "build": "tsc --build && node esbuild.config.mjs",
     "clean": "rimraf dist cli/.tsbuild",
     "dev": "tsc --build && node dist/index.js",
@@ -90,10 +93,13 @@
     "highlight.js": "^11.10.0",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
+    "playwright": "^1.60.0",
     "rimraf": "^6.0.1",
     "vitest": "^2.1.9"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

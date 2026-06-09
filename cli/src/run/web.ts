@@ -55,7 +55,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
 
   const url = `http://localhost:${port}`
 
-  // Proactive trust prediction (TB-Trust.md): when running untrusted, scan the
+  // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
   // bulb for privileged tb.* usage so a host (and the terminal message below) can offer --trust
   // BEFORE the bulb runs and trips the gate — sparing the failed-first-run that ~20% of bulbs
   // (fs/ai/server) would otherwise show. Probabilistic, never a gate: a miss just falls through
@@ -63,7 +63,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   const predicted = args.trust ? undefined : predictTrust(bulb)
 
   // Self-register so hosts (and other terminals) can discover/stop this server — the
-  // machine-global registry that breakout's launch/list/stop builds on. We're listening
+  // cross-project registry that breakout's launch/list/stop builds on. We're listening
   // now, so the port is the TRUE one. unregistered in cleanup; a crash leaves a stale
   // entry, reaped by listBulbServers's liveness prune (TB-Agent-Mirror-Embed.md).
   await registerServer({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, predicted })

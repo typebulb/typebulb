@@ -93,7 +93,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // Serve the bulb directly as a top-level page on localhost:<port> — a real origin, so
   // storage / SharedArrayBuffer / Workers / clipboard all work. (Untrusted launches used to
   // mount the bulb in an opaque-origin `allow-scripts` iframe; that origin has none of those
-  // — see TB-Trust.md.) Default-deny on the privileged tier does NOT need the
+  // — see TB-Security.md.) Default-deny on the privileged tier does NOT need the
   // frame: the server-side trustGate 403s /__fs, /__ai, /__api when untrusted — the protection
   // that actually matters on a single-user loopback box, where each bulb is already
   // origin-isolated by its own port. The shim turns that 403 into a `--trust` message (the

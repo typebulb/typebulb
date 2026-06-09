@@ -1,7 +1,7 @@
 /**
  * Proactive trust prediction — a best-effort, PURELY PROBABILISTIC guess at whether a bulb
  * will need `--trust`, from a scan of its source for privileged `tb.*` usage. This is a
- * PREDICTOR, never a gate (TB-Trust.md): the server-side trust gate is the
+ * PREDICTOR, never a gate (TB-Security.md): the server-side trust gate is the
  * sole enforcement. The scan only ever lets a host offer `--trust` *before* the bulb runs and
  * trips the gate (sparing the failed-first-run); it never decides access.
  *

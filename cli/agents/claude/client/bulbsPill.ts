@@ -15,7 +15,7 @@ const iconStop = () => btnIcon(rect({ x: 3, y: 3, width: 10, height: 10, fill: '
 
 // Status-bar bulb launcher + off-switch. Lists every *.bulb.md in the project (MRU-first,
 // type to filter) so a bulb you just authored is one click from running — no trip to the
-// terminal — and overlays the machine-global running-server registry so the same menu
+// terminal — and overlays the cross-project running-server registry so the same menu
 // stops them. A broken-out/launched server is detached and outlives this page (surviving
 // every hot-reload), so without this the only way to stop one is the OS. The bulb drives
 // nothing except launching (Invariant 2) — the same deliberate exception as breakout.
@@ -288,7 +288,7 @@ export class BulbsPill extends ComboboxPill {
     )
   }
 
-  // Shared modal chrome for both trust prompts (TB-Trust.md). It lives here, in the
+  // Shared modal chrome for both trust prompts (TB-Security.md). It lives here, in the
   // launcher — a surface the launched bulb's page can't script — so a bulb can trigger a prompt but
   // never self-grant (Trust spec Invariant 3). Backdrop click runs onDismiss.
   trustModal(cfg: { heading: string; body: string; warn: string; noLabel: string; yesLabel: string; onNo: () => void; onYes: () => void; onDismiss: () => void }) {

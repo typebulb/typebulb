@@ -39,6 +39,17 @@ function isLocalAddress(value: string | undefined): boolean {
   return !!host && LOCAL_HOSTS.has(host)
 }
 
+/** Does `origin` address the exact host:port given by the request's `Host` — i.e. the
+ *  page's *own* origin? This is the only origin allowed to reach a privileged endpoint
+ *  when `Sec-Fetch-Site` is absent. Matching against `Host` tracks whichever local name
+ *  the page was opened under (localhost vs 127.0.0.1), since both headers carry it. A
+ *  sibling localhost origin (a different port) is *same-site but not same-origin*, so it
+ *  fails here — the distinction the same-site CSRF finding turns on (TB-Security-Attacks.md). */
+function isOwnOrigin(origin: string, host: string | undefined): boolean {
+  if (!host) return false
+  try { return new URL(origin).host === host } catch { return false }
+}
+
 /** Message text for a caught unknown, for JSON error bodies. */
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : 'Unknown error'
@@ -54,7 +65,7 @@ export interface ServerOptions {
   localOverride?: { name: string; serveDir: string }
   /** Whether the bulb was launched with `--trust`. When false (the default),
    *  the three privileged endpoints (`/__fs`, `/__api`, `/__ai`) are hard-denied
-   *  server-side — the airtight half of default-deny (TB-Trust.md),
+   *  server-side — the airtight half of default-deny (TB-Security.md),
    *  independent of the sandboxed-frame origin isolation that also fences them off.
    *  `trustHint` is the re-run command surfaced in the 403 for non-browser callers. */
   trusted?: boolean
@@ -93,14 +104,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     c.res.headers.set('Cross-Origin-Embedder-Policy', 'credentialless')
   })
 
-  // The capability boundary (TB-Trust.md, Invariant 2): the only
+  // The capability boundary (TB-Security.md, Trust Invariant 2): the only
   // routes that touch the user's filesystem, API keys, or Node. Both guards below
   // apply to exactly this set — defining it once keeps "these three are privileged"
   // a single source of truth.
   const PRIVILEGED_ROUTES = ['/__fs/*', '/__api/*', '/__ai']
 
   // Trust gate (default-deny). Without `--trust`, the privileged endpoints are
-  // hard-denied here — the contract of TB-Trust.md. This is
+  // hard-denied here — the contract of TB-Security.md. This is
   // belt-and-suspenders to the sandboxed-frame mechanism that already fences these
   // off by origin: the gate holds regardless of how the request arrives (raw
   // fetch, curl, a future non-iframe path), so default-deny never depends on
@@ -122,18 +133,23 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     await next()
   }
 
-  // CSRF guard. A malicious website open in the same browser can POST here (the
-  // Host is the real `localhost`, so the rebinding guard above passes it), but the
-  // browser stamps it `Sec-Fetch-Site: cross-site` — or, on older clients, a
-  // foreign `Origin`. Same-origin shim calls and non-browser callers (curl, tests:
-  // neither header) pass untouched.
+  // CSRF guard: only the bulb's *own* page may reach a privileged endpoint. A page on a
+  // different localhost origin — another bulb, a dev server, a malicious site open in the
+  // same browser — shares this server's *site* (different ports are same-site, not
+  // cross-site), so blocking only cross-site would let a sibling origin drive /__fs etc.
+  // (the same-site CSRF finding, TB-Security-Attacks.md). So require same-origin: the
+  // page's own `Sec-Fetch-Site: same-origin`, or — for clients that don't send it — an
+  // Origin that exactly matches this server. Non-browser callers (curl, tests: neither
+  // header) still pass, and remain `--trust`-gated regardless.
   const csrfGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
     const site = c.req.header('sec-fetch-site')
     if (site) {
-      if (site === 'cross-site') return c.text('Forbidden: cross-site request', 403)
+      // `none` (a direct navigation) never reaches these POST-only routes; anything but
+      // the page's own same-origin call — same-site included — is refused.
+      if (site !== 'same-origin') return c.text(`Forbidden: ${site} request`, 403)
     } else {
       const origin = c.req.header('origin')
-      if (origin && !isLocalAddress(origin)) return c.text('Forbidden: cross-origin request', 403)
+      if (origin && !isOwnOrigin(origin, c.req.header('host'))) return c.text('Forbidden: cross-origin request', 403)
     }
     await next()
   }

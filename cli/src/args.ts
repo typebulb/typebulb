@@ -19,7 +19,7 @@ export interface CliArgs {
   open: boolean
   server: boolean
   /** Grant the privileged capability tier (fs + ai + server.ts) for THIS run. Default false —
-   *  bulbs run sandboxed unless explicitly trusted (TB-Trust.md). A bulb that was
+   *  bulbs run sandboxed unless explicitly trusted (TB-Security.md). A bulb that was
    *  remembered-trusted (`typebulb trust`) also runs trusted without this flag. */
   trust: boolean
   /** Force Restricted for this run even if the bulb is remembered-trusted (overrides the store). */

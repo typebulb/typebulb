@@ -10,7 +10,7 @@ export const typebulbShim = `
   // otherwise fail with cryptic CORS/CSP errors. Detect it and fail clearly.
   //
   // The same sandboxed-iframe path also backs the CLI's default (untrusted) launch
-  // (TB-Trust.md), where the right message names \`--trust\` rather
+  // (TB-Security.md), where the right message names \`--trust\` rather
   // than "no host bridge". The host injects window.__TB_EMBED_ERR__ to override the
   // text; absent it, the nested-bulb wording applies.
   const isEmbedded = window.parent !== window;

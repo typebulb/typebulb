@@ -1,5 +1,5 @@
 import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watchFile, unwatchFile, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmSync } from 'fs'
-import { join } from 'path'
+import { join, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor } from '../../src/servers.js'
 import { EmbedErrorDedup } from './embedErrorLog.js'
@@ -641,9 +641,14 @@ export async function attach(sessionId: string) {
 // ---- editor integration ----
 
 export async function openFile(filePath: string, line?: number) {
-  // The detached spawn + editor resolution is the typebulb capability (openInEditor); the host
-  // owns only the policy that a relative-path citation routes here (onMarkdownClick in code.tsx).
-  openInEditor(filePath, line)
+  // The detached spawn + editor resolution is the typebulb capability (openInEditor); the host owns
+  // the policy that a relative-path citation routes here (onMarkdownClick). The path is
+  // attacker-influenced (M5, TB-Security-Attacks.md), so confine it to a real file: openInEditor runs
+  // no shell, and a citation names an existing file by contract — refusing a non-file is a
+  // version-independent backstop so a junk/injection path never reaches the (Windows cmd.exe) spawn.
+  const abs = isAbsolute(filePath) ? filePath : join(state.cwd, filePath)
+  if (!existsSync(abs)) return { ok: false, error: 'file not found' }
+  openInEditor(abs, line)
   return { ok: true }
 }
 
@@ -676,7 +681,7 @@ export async function breakout(source: string) {
 }
 
 // The running bulb dev servers for the status-bar pill — scoped to *this project* (state.cwd), the
-// same project whose sessions and files we mirror. The registry is machine-global, but a mirror for
+// same project whose sessions and files we mirror. The registry is cross-project, but a mirror for
 // one CC project shouldn't surface another project's bulbs (or another project's claude.bulb); the
 // cwd scope mirrors the file walk and keeps projects from bleeding into each other. listBulbServers
 // prunes dead entries on read; the UI still drops this host's own pid (see info()).
@@ -696,7 +701,7 @@ export async function stopBreakout(pid: number) {
 //
 // Trust memory now lives in the CLI's store (isBulbTrusted/setBulbTrusted from typebulb/servers),
 // not here — so the launcher toggle, a bare `typebulb <file>`, and `typebulb trust` all share one
-// source of truth (TB-Trust.md). The launcher just reads/writes that store; it no
+// source of truth (TB-Security.md). The launcher just reads/writes that store; it no
 // longer keeps its own `.claude-bulb/trust.json`.
 
 // The project's *.bulb.md candidates for the launcher. The walk (listProjectBulbFiles) is the typebulb
@@ -723,7 +728,7 @@ export async function launchBulb(file: string, trust?: boolean) {
 }
 
 // Scan a bulb for privileged tb.* usage BEFORE launching, so the launcher can raise the trust
-// offer at the decision point rather than after the spawned server registers (TB-Trust.md
+// offer at the decision point rather than after the spawned server registers (TB-Security.md
 // "Proactive prediction"). Returns a capability label or undefined; a hint, never a gate.
 export async function predictTrustOf(file: string) {
   return { cap: await predictBulbTrust(file) }

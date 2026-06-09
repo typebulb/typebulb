@@ -10,6 +10,7 @@
 
 import { parseBulb, toLocalBulb, parseDataChunks, parseConfig } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
+import { lint } from 'typebulb/lint'
 import { renderHtml } from './bulb/template.js'
 import { createResolver, type PackageCache } from 'typebulb/resolver'
 import { fetchHttpClient } from './deps/fetchHttpClient.js'
@@ -66,6 +67,17 @@ export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark
   const bulb = toLocalBulb(parsed)
   if (bulb.server.trim()) return { error: 'Nested bulbs are client-only; a **server.ts** block is not supported.' }
   if (!bulb.code.trim()) return { error: 'Bulb has no **code.tsx** to run.' }
+
+  // Lint on the raw source before transpile — the same `typebulb/lint` pass `typebulb check` runs, on the
+  // browser ruleset (an embed is client-only). It catches the import-map / sandbox patterns that compile
+  // fine but break in an embed (dynamic import, URL/version imports, navigation), turning a silent runtime
+  // failure into a precise, fix-named error. Surfaced as a render error so it rides the embed's existing
+  // compile-error → `typebulb logs claude` readback path (TB-Agent-Mirror-Embed-Iterate.md).
+  const issues = lint(bulb.code, { target: 'client' })
+  if (issues.length) {
+    const summary = issues.map(i => `${i.type} (line ${i.lineNumber}): ${i.message.split('\n')[0]}`).join('\n')
+    return { error: `Lint failed:\n${summary}` }
+  }
 
   const config = parseConfig(bulb.config)
 

@@ -8,12 +8,12 @@
 export { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, serverLogPath, type BulbServer } from './serve/serverRegistry.js'
 export { listBulbFiles, type BulbFileInfo } from './serve/bulbFiles.js'
 // Proactive trust prediction — scan a bulb for privileged tb.* usage so a host can offer --trust
-// before launching (TB-Trust.md "Proactive prediction"). A hint, never a gate.
+// before launching (TB-Security.md "Proactive prediction"). A hint, never a gate.
 export { predictBulbTrust } from './serve/predictBulbTrust.js'
 export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
 // Cross-platform editor launcher (open a cited file at a line). Agent-agnostic, so any mirror
 // bulb shares one resolved-editor, detached-spawn implementation instead of re-deriving it.
 export { openInEditor } from './serve/editor.js'
-// Per-bulb trust memory (TB-Trust.md) — the CLI owns the policy store; a GUI host
+// Per-bulb trust memory (TB-Security.md) — the CLI owns the policy store; a GUI host
 // (claude.bulb) delegates to it so the launcher toggle and the `typebulb trust` CLI share one source.
 export { isBulbTrusted, setBulbTrusted, listTrustedBulbs } from './serve/trustStore.js'

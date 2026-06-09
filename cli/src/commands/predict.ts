@@ -7,7 +7,7 @@ import { isBulbTrusted } from '../serve/trustStore.js'
  * it: the agent-side equivalent of claude.bulb's pre-launch trust probe (the launcher calls
  * `predictBulbTrust` before spawning; this is the same scan from the terminal). Lets an agent add
  * `--trust` up front, or report a bulb's needs without launching. Probabilistic, never a gate
- * (TB-Trust.md "Proactive prediction"): a clean result means "nothing obvious
+ * (TB-Security.md "Proactive prediction"): a clean result means "nothing obvious
  * spotted", never "safe" — the server-side gate is the only enforcement.
  */
 export async function runPredict(bulbPath: string, trustHint: string): Promise<void> {
