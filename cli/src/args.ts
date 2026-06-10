@@ -222,6 +222,8 @@ Usage:
                                  For agents: run it in the background — the exit
                                  is your wake-up ('wait claude': embed outcomes;
                                  'wait <file>': the bulb's own console.log).
+                                 Resumes where your last wait/call left off, so
+                                 an event that beats the wait still fires it.
   typebulb stop [file|pid]       Stop a running bulb server (no arg: list this
                                  project's running servers; a pid/path stops any).
                                  Batch flags: --bulbs (this project's bulbs, the
@@ -291,7 +293,7 @@ AI API:
     TB_AI_MODEL=claude-haiku-4-5-20251001
   Both can be overridden per-call: tb.ai({ provider: "openai", model: "gpt-5.4-mini", ... })
   Don't guess a model id — run 'typebulb models' to list the exact ids your keys cover.
-  Optional reasoning depth (0=min, 1=low, 2=med, 3=max):
+  Optional reasoning depth (0=min, 1=low, 2=med, 3=high):
     tb.ai({ ..., reasoning: 2 })
 
 Examples:

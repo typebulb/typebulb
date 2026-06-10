@@ -1,6 +1,6 @@
 import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
-import { listBulbServers, readServerLog, stopBulbServer, isAlive, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
@@ -23,6 +23,9 @@ function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServe
   }
   return servers.find(s => normalizeBulbPath(s.file) === normalizeBulbPath(arg))
 }
+
+/** A server's human name: its agent name for a mirror, the bulb filename otherwise. */
+const serverLabel = (s: BulbServer) => s.agent ?? path.basename(s.file)
 
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
  *  each server's live tier so an agent sees trusted-vs-restricted at a glance. */
@@ -95,16 +98,23 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = timeout (nothing logged —
  * for an embed wait, "no mirror tab open", distinct from "broken"); 3 = the server died mid-wait.
  *
- * The baseline is the log's byte offset at launch — only lines appended after `wait` starts count. For
- * embeds that is race-free by construction (the render can't precede the turn flush, which can't precede
- * the launch); for bulb-event waits the agent reads authoritative state on wake (`typebulb call`), never
- * out of the printed line, so a line that slipped in before launch is recovered there.
+ * The baseline is the target's persisted consumer offset — where the agent last touched this log (a
+ * prior `wait`'s exit, or a `call`'s start) — so an event that lands while no watcher is attached
+ * (the agent acting, the model generating, npx booting) still fires the next `wait` immediately.
+ * Never an attach-time snapshot when a cursor exists: the consumer is intermittent by construction,
+ * and a snapshot silently drops whatever a fast user did in the gap. Missed wakes are fatal; spurious
+ * wakes cost one redundant turn the protocol absorbs (the agent reads authoritative state on wake,
+ * `typebulb call`, never the printed line).
  */
 export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec: number }): Promise<void> {
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
 
-  let cursor = readServerLog(server.pid).offset       // launch-time snapshot: the past doesn't wake
+  // Resume from the stored cursor when it still locates a point in the log; a missing cursor (first
+  // wait on a never-`call`ed target) or one past the end (log restarted/trimmed) degrades to a snapshot.
+  const end = readServerLog(server.pid).offset
+  const stored = readWaitCursor(server.pid)
+  let cursor = stored !== undefined && stored <= end ? stored : end
   const deadline = Date.now() + opts.timeoutSec * 1000
   // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
   // several embeds from one turn — lands in one wake instead of one wake per line.
@@ -112,6 +122,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
   let pending = ''                                     // trailing partial line, completed by a later poll
 
+  let exitCode = 0
   while (true) {
     const r = readServerLog(server.pid, cursor)
     cursor = r.offset
@@ -128,17 +139,21 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
     }
     if (settleUntil && Date.now() >= settleUntil) break
     if (!settleUntil && Date.now() >= deadline) {
-      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${server.agent ?? path.basename(server.file)} within ${opts.timeoutSec}s`)
-      process.exit(2)
+      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${opts.timeoutSec}s`)
+      exitCode = 2
+      break
     }
     if (!isAlive(server.pid)) {
-      // Anything it logged on the way down already printed above (a match ⇒ exit 0 below).
-      if (!settleUntil) { console.error(`server ${server.agent ?? path.basename(server.file)} (pid ${server.pid}) exited while waiting`); process.exit(3) }
+      // Anything it logged on the way down already printed above (a match ⇒ exit 0 below). A dead
+      // server's files are reaped, so skip the cursor write and bail here.
+      if (!settleUntil) { console.error(`server ${serverLabel(server)} (pid ${server.pid}) exited while waiting`); process.exit(3) }
       break
     }
     await delay(400)
   }
-  process.exit(0)
+  // Every survived exit is a sync point — a timeout too: everything read was seen.
+  writeWaitCursor(server.pid, cursor)
+  process.exit(exitCode)
 }
 
 /**
@@ -151,7 +166,7 @@ export async function runStop(arg: string | undefined): Promise<void> {
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb stop <file|pid>` to stop one.'); return }
   const server = requireServer(await listBulbServers(), arg, 'stop', process.cwd())
   await stopBulbServer(server.pid)
-  console.log(`Stopped ${server.agent ?? path.basename(server.file)} (pid ${server.pid}, ${server.url}).`)
+  console.log(`Stopped ${serverLabel(server)} (pid ${server.pid}, ${server.url}).`)
 }
 
 /**
@@ -180,5 +195,5 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
   }
   await Promise.all(servers.map(s => stopBulbServer(s.pid)))
   console.log(`Stopped ${servers.length} ${noun}${servers.length === 1 ? '' : 's'}:`)
-  for (const s of servers) console.log(`  ${s.url}  pid ${s.pid}  ${s.agent ?? path.basename(s.file)}`)
+  for (const s of servers) console.log(`  ${s.url}  pid ${s.pid}  ${serverLabel(s)}`)
 }

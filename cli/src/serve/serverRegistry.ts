@@ -62,6 +62,37 @@ export function serverLogPath(pid: number): string {
   return path.join(serversDir(), `${pid}.log`)
 }
 
+// ---- wait cursor ----
+// The wake channel is a durable log plus this tool-owned consumer offset, never an attach-time
+// subscription: a `typebulb wait` consumer exists only between agent turns, and a snapshot at attach
+// loses any event that lands in the gap (TB-Agent-Mirror-Embed-Iterate.md). The cursor
+// records where the agent last touched the server's log — `call` writes it at invocation start,
+// `wait` on exit — and the next `wait` resumes from it, firing immediately on anything missed.
+// Per-server (pid-keyed, so a restart invalidates it for free), shared across sessions, reaped with
+// the entry. All best-effort: a lost cursor degrades to today's snapshot, never to an error.
+
+function waitCursorPath(pid: number): string {
+  return path.join(serversDir(), `${pid}.wait.json`)
+}
+
+/** The stored consumer offset for a server's log, or undefined when absent/unreadable. */
+export function readWaitCursor(pid: number): number | undefined {
+  try {
+    const v = JSON.parse(readFileSync(waitCursorPath(pid), 'utf8')) as { offset?: unknown }
+    return typeof v.offset === 'number' && Number.isFinite(v.offset) && v.offset >= 0 ? v.offset : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist the consumer offset for a server's log. */
+export function writeWaitCursor(pid: number, offset: number): void {
+  try {
+    mkdirSync(serversDir(), { recursive: true })
+    writeFileSync(waitCursorPath(pid), JSON.stringify({ offset }))
+  } catch { /* best-effort — a lost cursor degrades to a snapshot */ }
+}
+
 /**
  * Tee this process's stdout/stderr into `<pid>.log` so any host can tail a launched
  * server's console. A launched server is detached (`launchBulbServer` below) and outlives
@@ -159,6 +190,7 @@ export async function recordDenial(pid: number, cap: string): Promise<void> {
 export async function unregisterServer(pid: number): Promise<void> {
   await unlink(entryPath(pid)).catch(() => {})
   await unlink(serverLogPath(pid)).catch(() => {})
+  await unlink(waitCursorPath(pid)).catch(() => {})
 }
 
 /**
@@ -184,7 +216,10 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
   const live: BulbServer[] = []
   await Promise.all(
     names.map(async name => {
-      if (!name.endsWith('.json')) return
+      // Entries are exactly `<pid>.json`. Anything else is a sidecar (`<pid>.log`, `<pid>.wait.json`)
+      // and must never be parsed — or pruned — as an entry: a bare `.json` suffix test once made the
+      // prune eat every wait cursor as a "garbage entry" on each registry read.
+      if (!/^\d+\.json$/.test(name)) return
       const p = path.join(serversDir(), name)
       let entry: BulbServer | undefined
       try {
@@ -194,7 +229,13 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
         return
       }
       if (entry && typeof entry.pid === 'number' && isAlive(entry.pid)) live.push(entry)
-      else { await unlink(p).catch(() => {}); if (entry?.pid) await unlink(serverLogPath(entry.pid)).catch(() => {}) }
+      else {
+        await unlink(p).catch(() => {})
+        if (entry?.pid) {
+          await unlink(serverLogPath(entry.pid)).catch(() => {})
+          await unlink(waitCursorPath(entry.pid)).catch(() => {})
+        }
+      }
     }),
   )
   const scoped = cwd ? live.filter(s => s.agent == null && isUnderProject(s.file, cwd)) : live

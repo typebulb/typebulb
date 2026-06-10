@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, readdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
-import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer } from '../src/serve/serverRegistry.js'
+import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor } from '../src/serve/serverRegistry.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -70,6 +70,40 @@ describe('serverRegistry', () => {
     // Global (no cwd): both survive, so `agent:claude` idempotency / `stop claude` can target it.
     const global = await listBulbServers()
     expect(global.map(s => s.agent ?? s.file).sort()).toEqual(['claude', userBulb].sort())
+  })
+
+  // The wait cursor (TB-Agent-Mirror-Embed-Iterate.md): the wake channel's consumer
+  // offset. Round-trips per pid; anything unreadable degrades to undefined (⇒ snapshot), never throws.
+  it('wait cursor round-trips per pid and degrades to undefined when absent or invalid', async () => {
+    expect(readWaitCursor(process.pid)).toBeUndefined()        // never written
+    writeWaitCursor(process.pid, 1234)
+    expect(readWaitCursor(process.pid)).toBe(1234)
+    writeWaitCursor(process.pid, 0)                            // zero is a valid position
+    expect(readWaitCursor(process.pid)).toBe(0)
+    writeWaitCursor(DEAD_PID, -5)                              // junk in ⇒ undefined out
+    expect(readWaitCursor(DEAD_PID)).toBeUndefined()
+  })
+
+  // Regression: the prune once parsed `<pid>.wait.json` as a registry entry (a bare `.json` suffix
+  // test), found no pid, and unlinked it as garbage — every registry read ate the cursor, so `wait`
+  // never resumed. A live server's sidecars must survive the prune untouched.
+  it('a live server\'s wait cursor survives a registry read', async () => {
+    await registerServer({ pid: process.pid, port: 3000, url: 'u', file: '/a.bulb.md', startedAt: 1 })
+    writeWaitCursor(process.pid, 777)
+    await listBulbServers()
+    expect(readWaitCursor(process.pid)).toBe(777)
+  })
+
+  it('the cursor is reaped with its server — on stop and on the liveness prune', async () => {
+    await registerServer({ pid: DEAD_PID, port: 3001, url: 'u', file: '/b.bulb.md', startedAt: 2 })
+    writeWaitCursor(DEAD_PID, 42)
+    await listBulbServers()                                    // prune sweeps the dead entry + sidecars
+    expect(readWaitCursor(DEAD_PID)).toBeUndefined()
+
+    await registerServer({ pid: DEAD_PID, port: 3001, url: 'u', file: '/b.bulb.md', startedAt: 2 })
+    writeWaitCursor(DEAD_PID, 42)
+    await stopBulbServer(DEAD_PID)
+    expect(readWaitCursor(DEAD_PID)).toBeUndefined()
   })
 
   // The one-mirror-per-project dedup (TB-Agent-Mirror.md Invariant 2): a mirror is found by its

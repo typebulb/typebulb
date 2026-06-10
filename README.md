@@ -25,14 +25,60 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
 - **Local caching** — Resolver metadata and CDN package bytes are cached under `~/.typebulb/cache/`, so repeat runs don't re-hit the network and warm runs work offline.
-- **AI calls** — `tb.ai()` for general-purpose AI (chatbots, agents, experiments). `tb.models()` lists available models. Set API keys in `.env` (see below). Requires `--trust`.
+- **`tb.ai()`** — a bulb's own code calling AI providers at runtime (chatbots, agents, experiments). `tb.models()` lists available models. Set API keys in `.env` (see below). Requires `--trust`.
 - **Restricted by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces a Restricted run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
 - **Agent mirror** — a browser view of your project's Claude Code sessions that renders embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs (see [Claude](#claude)). `typebulb agent:claude` opens it. `typebulb agent` (no target) is the first command an agent runs: it brings up the mirror without opening a browser, prints its link, and points at the authoring skill. `typebulb skill` prints this whole README as an Agent Skill the agent can read and save.
 
-## Quick Start
+## Usage
 
-A bulb is a markdown file with named code blocks:
+```
+typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
+typebulb agent:claude          Open the agent mirror of your project's Claude Code sessions
+typebulb agent                 An agent's first command — brings up the agent mirror,
+                               prints its URL + the authoring-skill paths; always exits 0
+typebulb skill                 Print this README as an Agent Skill on stdout
+typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
+typebulb check [file.bulb.md]  Type-check a bulb without running it
+typebulb predict [file]        Report the capability a bulb probably needs, without running it
+typebulb models                List AI models for tb.ai, filtered by your .env API keys
+typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail)
+typebulb wait [file|agent]     Block until the target server logs a new line, print it, exit — an agent's wake-up
+                               (--match <substr> filters; --timeout <sec>, default 1800, exit 2)
+typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
+typebulb stop --bulbs          Stop this project's bulbs; the agent mirror keeps running
+typebulb stop --agent          Stop this project's agent mirror; its bulbs keep running
+typebulb stop --global         Stop every running bulb and mirror, all projects (housekeeping)
+typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted bulbs)
+typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
+typebulb --no-watch <file>     Disable hot reload
+typebulb --port 3333 <file>    Custom port
+typebulb --no-open <file>      Don't auto-open browser
+typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
+typebulb --trust <file>        Grant filesystem + AI + server.ts for this run (default: Restricted)
+typebulb --no-trust <file>     Force Restricted even if the bulb is remembered-trusted
+typebulb --server <file>       Run server.ts only, no web server (needs --trust)
+typebulb --replace <name>=<path> Replace a dependency with a local build
+typebulb --help                Show help
+typebulb --version             Show version
+```
+
+## Bulb Format
+
+A bulb is a single **markdown** file — the minimum viable structure for a small app. Its named **blocks** hold the code, plus optional styles, data, and config. Every block except `code.tsx` is optional. Mechanically, each block is a `**name**` header on its own line followed by a fenced code block, and the file opens with YAML frontmatter (`format: typebulb/v1`, `name:`).
+
+| Block | Purpose |
+|-------|---------|
+| `**code.tsx**` | **Required.** App logic and UI (TypeScript/TSX). |
+| `**index.html**` | The mount container. Include it — nearly every bulb does (e.g. `<div id="root"></div>`). Only pure console apps omit it. |
+| `**styles.css**` | CSS. |
+| `**config.json**` | `dependencies` and a `description`. |
+| `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
+| `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()` — a typebulb.com feature; not supported locally. |
+| `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
+| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Plain Node — no `tb`; log with `console.log`. **Local only.** |
+
+### Example
 
 ````markdown
 ---
@@ -114,96 +160,6 @@ Or install globally:
 npm install -g typebulb
 ```
 
-## Usage
-
-```
-typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
-typebulb agent:claude          Open the agent mirror of your project's Claude Code sessions
-typebulb agent                 An agent's first command — brings up the agent mirror,
-                               prints its URL + the authoring-skill paths; always exits 0
-typebulb skill                 Print this README as an Agent Skill on stdout
-typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
-typebulb check [file.bulb.md]  Type-check a bulb without running it
-typebulb predict [file]        Report the capability a bulb probably needs, without running it
-typebulb models                List AI models for tb.ai, filtered by your .env API keys
-typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail)
-typebulb wait [file|agent]     Block until the target server logs a new line, print it, exit — an agent's wake-up
-                               (--match <substr> filters; --timeout <sec>, default 1800, exit 2)
-typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
-typebulb stop --bulbs          Stop this project's bulbs; the agent mirror keeps running
-typebulb stop --agent          Stop this project's agent mirror; its bulbs keep running
-typebulb stop --global         Stop every running bulb and mirror, all projects (housekeeping)
-typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted bulbs)
-typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
-typebulb --no-watch <file>     Disable hot reload
-typebulb --port 3333 <file>    Custom port
-typebulb --no-open <file>      Don't auto-open browser
-typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
-typebulb --trust <file>        Grant filesystem + AI + server.ts for this run (default: Restricted)
-typebulb --no-trust <file>     Force Restricted even if the bulb is remembered-trusted
-typebulb --server <file>       Run server.ts only, no web server (needs --trust)
-typebulb --replace <name>=<path> Replace a dependency with a local build
-typebulb --help                Show help
-typebulb --version             Show version
-```
-
-## AI API Setup
-
-Bulbs can call AI providers via `tb.ai()`. Add API keys to your `.env` file:
-
-| Provider name | API key env var |
-|---------------|-----------------|
-| `anthropic` | `ANTHROPIC_API_KEY` |
-| `openai` | `OPENAI_API_KEY` |
-| `gemini` | `GOOGLE_API_KEY` |
-| `openrouter` | `OPENROUTER_API_KEY` |
-
-Set your default provider and model:
-
-```
-TB_AI_PROVIDER=anthropic
-TB_AI_MODEL=claude-haiku-4-5-20251001
-```
-
-Both can be overridden per-call: `tb.ai({ provider: "gemini", model: "gemini-3.1-flash-lite", ... })`.
-
-Run `typebulb models` to list the available model ids instead of guessing one.
-
-### Reasoning
-
-`tb.ai()` accepts an optional `reasoning` parameter (0–3) that hints at how much extended thinking the model should use:
-
-| Level | Label | Effect |
-|-------|-------|--------|
-| 0 | Min | No extended reasoning (default) |
-| 1 | Low | Light reasoning |
-| 2 | Med | Moderate reasoning |
-| 3 | Max | Maximum reasoning |
-
-```typescript
-const { text } = await tb.ai({
-  messages: [{ role: "user", content: "Explain quantum tunneling" }],
-  reasoning: 2,
-});
-```
-
-Provider support varies — the level is mapped to provider-specific parameters (e.g. Anthropic's adaptive thinking, OpenAI's reasoning effort).
-
-## Blocks
-
-A bulb is a single **markdown** file — the minimum viable structure for a small app. Its named **blocks** hold the code, plus optional styles, data, and config. Every block except `code.tsx` is optional. Mechanically, each block is a `**name**` header on its own line followed by a fenced code block, and the file opens with YAML frontmatter (`format: typebulb/v1`, `name:`).
-
-| Block | Purpose |
-|-------|---------|
-| `**code.tsx**` | **Required.** App logic and UI (TypeScript/TSX). |
-| `**index.html**` | The mount container. Include it — nearly every bulb does (e.g. `<div id="root"></div>`). Only pure console apps omit it. |
-| `**styles.css**` | CSS. |
-| `**config.json**` | `dependencies` and a `description`. |
-| `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
-| `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()` — a typebulb.com feature; not supported locally. |
-| `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
-| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Plain Node — no `tb`; log with `console.log`. **Local only.** |
-
 ## The `tb.*` API, by target
 
 `tb` is a pre-declared global your code can use without importing. What each call does, and where it works:
@@ -273,6 +229,14 @@ The host owns a bulb's **width**; you own its **height**.
 .wrap { margin: 0 auto; padding: 24px 16px; }   /* not: margin: 24px auto */
 ```
 
+## Wake-on-event
+
+`typebulb wait` turns a background task into a subscription. It blocks until the target server logs a new line (`--match <substr>` filters), prints it, and exits — and since an agent harness re-invokes the agent when a background task finishes, the exit *is* the wake-up. It resumes where your last `wait` or `call` on that target left off, so an event that lands while you're acting — or before the wait attaches — still fires it immediately; arm order doesn't matter. Exit `2` is the timeout (default 30 min): nothing happened, re-arm or stand down. Exit `3` means the server died.
+
+**The turn-based loop** (a game, an approval flow): a bulb whose `server.ts` does `console.log` on each user action is the event channel. Per turn — act via `typebulb call`, arm `wait <file> --match <tag>` in the background, end your turn; on wake, read state with `typebulb call <file> <getState>` (never parse it from the log line) and repeat. A bulb's uncaught browser errors land in the same log as `[runtime error] …`, so the wake channel also catches your bulb breaking. For embeds, the same subscription is `typebulb wait claude` on the mirror — see [Emitting an embedded bulb](#emitting-an-embedded-bulb).
+
+**Keep every loop command argument-stable.** A harness that permission-matches exact command strings prompts the user on *every* event if varying data (a move, a payload) rides the command line. Keep it off: write the args to a fixed file and pipe them — `cat <bulb-folder>/args.json | typebulb call <file> <fn> --args -` — so each of the loop's commands is one constant string, approved once. `wait` and a `getState` call are constant already.
+
 ## Tips for Agents
 
 - **`config.json` `description`** is the bulb's SEO meta description — keep it to one or two plain sentences (~150–160 chars), or it gets truncated.
@@ -280,7 +244,6 @@ The host owns a bulb's **width**; you own its **height**.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **A bulb's working files live in a folder named after the bulb.** Whether written by `server.ts` or `tb.fs.write`, favor a sibling folder matching the bulb's slug.
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
-- **Waking on a user's action** — a bulb whose `server.ts` does `console.log` on an event (a chess move, a form submit) is a wake-up channel: `typebulb wait <file> --match <tag>` exits when the line lands. For a turn-based loop, arm the wait *before* you act — your own `typebulb call`s run in a separate process and can't wake you, so everything the user does after the arm is caught. On wake, read state with `typebulb call <file> <getState>` (never parse it from the log line), act, re-arm. Uncaught browser errors land in the same log as `[runtime error] …`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`.** Bare imports (`react`, `d3`, `three`, …) auto-resolve from a CDN — no install step. Declare them in `config.json` `dependencies` anyway: that's what lets `npx typebulb check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`) and pins versions.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
@@ -344,6 +307,48 @@ Which must be declared in the dependencies section:
 ```
 
 Typebulb has a package resolver that will load and cache these packages from `esm.sh` when the bulb runs.
+
+## `tb.ai()`
+
+Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys. Don't confuse this with the agent loop ([Wake-on-event](#wake-on-event)): there Claude drives a bulb from the chat session and *is* the intelligence — no provider, no key, and the bulb stays plain. `tb.ai()` is for bulbs that are themselves AI apps (chatbots, agents, experiments). Add API keys to your `.env` file:
+
+| Provider name | API key env var |
+|---------------|-----------------|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `gemini` | `GOOGLE_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+
+Set your default provider and model:
+
+```
+TB_AI_PROVIDER=anthropic
+TB_AI_MODEL=claude-haiku-4-5-20251001
+```
+
+Both can be overridden per-call: `tb.ai({ provider: "gemini", model: "gemini-3.1-flash-lite", ... })`.
+
+Run `typebulb models` to list the available model ids instead of guessing one.
+
+### Reasoning
+
+`tb.ai()` accepts an optional `reasoning` parameter (0–3) that hints at how much extended thinking the model should use:
+
+| Level | Label | Effect |
+|-------|-------|--------|
+| 0 | Min | No extended reasoning (default) |
+| 1 | Low | Light reasoning |
+| 2 | Med | Moderate reasoning |
+| 3 | High | Heavy reasoning |
+
+```typescript
+const { text } = await tb.ai({
+  messages: [{ role: "user", content: "Explain quantum tunneling" }],
+  reasoning: 2,
+});
+```
+
+Provider support varies — the level is mapped to provider-specific parameters (e.g. Anthropic's adaptive thinking, OpenAI's reasoning effort).
 
 ## License
 
