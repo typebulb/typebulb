@@ -203,30 +203,28 @@ export class BulbsPill extends ComboboxPill {
     return this.servers.find(s => s.denied && s.pid !== this.parent.ownPid && !this.dismissedDenials.has(s.pid))
   }
 
-  // Elevate: stop the untrusted server, relaunch it trusted (explicit trust → the host
-  // remembers it). Trust is fixed at process start, so this is a restart, not an in-place flip.
+  // Elevate: relaunch trusted (explicit trust → the host remembers it). Trust is fixed at
+  // process start, so this is a restart, not an in-place flip — and the launch itself stops
+  // the running server (one server per bulb file, TB-CLI.md).
   async elevate(s: RunningServer) {
     this.dismissedDenials.add(s.pid)
     if (this.openLog?.pid === s.pid) this.closeLog()
-    try {
-      await tb.server.stopBreakout(s.pid)
-      await tb.server.launchBulb(s.file, true)
-    } catch (err) { console.error('[mirror] elevate failed', err) }
+    try { await tb.server.launchBulb(s.file, true) }
+    catch (err) { console.error('[mirror] elevate failed', err) }
     await this.refresh()
   }
 
   dismissDenial(pid: number) { this.dismissedDenials.add(pid); this.update() }
 
   // Flip a bulb's trust tier. Always updates the remembered decision; for a running server the
-  // tier is fixed at process start, so apply it now by stopping and relaunching in the new tier
-  // (so the toggle reflects reality rather than only the next launch).
+  // tier is fixed at process start, so apply it now by relaunching in the new tier — the launch
+  // replaces the running server — so the toggle reflects reality rather than only the next launch.
   async toggleTrust(r: BulbRow) {
     const next = !(r.running ? !!r.running.trust : !!r.trusted)
     try {
       await tb.server.setBulbTrust(r.path, next)
       if (r.running) {
         if (this.openLog?.pid === r.running.pid) this.closeLog()
-        await tb.server.stopBreakout(r.running.pid)
         await tb.server.launchBulb(r.path, next)
       }
     } catch (err) { console.error('[mirror] toggleTrust failed', err) }

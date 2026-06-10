@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, readdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
-import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor } from '../src/serve/serverRegistry.js'
+import { spawn } from 'child_process'
+import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, type BulbServer } from '../src/serve/serverRegistry.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -104,6 +105,41 @@ describe('serverRegistry', () => {
     writeWaitCursor(DEAD_PID, 42)
     await stopBulbServer(DEAD_PID)
     expect(readWaitCursor(DEAD_PID)).toBeUndefined()
+  })
+
+  // One server per bulb file (TB-CLI.md "a launch replaces, never stacks"): the pure filter
+  // behind the replace — canonical-path match, mirrors exempt, the calling process exempt.
+  it('serversForBulb matches by canonical path, exempting mirrors and the calling process', () => {
+    const file = path.join(dir, 'a.bulb.md')
+    const entry = (over: Partial<BulbServer>): BulbServer => ({ pid: DEAD_PID, port: 1, url: 'u', file, startedAt: 1, ...over })
+    const list = [
+      entry({}),                                          // the doomed predecessor
+      entry({ file: path.join(dir, 'b.bulb.md') }),       // a different bulb — untouched
+      entry({ file: 'agent:claude', agent: 'claude' }),   // a mirror — exempt (its own reuse dedup)
+      entry({ pid: process.pid }),                        // the calling process — never stops itself
+    ]
+    expect(serversForBulb(list, file)).toEqual([list[0]])
+    // Case-insensitive volumes: a different casing of the same path is the same bulb.
+    if (process.platform === 'win32') {
+      expect(serversForBulb([entry({})], file.toUpperCase())).toEqual([entry({})])
+    }
+  })
+
+  it('stopServersForBulb stops the live server for the file and leaves the rest', async () => {
+    // A real, harmless child to be the doomed predecessor — stopping it must not touch the
+    // test runner (process.pid is exempt) or the other bulb's server.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
+    try {
+      const victim = path.join(dir, 'game.bulb.md')
+      await registerServer({ pid: child.pid!, port: 3002, url: 'u', file: victim, startedAt: 1 })
+      await registerServer({ pid: process.pid, port: 3000, url: 'u', file: path.join(dir, 'other.bulb.md'), startedAt: 2 })
+
+      const stopped = await stopServersForBulb(victim)
+      expect(stopped.map(s => s.pid)).toEqual([child.pid])
+      expect((await listBulbServers()).map(s => s.pid)).toEqual([process.pid])
+    } finally {
+      child.kill()                                        // reap even on assertion failure
+    }
   })
 
   // The one-mirror-per-project dedup (TB-Agent-Mirror.md Invariant 2): a mirror is found by its

@@ -8,7 +8,7 @@ import { predictTrust } from '../bulb/predictTrust.js'
 import { startServer, findAvailablePort } from '../serve/server.js'
 import { openBrowser } from '../serve/browser.js'
 import { watchBulb, watchDir } from '../serve/watcher.js'
-import { registerServer, unregisterServer, startServerLog } from '../serve/serverRegistry.js'
+import { registerServer, unregisterServer, startServerLog, stopServersForBulb } from '../serve/serverRegistry.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -32,6 +32,12 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Load the cwd .env cascade before loadAndCompile — it imports server.ts, which reads
   // process.env at import time (TB-Env.md). Report after, once the bulb is read.
   const envResult = loadEnv(args.mode)
+
+  // One server per bulb file — a launch replaces, never stacks (TB-CLI.md). Stopping the
+  // predecessor before the compile gives its port time to free, so the replacement often
+  // lands on the same port and an old tab's reload reconnects.
+  const replaced = await stopServersForBulb(bulbPath)
+  if (replaced.length) console.log(`Replacing the running server for this bulb (pid ${replaced.map(s => s.pid).join(', ')})`)
 
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)

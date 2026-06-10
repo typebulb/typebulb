@@ -272,6 +272,29 @@ export async function stopBulbServer(pid: number): Promise<void> {
   await unregisterServer(pid)
 }
 
+/**
+ * The servers in `servers` that ARE `file`, by canonical path (one server per bulb file —
+ * TB-CLI.md). Mirrors are exempt (they hold their own per-cwd reuse — TB-Agent-Mirror.md
+ * Inv. 2), as is the calling process (the runner stops its predecessors, never itself).
+ * Pure filter, so the replace decision is unit-testable without signalling anything.
+ */
+export function serversForBulb(servers: BulbServer[], file: string): BulbServer[] {
+  const key = normalizeBulbPath(file)
+  return servers.filter(s => s.agent == null && s.pid !== process.pid && normalizeBulbPath(s.file) === key)
+}
+
+/**
+ * Enforce one-server-per-bulb-file (TB-CLI.md): stop every live server for `file`. Two call
+ * sites make the invariant hold on every route — the web runner at boot (covers a bare
+ * terminal run) and launchBulbServer before spawning (so its registration poll can't return
+ * the doomed entry). Returns what was stopped so the caller can say so.
+ */
+export async function stopServersForBulb(file: string): Promise<BulbServer[]> {
+  const doomed = serversForBulb(await listBulbServers(), file)
+  for (const s of doomed) await stopBulbServer(s.pid)
+  return doomed
+}
+
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 /**
@@ -354,10 +377,11 @@ async function launchDetached(
 }
 
 /**
- * Launch — or re-attach to — a dev server for `file`. Idempotent per file: if one is
- * already live for it, returns that instead of spawning a second (no duplicate tab).
- * Otherwise spawns a detached, windowless child (the pinned bin — see bulbServerCommand)
- * and waits for it to self-register its true port.
+ * Launch a dev server for `file`, replacing any live one — one server per bulb file, the
+ * newest launch wins with its own flags (TB-CLI.md). The spawned runner stops same-file
+ * servers itself at boot, so a bare terminal run holds the invariant too; the pre-spawn stop
+ * here is what keeps the registration poll honest — with the old entry gone, any match the
+ * poll finds is the child just spawned, never the doomed predecessor.
  */
 export async function launchBulbServer(
   file: string,
@@ -365,11 +389,8 @@ export async function launchBulbServer(
 ): Promise<BulbServer> {
   const cwd = opts.cwd ?? process.cwd()
   const abs = path.resolve(cwd, file)
-
-  // Keyed by file, regardless of trust: a bulb already serving `file` is returned as-is
-  // (no second tab). To change a running bulb's trust, stop it and relaunch — the caller can
-  // read the live entry's `trust` and surface the mismatch rather than us silently re-spawning.
-  const byFile = async () => (await listBulbServers()).find(s => s.file === abs)
+  await stopServersForBulb(abs)
+  const byFile = async () => serversForBulb(await listBulbServers(), abs)[0]
   return launchDetached(byFile, bulbServerCommand(file, opts), cwd, path.basename(file))
 }
 
