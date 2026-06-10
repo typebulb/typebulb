@@ -12,8 +12,12 @@ export class TokenPill extends Component {
   view() {
     const t = this.parent.tokens
     const total = t.in + t.out + t.cached + t.cacheCreate
-    if (total <= 0) return span({ class: 'token-wrap' })
-    // Passive indicator (like .working), not a button — nothing to click.
-    return span({ class: 'token-wrap' }, span({ class: 'token' }, `${formatTokens(total)} tokens`))
+    const busy = this.parent.working
+    if (total <= 0 && !busy) return span({ class: 'token-wrap' })
+    // Passive indicator, not a button — nothing to click. Doubles as the working indicator
+    // (no separate statusbar element): the chip shimmers while CC is mid-turn, the count
+    // frozen until the flush; a fresh session has no count yet, so the word stands in.
+    return span({ class: 'token-wrap' },
+      span({ class: ['token', busy ? 'busy' : ''] }, total > 0 ? `${formatTokens(total)} tokens` : 'working…'))
   }
 }

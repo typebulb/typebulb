@@ -236,6 +236,11 @@ export class MessageList extends Component {
   // Rationale: the agent's final message already IS its own summary of the turn,
   // so surfacing it (free, exact) beats any generated paraphrase. See the spec.
   renderTurn(msgs: Msg[], turnIdx: number, isLast: boolean) {
+    // Prose mode: only what the agent said. Tool-only bubbles drop with no summary stub,
+    // and turn-collapse is moot — its tally counts exactly the steps the mode hides.
+    if (this.parent.prose) {
+      return msgs.filter(m => m.role === 'user' || m.text || m.body).map(m => this.bubble(m, turnIdx))
+    }
     const assistants = msgs.filter(m => m.role === 'assistant')
     if (isLast || assistants.length < 2) return msgs.map(m => this.bubble(m, turnIdx))
 
@@ -267,13 +272,14 @@ export class MessageList extends Component {
   }
 
   bubble(msg: Msg, turnIdx: number) {
+    const prose = this.parent.prose
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
     return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', turnClassFor(turnIdx)], key: msg.id },
-      msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
+      !prose && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
-      msg.tools.map(t => this.tool(t)),
+      prose ? null : msg.tools.map(t => this.tool(t)),
       msg.copy ? msg.copy.view() : null,
     )
   }

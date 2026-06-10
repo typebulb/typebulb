@@ -17,6 +17,8 @@ export interface IRoot {
   cwd: string
   sessionId: string
   ownPid: number
+  prose: boolean
+  working: boolean
   tokens: TokenCounts
   messageList: IMessageList
   closePopups(except?: unknown): void

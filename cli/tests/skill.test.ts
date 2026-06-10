@@ -6,8 +6,8 @@ import { buildSkill, skillFrontmatter, freshnessNote } from '../src/skill.js'
 
 /**
  * The skill is the entire package README with the discovery frontmatter wrapped on at emit time
- * (TB-Skill.md). There is no body split — the human-facing intro, the Quick Start
- * example, and the usage list are all part of the emitted skill.
+ * (TB-Skill.md). There is no body split — the human-facing intro, the usage list, and the
+ * bulb-format example are all part of the emitted skill.
  */
 
 // The README lives at the package root (runtime/), two levels up from cli/tests/.
@@ -28,13 +28,13 @@ describe('buildSkill', () => {
     expect(out).toContain('`npx typebulb skill`')   // the refresh instruction the stamp makes actionable
   })
 
-  it('emits the whole README — top half and bottom half, including the Quick Start example', () => {
+  it('emits the whole README — top half and bottom half', () => {
     const out = buildSkill(readFileSync(readmePath, 'utf8'), '1.2.3')
     // Top half (the old below-the-divider split used to drop these):
     expect(out).toContain('## Features')
-    expect(out).toContain('## Quick Start')
+    expect(out).toContain('## Usage')
     // Bottom half (the authoring skill proper):
-    expect(out).toContain('## Blocks')
+    expect(out).toContain('## Bulb Format')
     expect(out).toContain('## Claude')
   })
 

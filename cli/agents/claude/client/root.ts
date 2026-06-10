@@ -1,7 +1,8 @@
-import { Component, div, span } from 'domeleon'
+import { Component, div } from 'domeleon'
 import { SessionPicker } from './sessionPicker.js'
 import { TokenPill } from './tokenPill.js'
 import { BulbsPill } from './bulbsPill.js'
+import { ProsePill } from './prosePill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
 import type { ServerEvent, IRoot, TokenCounts } from './types.js'
@@ -13,9 +14,11 @@ export class Root extends Component implements IRoot {
   sessionPicker = new SessionPicker()
   tokenPill = new TokenPill()
   bulbsPill = new BulbsPill()
+  prosePill = new ProsePill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   working = false                           // CC is mid-turn (live-chain leaf unresolved); from poll()
+  prose = false                             // prose mode: hide tool/thinking rows (per-mirror, never persisted)
   ownPid = 0                                // this host server's pid; the bulbs pill excludes it
 
   #cursor = 0
@@ -101,13 +104,14 @@ export class Root extends Component implements IRoot {
     )
   }
 
-  // Bottom strip: a right-aligned cluster. Left→right: the agent-scoped trio
-  // (optional working indicator, token count, session picker), then the bulbs
-  // pill set apart on the right — it's about this project's bulbs, not the agent.
+  // Bottom strip: a right-aligned cluster. Left→right: the prose-mode toggle,
+  // the agent-scoped pair (token count — which carries the working shimmer while
+  // CC is mid-turn — and session picker), then the bulbs pill set apart on the
+  // right — it's about this project's bulbs, not the agent.
   statusbar() {
     return div({ class: 'statusbar' },
       div({ class: 'statusbar-actions' },
-        this.working ? div({ class: 'working' }, span({ class: 'working-dot' }), 'working…') : null,
+        this.prosePill.view(),
         this.tokenPill.view(),
         this.sessionPicker.view(),
         this.bulbsPill.view(),

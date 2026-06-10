@@ -401,6 +401,8 @@ const INTERNAL_PATTERNS = [
   /^No response requested\.?$/i,
   /^<task-notification\b/i,                // harness protocol envelopes, not human-facing
   /^<system-reminder\b/i,
+  /^<local-command-stdout\b/i,             // a slash command's local output ("Goodbye!", "Login successful")
+  /^<local-command-stderr\b/i,
 ]
 function isInternal(text: string): boolean {
   const t = text.trim()
@@ -416,13 +418,26 @@ function stripIdeContext(text: string): string {
   return text.replace(IDE_CONTEXT, '')
 }
 
+// A slash command is recorded as a user turn of XML-ish tags (<command-name>/foo</command-name>
+// <command-message>…</command-message> <command-args>…</command-args>). Surface the command line the
+// user typed — dropping it whole would leave the next assistant turn responding to nothing, and the
+// raw envelope is noise in the chat and the picker preview alike. (The command's local *output* is a
+// separate <local-command-stdout> entry, dropped via INTERNAL_PATTERNS.)
+function commandLine(text: string): string | undefined {
+  const name = /^<command-name>([\s\S]*?)<\/command-name>/.exec(text)?.[1]?.trim()
+  if (!name) return undefined
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim()
+  return args ? `${name} ${args}` : name
+}
+
 // The display-ready text of a user message: IDE context stripped out, internal/synthetic noise
-// reduced to ''. Empty ⇒ nothing human-authored to show. Shared by applyEntry (the transcript), the
-// queued-command path, and readPreview (the picker) — so an "<ide_opened_file>" block is neither
-// rendered nor mistaken for the kickoff prompt.
-function cleanUserText(text: string): string {
+// reduced to '', a slash-command record reduced to its command line. Empty ⇒ nothing human-authored
+// to show. Shared by applyEntry (the transcript), the queued-command path, and readPreview (the
+// picker) — so an "<ide_opened_file>" block is neither rendered nor mistaken for the kickoff prompt.
+export function cleanUserText(text: string): string {
   const t = stripIdeContext(text).trim()
-  return t && !isInternal(t) ? t : ''
+  if (!t) return ''
+  return commandLine(t) ?? (isInternal(t) ? '' : t)
 }
 // Same, for an array-shaped `type:'text'` block; '' for non-text blocks.
 function userTextBlock(b: ContentBlock | undefined): string {
@@ -519,7 +534,7 @@ export async function info() {
 export async function poll(cursor: number) {
   const s = state
   refreshActive()
-  return { events: s.buffer.slice(cursor), cursor: s.buffer.length, working: chainWorking(s) }
+  return { events: s.buffer.slice(cursor), cursor: s.buffer.length, working: chainWorking(s) && sessionAlive(s.sessionId) }
 }
 
 // The mirror host's embed-status forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7).
@@ -534,13 +549,14 @@ export async function logEmbedStatus(tag: string, line: string) {
   if (embedStatus.accept(tag, line)) console.log(line)
 }
 
-// "CC is mid-turn" — derived purely from the live chain, no timing heuristics.
-// Judged from the last *conversational* entry, skipping CC's bookkeeping lines
-// (queue-operation etc. carry a uuid and can briefly be the literal leaf). It's
-// a user entry through the whole frozen-buffering window (CC flushes your prompt
-// but not its own work yet — see the spec's flush note), and an assistant entry
-// stays "working" while a tool_use has no matching tool_result. It goes idle
-// only once an assistant entry has every tool resolved — the final answer landed.
+// "CC is mid-turn" is two predicates ANDed at poll(): the chain shape (here) and CC
+// process liveness (sessionAlive) — no timing heuristics. The shape is judged from the
+// last *conversational* entry, skipping CC's bookkeeping lines (queue-operation etc.
+// carry a uuid and can briefly be the literal leaf). It's a user entry through the
+// whole frozen-buffering window (CC flushes your prompt but not its own work yet — see
+// the spec's flush note), and an assistant entry stays "working" while a tool_use has
+// no matching tool_result. It goes idle only once an assistant entry has every tool
+// resolved — the final answer landed.
 function chainWorking(s: State): boolean {
   let leaf: JsonlEntry | undefined           // entries is insertion- (= file-) ordered
   for (const e of s.entries.values()) if (e.type === 'user' || e.type === 'assistant') leaf = e
@@ -555,6 +571,29 @@ function chainWorking(s: State): boolean {
     if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result' && b.tool_use_id) resolved.add(b.tool_use_id)
   }
   return toolUseIds.some(id => id && !resolved.has(id))
+}
+
+// The shape alone can't end: a session abandoned mid-turn (killed terminal, closed
+// IDE) freezes in exactly the "working" shape, and its JSONL is byte-identical to a
+// live session mid-buffer. So liveness comes from CC's own pid-session store —
+// ~/.claude/sessions/<pid>.json, one record per *running* CC process, removed on
+// clean exit — a session is live iff a record names it and that pid is alive (the
+// probe catches crash-stranded records; a recycled pid could fake liveness until
+// it too exits — procStart would disambiguate, not worth it for a status shimmer).
+const SESSIONS_DIR = join(homedir(), '.claude', 'sessions')
+function sessionAlive(sessionId: string): boolean {
+  let names: string[]
+  try { names = readdirSync(SESSIONS_DIR) } catch { return false }
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue
+    try {
+      const rec = JSON.parse(readFileSync(join(SESSIONS_DIR, n), 'utf8'))
+      if (rec?.sessionId !== sessionId) continue
+      process.kill(rec.pid, 0)               // throws if the pid is gone
+      return true
+    } catch { /* unreadable record or dead pid — keep scanning */ }
+  }
+  return false
 }
 
 // ---- session picker ----
