@@ -1,8 +1,8 @@
 import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
-import { listBulbServers, readServerLog, stopBulbServer, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, stopBulbServer, isAlive, type BulbServer } from '../serve/serverRegistry.js'
 
-// The `logs`/`stop` lifecycle commands all resolve a running server from the per-user, cross-project registry
+// The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
 // (`typebulb <file>`), read its console (`logs`), and `stop` it — no registry-spelunking, the user
 // just watching alongside.
@@ -83,6 +83,62 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
     process.on('SIGTERM', stop)
     await new Promise<void>(() => {})   // run until interrupted
   }
+}
+
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+/**
+ * `typebulb wait <file|pid|agent>` — block until the target server's log grows, print the new line(s),
+ * exit. The wake-up half of the agent lifecycle (TB-Agent-Mirror-Embed-Iterate.md): any
+ * process that blocks-until-event-then-exits is a signal an agent can subscribe to as a background task,
+ * so a bulb's `console.log` on a user action — or the mirror's `[embed …]` status forward — re-invokes the
+ * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = timeout (nothing logged —
+ * for an embed wait, "no mirror tab open", distinct from "broken"); 3 = the server died mid-wait.
+ *
+ * The baseline is the log's byte offset at launch — only lines appended after `wait` starts count. For
+ * embeds that is race-free by construction (the render can't precede the turn flush, which can't precede
+ * the launch); for bulb-event waits the agent reads authoritative state on wake (`typebulb call`), never
+ * out of the printed line, so a line that slipped in before launch is recovered there.
+ */
+export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec: number }): Promise<void> {
+  if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
+  const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
+
+  let cursor = readServerLog(server.pid).offset       // launch-time snapshot: the past doesn't wake
+  const deadline = Date.now() + opts.timeoutSec * 1000
+  // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
+  // several embeds from one turn — lands in one wake instead of one wake per line.
+  const SETTLE_MS = 1000
+  let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
+  let pending = ''                                     // trailing partial line, completed by a later poll
+
+  while (true) {
+    const r = readServerLog(server.pid, cursor)
+    cursor = r.offset
+    if (r.text) {
+      pending += r.text
+      const parts = pending.split('\n')
+      pending = parts.pop() ?? ''
+      for (const line of parts) {
+        if (!line.trim()) continue
+        if (opts.match && !line.includes(opts.match)) continue
+        console.log(line)
+        settleUntil ??= Date.now() + SETTLE_MS
+      }
+    }
+    if (settleUntil && Date.now() >= settleUntil) break
+    if (!settleUntil && Date.now() >= deadline) {
+      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${server.agent ?? path.basename(server.file)} within ${opts.timeoutSec}s`)
+      process.exit(2)
+    }
+    if (!isAlive(server.pid)) {
+      // Anything it logged on the way down already printed above (a match ⇒ exit 0 below).
+      if (!settleUntil) { console.error(`server ${server.agent ?? path.basename(server.file)} (pid ${server.pid}) exited while waiting`); process.exit(3) }
+      break
+    }
+    await delay(400)
+  }
+  process.exit(0)
 }
 
 /**

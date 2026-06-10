@@ -79,25 +79,67 @@ ${embedProtocol}
 
 <script type="module">
 ${escapeScript(code)}
-${embedded ? 'globalThis.__tbEntryRan = true; /* load-failure backstop — see embedProtocol */' : ''}
+globalThis.__tbEntryRan = true; /* load-failure backstop — see embedProtocol */
 </script>
 </body>
 </html>`
 }
 
-// Host↔embed protocol (bulb-in-a-bulb). A standalone bulb isn't framed, so this
-// no-ops; when embedded it posts its content height (the host can't size the iframe
-// otherwise), keeps overflow in sync with fit, and forwards runtime errors (which
-// would otherwise die in the iframe's own console). The matching listener lives in
-// createBulbFrame. Registered as a classic script BEFORE the deferred module so its
-// error listeners catch errors from first eval. Sends content height only; the host
-// owns width and any height cap — an embed can't tell a deliberately-narrow widget
-// from a responsive one, so those are the host's call (see claude.bulb's toggle).
+// Host↔embed protocol (bulb-in-a-bulb) + uncaught-error forwarding. When framed it posts
+// its content height (the host can't size the iframe otherwise), keeps overflow in sync
+// with fit, and forwards runtime errors to the embedding host (createBulbFrame's
+// listener). A standalone top-level page skips the height machinery but still forwards
+// uncaught errors — to its own ungated /__log, so the one failure a local bulb can't
+// report itself (the error that killed it) lands in the log `typebulb logs`/`wait` read
+// (TB-Agent-Mirror-Embed-Iterate.md, "The local tier"). Never /__log from a
+// frame: an embed's relative URL would resolve against the HOST page's origin — the
+// mirror's log, untagged, bypassing its dedup. Registered as a classic script BEFORE the
+// deferred module so its error listeners catch errors from first eval. Sends content
+// height only; the host owns width and any height cap — an embed can't tell a
+// deliberately-narrow widget from a responsive one, so those are the host's call (see
+// claude.bulb's toggle).
 const embedProtocol = `<script>
 (function () {
-  if (window.parent === window) return;
+  var framed = window.parent !== window;
+  var post = function (m) { try { parent.postMessage(m, '*'); } catch (e) {} };   /* framed only */
+  var lastError;
+  var errorPosted = false;
+  var postError = function (message) {
+    message = String(message);
+    if (message === lastError) return;   /* a tight error loop reports once, not per frame */
+    lastError = message;
+    errorPosted = true;
+    if (framed) post({ __typebulbEmbed: true, kind: 'error', message: message });
+    else { try { fetch('/__log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ args: ['[runtime error] ' + message] }) }).catch(function () {}); } catch (e) {} }
+  };
+  // Capture phase: a resource/module load failure (a <script>/<link>/<img> that 404s) does NOT
+  // bubble, so it reaches window only here, carrying the failing element as e.target (no message).
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    if (t && t !== window && (t.src || t.href)) postError('Failed to load ' + (t.src || t.href));
+  }, true);
+  window.addEventListener('error', function (e) {
+    var m = String((e && e.message) || (e && e.error) || 'Error');
+    // The benign "ResizeObserver loop completed…" notice surfaces as a window error in
+    // some browsers; it's not a bulb fault, so don't forward it to the host as one.
+    if (m.indexOf('ResizeObserver') !== -1) return;
+    postError(m);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    var msg = r && r.message ? r.message : (r == null ? 'Unhandled rejection' : r);
+    postError(msg);
+  });
+  // Load-failure backstop (both contexts): if the entry module never evaluated — its import graph
+  // failed to resolve (a 404'd dependency, which throws nothing catchable) — surface it. A module
+  // that only renders asynchronously still evaluates its top level, so this won't fire on a slow bulb.
+  window.addEventListener('load', function () {
+    if (!window.__tbEntryRan && !errorPosted) {
+      postError('Bulb failed to load: a module or dependency could not be fetched (see the browser console for the failing URL).');
+    }
+  });
+  if (!framed) return;
   var de = document.documentElement;
-  var post = function (m) { try { parent.postMessage(m, '*'); } catch (e) {} };
   // Overflow tracks fit, per axis. While content fits the frame, HIDE overflow: the
   // sub-pixel gap (frame a fraction shorter than content) would otherwise flash a
   // phantom scrollbar, and a full-bleed (height:100%) bulb — whose content equals the
@@ -142,26 +184,6 @@ const embedProtocol = `<script>
   };
   var update = function () { if (!raf) raf = requestAnimationFrame(apply); };
   de.style.overflow = 'hidden';
-  var errorPosted = false;
-  var postError = function (message) { errorPosted = true; post({ __typebulbEmbed: true, kind: 'error', message: String(message) }); };
-  // Capture phase: a resource/module load failure (a <script>/<link>/<img> that 404s) does NOT
-  // bubble, so it reaches window only here, carrying the failing element as e.target (no message).
-  window.addEventListener('error', function (e) {
-    var t = e && e.target;
-    if (t && t !== window && (t.src || t.href)) postError('Failed to load ' + (t.src || t.href));
-  }, true);
-  window.addEventListener('error', function (e) {
-    var m = String((e && e.message) || (e && e.error) || 'Error');
-    // The benign "ResizeObserver loop completed…" notice surfaces as a window error in
-    // some browsers; it's not a bulb fault, so don't forward it to the host as one.
-    if (m.indexOf('ResizeObserver') !== -1) return;
-    postError(m);
-  });
-  window.addEventListener('unhandledrejection', function (e) {
-    var r = e && e.reason;
-    var msg = r && r.message ? r.message : (r == null ? 'Unhandled rejection' : r);
-    postError(msg);
-  });
   // Run at load (module mounted → real content, not the empty pre-mount body that would
   // collapse the frame and snap back). Observe BOTH body (content growth) and the root
   // element (the viewport — so a host resize/cap re-syncs overflow on the next frame).
@@ -169,12 +191,6 @@ const embedProtocol = `<script>
     update();
     if (window.ResizeObserver) {
       try { var ro = new ResizeObserver(update); ro.observe(document.body); ro.observe(de); } catch (e) {}
-    }
-    // Load-failure backstop: if the entry module never evaluated — its import graph failed to
-    // resolve (a 404'd dependency, which throws nothing catchable) — surface it. A module that
-    // only renders asynchronously still evaluates its top level, so this won't fire on a slow bulb.
-    if (!window.__tbEntryRan && !errorPosted) {
-      postError('Bulb failed to load: a module or dependency could not be fetched (see the browser console for the failing URL).');
     }
   });
 })();

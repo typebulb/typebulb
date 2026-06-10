@@ -120,6 +120,10 @@ export interface BulbFrameOptions {
   maxHeight?: number
   /** Called with a message when the embed throws at runtime (post-mount). */
   onError?: (message: string) => void
+  /** Called once, on the embed's first auto-height report — proof the bulb's code ran to
+   *  first paint (the promise resolving only proves it *compiled*). Skipped if an error
+   *  arrives first, so ready never follows a failure. */
+  onReady?: () => void
   /** Abort to remove the frame's host-side `message` listener. The host owns frame
    *  lifecycle; without this the listener (and its ref to the frame) lives for the
    *  page — fine for a long-lived host, a leak for one that churns embeds. */
@@ -164,6 +168,8 @@ export async function createBulbFrame(source: string, opts: BulbFrameOptions = {
   // embed's user code shares this window with the protocol script and can spoof
   // these, so clamp height to [0, maxHeight] (and reject non-finite), and hand
   // onError a plain String the host must render as text, never HTML.
+  let ready = false
+  let errored = false
   const onMessage = (e: MessageEvent) => {
     if (e.source !== frame.contentWindow) return
     const d = e.data as { __typebulbEmbed?: boolean; kind?: string; height?: number; message?: string }
@@ -173,7 +179,9 @@ export async function createBulbFrame(source: string, opts: BulbFrameOptions = {
       // short bulb settles small. Full-bleed bulbs self-stabilise at initialHeight on
       // their own (their body tracks the frame), so a floor isn't what holds them up.
       frame.style.height = `${Math.min(maxHeight, Math.max(0, Math.ceil(d.height)))}px`
+      if (!ready && !errored) { ready = true; opts.onReady?.() }
     } else if (d.kind === 'error') {
+      errored = true
       opts.onError?.(String(d.message ?? 'error'))
     }
   }

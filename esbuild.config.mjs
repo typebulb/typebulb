@@ -113,6 +113,9 @@ export interface BulbFrameOptions {
   maxHeight?: number
   /** Called with a message when the embed throws at runtime (post-mount). */
   onError?: (message: string) => void
+  /** Called once, on the embed's first auto-height report — the bulb's code ran to first
+   *  paint. Skipped if an error arrives first, so ready never follows a failure. */
+  onReady?: () => void
   /** Abort to remove the frame's host-side \`message\` listener (host owns lifecycle). */
   signal?: AbortSignal
 }
@@ -214,7 +217,7 @@ export declare function listTrustedBulbs(): string[]
 export declare function openInEditor(filePath: string, line?: number): void
 `)
 
-// ── Core-subpath firewall (TB-Single-Package.md req 3, TB-Lint.md) ───────────────────────────────
+// ── Core-subpath firewall (TB-Single-Package.md req 3, TB-Lint-Transpile.md) ─────────────────────
 // The core areas ship as their own tsc-emitted subpath entries, all inside the one `typebulb` package,
 // and typebulb.com imports them on its published-bulb hot path. Nothing structurally stops one from
 // importing code it shouldn't, which would silently bloat that hot path — the catastrophe being a

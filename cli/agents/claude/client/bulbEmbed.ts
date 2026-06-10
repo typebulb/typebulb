@@ -23,6 +23,7 @@ export class BulbEmbed extends Component {
   #compileError?: string
   #runtimeError?: string
   #shouldMount = false                                 // the host sets this from chain state
+  #chainPos = 1                                        // 1-based version in the same-name run; host-set, stable per embed
   #building = false                                    // a createBulbFrame is in flight
   #abort?: AbortController                             // removes the frame's host-side message listener on teardown
   #breakoutState: 'idle' | 'busy' | 'done' = 'idle'   // busy: shimmer+disabled; done: result shown, still disabled
@@ -36,6 +37,14 @@ export class BulbEmbed extends Component {
 
   get name() { return this.#name }
   get key() { return this.#key }
+
+  // The host sets each embed's version from the chain pass (chainPositions); the fold stub reads it
+  // back for its "Version N" label. It's in the forwarded status tag because the dedup compares whole
+  // lines: a *re-emit* takes the next version, so its line logs even when the text is identical (same
+  // `ok`, same error), while a replay reconstructs the same version and still dedups
+  // (TB-Agent-Mirror-Embed-Iterate.md Invariant 7).
+  setChainPosition(n: number) { this.#chainPos = n }
+  get chainPosition() { return this.#chainPos }
 
   // The host drives mount state from the chain: only a run's live tail (or one the user expanded)
   // mounts. A bare onAttached compile would defeat that — domeleon attaches every discovered child, so
@@ -59,6 +68,7 @@ export class BulbEmbed extends Component {
       createBulbFrame(this.#source, {
         signal: this.#abort.signal,
         onError: (m: string) => { this.#runtimeError = m; this.#log('runtime', m); this.update() },
+        onReady: () => this.#log('ok'),
       })
         .then(frame => {
           this.#building = false
@@ -86,14 +96,17 @@ export class BulbEmbed extends Component {
     }
   }
 
-  // Forward an embed error to the mirror's own server log, name-tagged, so `typebulb logs claude` reads
-  // back exactly what the user sees (Embed-Iterate Invariant 1). Routed through the mirror host's own
-  // `logEmbedError` (not the shared `tb.server.log`) so the host owns the name-keyed idempotency that keeps
-  // a refresh from piling up the same line (Invariant 7, Guard B). Diagnostics only — fire-and-forget,
-  // drives nothing (Invariant 2).
-  #log(kind: 'compile' | 'runtime', message: string) {
+  // Forward an embed outcome — ok, or an error — to the mirror's own server log, name+version-tagged, so
+  // `typebulb logs claude` reads back exactly what the user sees (Embed-Iterate Invariant 1) and a
+  // `typebulb wait claude` watcher wakes on it. Routed through the mirror host's own `logEmbedStatus`
+  // (not the shared `tb.server.log`) so the host owns the tag-keyed idempotency that keeps a refresh from
+  // piling up the same line (Invariant 7). Diagnostics only — fire-and-forget, drives nothing (Invariant 2).
+  // `ok` fires from createBulbFrame's onReady (first paint, never after an error); the host-side guards
+  // here can't race it because a compile error means no frame and a folded embed never built one.
+  #log(kind: 'ok' | 'compile' | 'runtime', message?: string) {
     const tag = this.#name ?? this.#key
-    void tb.server.logEmbedError(tag, `[embed ${tag}] ${kind} error: ${message}`).catch(() => {})
+    const line = `[embed ${tag} v${this.#chainPos}] ${kind === 'ok' ? 'ok' : `${kind} error: ${message}`}`
+    void tb.server.logEmbedStatus(tag, line).catch(() => {})
   }
 
   // Abort the host-side listener when the whole transcript is dropped (session switch); the embed

@@ -62,7 +62,6 @@ export class MessageList extends Component {
   #idSeq = 0
   #embedSeq = 0
   #superseded = new Set<BulbEmbed>()               // recomputed per chain pass; drives fold-vs-live in #renderBody
-  #version = new Map<BulbEmbed, number>()          // 1-based position in the embed's same-name run, for the fold label
   #stuckToBottom = true
 
   get parent() { return this.ctx.parent as unknown as IRoot }
@@ -75,7 +74,6 @@ export class MessageList extends Component {
     this.expandedTurns.clear()
     this.expandedEmbeds.clear()
     this.#superseded = new Set()
-    this.#version = new Map()
     this.copyButtons = []
     this.bulbEmbeds = []
   }
@@ -159,9 +157,13 @@ export class MessageList extends Component {
     const flags = supersededFlags(names)
     const pos = chainPositions(names)
     this.#superseded = new Set(this.bulbEmbeds.filter((_, i) => flags[i]))
-    this.#version = new Map(this.bulbEmbeds.map((e, i) => [e, pos[i]!]))
-    // Mount the live tail, plus any folded version the user has expanded (so its render/error shows).
-    this.bulbEmbeds.forEach((e, i) => e.setMounted(!flags[i] || this.expandedEmbeds.has(e.key)))
+    // Position before mount: the status forward tags lines `v<N>`, so an embed must know its position
+    // before anything it logs (setMounted can kick off the compile). Mount the live tail, plus any
+    // folded version the user has expanded (so its render/error shows).
+    this.bulbEmbeds.forEach((e, i) => {
+      e.setChainPosition(pos[i]!)
+      e.setMounted(!flags[i] || this.expandedEmbeds.has(e.key))
+    })
   }
 
   #toggleEmbed(key: string) {
@@ -297,12 +299,11 @@ export class MessageList extends Component {
   // so re-expanding runs it fresh. Whether that version errored shows only while it's open.
   #renderEmbed(embed: BulbEmbed) {
     if (!this.#superseded.has(embed)) return [embed.view()]
-    const version = this.#version.get(embed) ?? 1
     const expanded = this.expandedEmbeds.has(embed.key)
     const stub = div({ class: 'md', key: `fold-${embed.key}` },
       div({ class: 'bulb-fold', onClick: () => this.#toggleEmbed(embed.key) },
         span({ class: 'tool-caret' }, expanded ? '▾' : '▸'),
-        span({ class: 'bulb-fold-text' }, `${embed.name ?? 'bulb'} — Version ${version}`),
+        span({ class: 'bulb-fold-text' }, `${embed.name ?? 'bulb'} — Version ${embed.chainPosition}`),
         span({ class: 'bulb-fold-app' }, '💡')))
     return expanded ? [stub, embed.view()] : [stub]
   }

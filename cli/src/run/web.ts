@@ -73,8 +73,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // than where the caller asked (the wrong-port confusion this avoids).
   if (port !== args.port) console.log(`  (port ${args.port} was busy)`)
   if (args.trust) console.log('  trust: granted (filesystem, AI, server.ts enabled)')
-  else if (predicted) console.log(`  trust: sandboxed — this bulb appears to use ${predicted}; re-run with --trust to enable it:\n  ${trustHint}\n`)
-  else console.log('  trust: sandboxed — re-run with --trust to enable filesystem / AI / server.ts\n')
+  else if (predicted) console.log(`  trust: restricted — this bulb appears to use ${predicted}; re-run with --trust to enable it:\n  ${trustHint}\n`)
+  else console.log('  trust: restricted — re-run with --trust to enable filesystem / AI / server.ts\n')
 
   if (args.watch) {
     console.log('  Watching for changes...\n')

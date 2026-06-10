@@ -2,7 +2,7 @@ import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watch
 import { join, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor } from '../../src/servers.js'
-import { EmbedErrorDedup } from './embedErrorLog.js'
+import { EmbedStatusDedup } from './embedStatusLog.js'
 
 function errorMessage(err: unknown): string {
   return (err as Error)?.message ?? String(err)
@@ -522,15 +522,16 @@ export async function poll(cursor: number) {
   return { events: s.buffer.slice(cursor), cursor: s.buffer.length, working: chainWorking(s) }
 }
 
-// The mirror host's embed-error forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7,
-// Guard B). The client captures the error and formats the line (so it matches the `⚠` strip verbatim —
-// Invariant 1); we own the idempotency. `console.log` tees to `<pid>.log` exactly like a local bulb's own
-// log, but the dedup lives here, off the shared `/__log` channel, so a refresh can't pile the line up and a
-// standalone bulb's repeated logs stay untouched. State lives in this long-lived process, surviving the
-// page reloads that reset all browser state.
-const embedErrors = new EmbedErrorDedup()
-export async function logEmbedError(tag: string, line: string) {
-  if (embedErrors.accept(tag, line)) console.log(line)
+// The mirror host's embed-status forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7).
+// The client captures the outcome — ok, compile error, runtime error — and formats the line (so an error
+// matches the `⚠` strip verbatim — Invariant 1); we own the idempotency. `console.log` tees to `<pid>.log`
+// exactly like a local bulb's own log — the file `typebulb logs claude` reads and `typebulb wait claude`
+// wakes on — but the dedup lives here, off the shared `/__log` channel, so a refresh can't pile the line up
+// and a standalone bulb's repeated logs stay untouched. State lives in this long-lived process, surviving
+// the page reloads that reset all browser state.
+const embedStatus = new EmbedStatusDedup()
+export async function logEmbedStatus(tag: string, line: string) {
+  if (embedStatus.accept(tag, line)) console.log(line)
 }
 
 // "CC is mid-turn" — derived purely from the live chain, no timing heuristics.

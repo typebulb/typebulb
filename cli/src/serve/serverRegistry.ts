@@ -15,7 +15,7 @@ import { readdir, readFile, writeFile, unlink, mkdir } from 'fs/promises'
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { serversDir, isUnderProject } from './paths.js'
+import { serversDir, isUnderProject, normalizeBulbPath } from './paths.js'
 
 export interface BulbServer {
   pid: number
@@ -115,7 +115,9 @@ export function readServerLog(pid: number, offset = 0): { text: string; offset: 
 
 // process.kill(pid, 0) sends no signal but runs the existence/permission check:
 // ESRCH = no such process (dead); EPERM = exists but not ours to signal (alive).
-function isAlive(pid: number): boolean {
+// Exported for `typebulb wait`, which holds one server across a long block and must
+// notice it dying without re-reading the whole registry every poll.
+export function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
@@ -200,6 +202,23 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
 }
 
 /**
+ * Find the agent mirror serving THIS project, optionally narrowed to a specific agent (`agent:<name>`).
+ *
+ * Scope to the cwd, not the machine: a mirror reflects the cwd it was launched in (it tails that
+ * project's CC sessions), so only a mirror for this cwd will render this agent's embeds — one open for
+ * a *different* project is a false "up". Match on the registered launch cwd plus the entry's `agent`
+ * field — a mirror has no project path to match on (TB-Agent-Mirror.md).
+ * A pre-cwd entry (no `s.cwd`) can't be claimed, so it's skipped. With `agent`, match that mirror;
+ * without, any mirror.
+ */
+export async function findProjectViewer(cwd: string, agent?: string): Promise<BulbServer | undefined> {
+  const here = normalizeBulbPath(cwd)
+  return (await listBulbServers()).find(s =>
+    s.cwd != null && normalizeBulbPath(s.cwd) === here &&
+    (agent ? s.agent === agent : s.agent != null))
+}
+
+/**
  * Stop a server: SIGTERM (its own cleanup unregisters), then unlink defensively in
  * case it died without cleaning up. Idempotent — stopping an already-gone pid is a no-op.
  */
@@ -213,6 +232,23 @@ export async function stopBulbServer(pid: number): Promise<void> {
 }
 
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+/**
+ * Spawn a child that outlives this process (the host hot-reloads constantly; a child tied to it dies
+ * on every reload) with NO console window. On Windows that means routing through `cmd /c start "" /b`:
+ * `start /b` runs windowless, whereas a bare detached spawn of a console app (node.exe) flashes a
+ * console window for a frame — an ugly regression. The explicit `""` title makes `start` treat the
+ * (quoted) node path as the command, not a window title, so spaces in the path are safe. POSIX
+ * detaches windowless directly. Either way the child self-registers its true port, so callers poll
+ * the registry (on Windows the `start` indirection also hides node's pid — which they don't need).
+ */
+function spawnDetached(command: string, args: string[], cwd: string): void {
+  const proc =
+    process.platform === 'win32'
+      ? spawn('cmd', ['/c', 'start', '', '/b', command, ...args], { cwd, stdio: 'ignore', windowsHide: true })
+      : spawn(command, args, { cwd, detached: true, stdio: 'ignore' })
+  proc.unref()
+}
 
 /** This package's `bin` (`dist/index.js`), the sibling of this module (`dist/servers.js`). */
 function binPath(): string {
@@ -239,6 +275,44 @@ export function bulbServerCommand(
 }
 
 /**
+ * The command to serve the `agent:<name>` mirror — pinned to this package's bin exactly like
+ * bulbServerCommand (the mirror shares the registry and trust store with its launcher, so version
+ * skew bites the same way). Always `--no-open`: the launcher prints the URL for its reader — agent
+ * or user — to open.
+ */
+export function agentViewerCommand(name: string): { command: string; args: string[] } {
+  return { command: process.execPath, args: [binPath(), `agent:${name}`, '--no-open'] }
+}
+
+/**
+ * Shared launch shape: dedup against `find`, spawn detached, then poll the same `find` until the
+ * child self-registers. Polling the registry (never the spawned pid) is what makes this correct:
+ * the entry carries the child's TRUE bound port (a port race could invalidate any pre-spawn guess),
+ * the Windows `start` indirection hides node's pid anyway, and a host that hot-reloaded mid-launch
+ * holds no process handle at all — the registry is the one channel that survives all three. Dedup
+ * already ruled out a prior live entry, so any match the poll finds is the child just spawned.
+ */
+async function launchDetached(
+  find: () => Promise<BulbServer | undefined>,
+  cmd: { command: string; args: string[] },
+  cwd: string,
+  label: string,
+): Promise<BulbServer> {
+  const existing = await find()
+  if (existing) return existing
+
+  spawnDetached(cmd.command, cmd.args, cwd)
+
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    await delay(150)
+    const found = await find()
+    if (found) return found
+  }
+  throw new Error(`Launched ${label} but it did not register within 20s.`)
+}
+
+/**
  * Launch — or re-attach to — a dev server for `file`. Idempotent per file: if one is
  * already live for it, returns that instead of spawning a second (no duplicate tab).
  * Otherwise spawns a detached, windowless child (the pinned bin — see bulbServerCommand)
@@ -251,35 +325,20 @@ export async function launchBulbServer(
   const cwd = opts.cwd ?? process.cwd()
   const abs = path.resolve(cwd, file)
 
-  // Idempotent by file, regardless of trust: a bulb already serving `file` is returned as-is
+  // Keyed by file, regardless of trust: a bulb already serving `file` is returned as-is
   // (no second tab). To change a running bulb's trust, stop it and relaunch — the caller can
   // read the live entry's `trust` and surface the mismatch rather than us silently re-spawning.
-  const existing = (await listBulbServers()).find(s => s.file === abs)
-  if (existing) return existing
+  const byFile = async () => (await listBulbServers()).find(s => s.file === abs)
+  return launchDetached(byFile, bulbServerCommand(file, opts), cwd, path.basename(file))
+}
 
-  const { command, args } = bulbServerCommand(file, opts)
-  // Outlive this process (the host hot-reloads constantly; a child tied to it dies on every reload)
-  // AND launch with NO console window. On Windows that means routing through `cmd /c start "" /b`:
-  // `start /b` runs windowless, whereas a bare detached spawn of a console app (node.exe) flashes a
-  // console window for a frame — an ugly regression. The explicit `""` title makes `start` treat the
-  // (quoted) node path as the command, not a window title, so spaces in the path are safe. POSIX
-  // detaches windowless directly. Either way the child self-registers its true port, so we poll by
-  // file (on Windows the `start` indirection also hides node's pid — which we don't need).
-  const proc =
-    process.platform === 'win32'
-      ? spawn('cmd', ['/c', 'start', '', '/b', command, ...args], { cwd, stdio: 'ignore', windowsHide: true })
-      : spawn(command, args, { cwd, detached: true, stdio: 'ignore' })
-  proc.unref()
-
-  // Poll the registry by file — the child self-registers once listening, with its TRUE bound port
-  // (a port race could invalidate any pre-spawn guess, and `proc.pid` alone carries no port). Idempotency
-  // above already ruled out a prior live entry, so any match here is the one we spawned. By-file (not
-  // proc.pid) also lets a host that reloaded mid-launch re-find the server it can no longer hold a handle to.
-  const deadline = Date.now() + 20_000
-  while (Date.now() < deadline) {
-    await delay(150)
-    const found = (await listBulbServers()).find(s => s.file === abs)
-    if (found) return found
-  }
-  throw new Error(`Launched ${path.basename(file)} but it did not register within 20s.`)
+/**
+ * Launch — or re-attach to — the `agent:<name>` mirror for `cwd`. Idempotent per cwd + agent
+ * (one mirror per project — TB-Agent-Mirror.md Invariant 2): a live mirror for this project is
+ * returned as-is. Otherwise spawns one detached and windowless (`agent:<name> --no-open`) and waits
+ * for it to self-register — by cwd + `agent` field, a mirror's identity (it has no file). This is
+ * bare `typebulb agent`'s launch path (TB-Skill.md).
+ */
+export async function launchAgentViewer(name: string, cwd = process.cwd()): Promise<BulbServer> {
+  return launchDetached(() => findProjectViewer(cwd, name), agentViewerCommand(name), cwd, `the ${name} mirror`)
 }

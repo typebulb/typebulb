@@ -1,7 +1,7 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -12,7 +12,8 @@ export interface CliArgs {
   /** Whether `--args` was passed (distinguishes an empty array from "use positionals"). */
   hasArgsFlag: boolean
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
-   *  target) prints what-to-do guidance instead of launching; `typebulb skill` prints the skill. */
+   *  target) ensures this project's mirror is up and prints what-to-do guidance;
+   *  `typebulb skill` prints the skill. */
   agentTarget?: string
   port: number
   watch: boolean
@@ -31,6 +32,10 @@ export interface CliArgs {
   follow: boolean
   /** `logs --lines N`: print only the last N lines (default: the whole captured log). */
   lines?: number
+  /** `wait --match <substring>`: only lines containing this wake the wait (default: any new line). */
+  match?: string
+  /** `wait --timeout <sec>`: give up (exit 2) after this long with no matching line. Default 1800. */
+  timeoutSec?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
    *  bulb and mirror across all projects — the housekeeping verb for the orphan pile. */
@@ -59,8 +64,9 @@ export function parseArgs(args: string[]): CliArgs {
   }
 
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
-  // `:<name>` target (`agent:claude` launches that mirror; bare `agent` emits the skill + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'stop', 'trust', 'untrust', 'skill', 'models'] as const
+  // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
+  // emits the skill pointer + status).
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -111,6 +117,20 @@ export function parseArgs(args: string[]): CliArgs {
       result.stopScope = 'agent'
     } else if (arg === '--global') {
       result.stopScope = 'global'
+    } else if (arg === '--match') {
+      const m = args[++i]
+      if (m === undefined) {
+        console.error('Missing value for --match (a substring new log lines must contain)')
+        process.exit(1)
+      }
+      result.match = m
+    } else if (arg === '--timeout') {
+      const t = parseInt(args[++i], 10)
+      if (isNaN(t) || t <= 0) {
+        console.error(`Invalid --timeout value: ${args[i]} (seconds)`)
+        process.exit(1)
+      }
+      result.timeoutSec = t
     } else if (arg === '--lines' || arg === '-n') {
       const n = parseInt(args[++i], 10)
       if (isNaN(n) || n < 0) {
@@ -176,11 +196,11 @@ typebulb - Local bulb runner for Typebulb
 
 Usage:
   typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
-  typebulb agent                 Start here — tells the agent how to show a bulb inline
-                                 or build one locally; prints the mirror URL when one is
-                                 up. Always exits 0 (it's a status report, not a check).
-  typebulb agent:claude          Open the agent mirror (a browser view over a Claude
-                                 Code session; 'agent:<name>' selects which agent).
+  typebulb agent                 An agent's first command — brings up the agent mirror
+                                 without opening a browser, prints its URL and the
+                                 authoring-skill paths. Always exits 0 (a status report).
+  typebulb agent:claude          Open the agent mirror (a browser view of your project's
+                                 Claude Code sessions; 'agent:<name>' selects which agent).
   typebulb skill                 Print this README as an Agent Skill (stdout), for the
                                  agent to read and copy into its own skills folder.
   typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints
@@ -197,6 +217,11 @@ Usage:
                                  (no arg: list this project's running servers).
                                  For agents: fetch tb.server.log / errors of a
                                  bulb you launched without watching its terminal.
+  typebulb wait [file|pid]       Block until the target server logs a new line,
+                                 print it, exit (2: timeout; 3: server died).
+                                 For agents: run it in the background — the exit
+                                 is your wake-up ('wait claude': embed outcomes;
+                                 'wait <file>': the bulb's own console.log).
   typebulb stop [file|pid]       Stop a running bulb server (no arg: list this
                                  project's running servers; a pid/path stops any).
                                  Batch flags: --bulbs (this project's bulbs, the
@@ -210,16 +235,19 @@ Usage:
 Options:
   -f, --follow                Stream new log output until interrupted (logs)
   -n, --lines <n>             Print only the last n lines (logs)
+  --match <substring>         Only lines containing this end the wait (wait)
+  --timeout <sec>             Give up waiting after this long; exit 2 (wait,
+                              default 1800)
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Use a specific port (default: 3000)
   --no-open                   Don't auto-open browser
   --trust                     Grant privileged capabilities (filesystem, AI,
                               and server.ts) for this run. Without it a bulb runs
-                              sandboxed: tb.fs / tb.ai / tb.server are blocked and
+                              Restricted: tb.fs / tb.ai / tb.server are blocked and
                               the page shows the exact --trust command to unlock
                               them. A bulb remembered via 'typebulb trust' runs
                               trusted without this flag.
-  --no-trust                  Force Restricted for this run even if the bulb is
+  --no-trust                  Force a Restricted run even if the bulb is
                               remembered-trusted (overrides the trust store).
   --mode <name>               Also load .env.<name> (+ .env.<name>.local) on top
                               of .env / .env.local. Free-form name; loads no mode

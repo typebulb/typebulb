@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, readdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
-import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand } from '../src/serve/serverRegistry.js'
+import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer } from '../src/serve/serverRegistry.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -71,6 +71,20 @@ describe('serverRegistry', () => {
     const global = await listBulbServers()
     expect(global.map(s => s.agent ?? s.file).sort()).toEqual(['claude', userBulb].sort())
   })
+
+  // The one-mirror-per-project dedup (TB-Agent-Mirror.md Invariant 2): a mirror is found by its
+  // launch cwd + `agent` field, never by file, and a mirror in another project is a false "up".
+  it('findProjectViewer matches a mirror by launch cwd, optionally narrowed by agent name', async () => {
+    const here = path.join(dir, 'projA')
+    const elsewhere = path.join(dir, 'projB')
+    await registerServer({ pid: process.pid, port: 3000, url: 'http://localhost:3000', file: 'agent:claude', cwd: here, startedAt: 1, agent: 'claude' })
+    await registerServer({ pid: process.ppid, port: 3001, url: 'http://localhost:3001', file: path.join(here, 'a.bulb.md'), cwd: here, startedAt: 2 })
+
+    expect((await findProjectViewer(here))?.agent).toBe('claude')        // any mirror, never the bulb
+    expect((await findProjectViewer(here, 'claude'))?.agent).toBe('claude')
+    expect(await findProjectViewer(here, 'codex')).toBeUndefined()       // narrowed to an absent agent
+    expect(await findProjectViewer(elsewhere)).toBeUndefined()           // another project's cwd
+  })
 })
 
 describe('bulbServerCommand — the child is pinned to this package, not unpinned npx', () => {
@@ -88,5 +102,13 @@ describe('bulbServerCommand — the child is pinned to this package, not unpinne
     expect(bulbServerCommand('/x.bulb.md', { trust: true }).args).toContain('--trust')
     expect(bulbServerCommand('/x.bulb.md', { open: true }).args).not.toContain('--no-open')
     expect(bulbServerCommand('/x.bulb.md', { open: false }).args).toContain('--no-open')
+  })
+
+  it('agentViewerCommand pins the same bin and always passes --no-open', () => {
+    const { command, args } = agentViewerCommand('claude')
+    expect(command).toBe(process.execPath)
+    expect(args[0].endsWith('index.js')).toBe(true)
+    expect(args).toContain('agent:claude')
+    expect(args).toContain('--no-open')
   })
 })

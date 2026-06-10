@@ -28,10 +28,11 @@ import { isKnownAgent, listAgentNames } from './agentViewer/registry.js'
 import { runCheck } from './commands/check.js'
 import { runPredict } from './commands/predict.js'
 import { runTrust } from './commands/trust.js'
-import { runAgent, findProjectViewer } from './commands/agent.js'
+import { runAgent } from './commands/agent.js'
 import { runModels } from './commands/models.js'
 import { runSkill } from './commands/skill.js'
-import { runLogs, runStop, runStopScope } from './commands/lifecycle.js'
+import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
+import { findProjectViewer } from './serve/serverRegistry.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
 import { runConsole } from './run/console.js'
@@ -74,6 +75,10 @@ async function main(): Promise<void> {
     await runLogs(args.file || undefined, { follow: args.follow, lines: args.lines })
     return
   }
+  if (args.subcommand === 'wait') {
+    await runWait(args.file || undefined, { match: args.match, timeoutSec: args.timeoutSec ?? 1800 })
+    return
+  }
   if (args.subcommand === 'stop') {
     if (args.stopScope) await runStopScope(args.stopScope)
     else await runStop(args.file || undefined)
@@ -88,7 +93,8 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'agent') {
-    // Bare `agent` → print the what-to-do guidance and stop. `agent:<name>` launches that mirror.
+    // Bare `agent` → ensure this project's mirror is up (launching one detached if none is) and
+    // print the what-to-do guidance. `agent:<name>` serves that mirror in the foreground.
     if (!args.agentTarget) {
       await runAgent()
       return
