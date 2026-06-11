@@ -219,7 +219,7 @@ The agent mirror turns that block into a live, sandboxed app, with a *breakout �
 
 The host owns a bulb's **width**; you own its **height**.
 
-**Width is the host's.** Standalone, a bulb fills its browser window; in the agent mirror, an embed fits the conversation column by default, with a per-embed *spread* toggle to the full transcript width — and a cap so a tall embed doesn't run away down the transcript. Don't set a width or guess how much room you'll get.
+**Width is the host's.** Standalone, a bulb fills its browser window; in the agent mirror, an embed fits the conversation column by default, with a per-embed *spread* toggle to the full transcript width — and a cap so a tall embed doesn't run away down the transcript. Don't set a width or guess how much room you'll get. `max-width` is the one width worth setting — a readability cap that only declines excess, so it's safe at any granted width. It's also what *spread* runs into: a dense visualization that earns the full transcript width should omit it.
 
 **Height follows your content.** Set a height that adapts — content-driven or viewport-filling — never a fixed pixel value, which neither grows to fill a broken-out window nor shrinks to its content. Prose, a form, a chart flow to their natural height: set none. A full-bleed surface with no natural height of its own gets `height: 100dvh` **and** a pixel floor like `min-height: 420px`. Both are needed — `100dvh` fills its own window if the bulb is broken out, and the floor holds a definite band when embedded. Without the floor a bare `100dvh` collapses to zero embedded, because the mirror sizes an embed to its content height and `100dvh` gives it nothing to measure against.
 
@@ -251,6 +251,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
 - **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
+- **Charts: prefer a bulb over mermaid's `xychart`** unless a static, unlabeled bar or line is enough — start from the [Charts](#charts) skeleton.
 - **`tb.json<T>(n)` is generic** — `tb.json<Album[]>(0)` returns typed parsed JSON; `tb.data(n)` returns the raw string.
 - **`tb.proxy()` is for same-origin Web Worker / WASM loads** — e.g. ffmpeg or tesseract: `tb.proxy("https://unpkg.com/...")` routes the CDN URL through the local server's origin.
 - **Prefer an `index.html` fragment** over a full HTML document — usually just the mount stub (`<div id="root"></div>`).
@@ -349,6 +350,97 @@ const { text } = await tb.ai({
 ```
 
 Provider support varies — the level is mapped to provider-specific parameters (e.g. Anthropic's adaptive thinking, OpenAI's reasoning effort).
+
+## Charts
+
+Mermaid's `xychart-beta` is static, unlabeled bars and lines — no tooltips, no legend, no other chart types. Anything more is a bulb. Start from this skeleton:
+
+````markdown
+---
+format: typebulb/v1
+name: Revenue vs Cost
+---
+
+**code.tsx**
+
+```tsx
+import React from "react"
+import { createRoot } from "react-dom/client"
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer } from "recharts"
+
+type Point = { month: string; revenue: number; cost: number }
+const data = tb.json<Point[]>(0)
+
+function App() {
+  return (
+    <div className="wrap">
+      <h1>Revenue vs Cost</h1>
+      <ResponsiveContainer width="100%" height={320}>
+        <LineChart data={data}>
+          <CartesianGrid stroke="currentColor" strokeOpacity={0.1} />
+          <XAxis dataKey="month" stroke="currentColor" tick={{ fill: "currentColor", fontSize: 12 }} />
+          <YAxis stroke="currentColor" tick={{ fill: "currentColor", fontSize: 12 }} />
+          <Tooltip contentStyle={{ background: "Canvas", color: "CanvasText",
+            border: "1px solid currentColor", borderRadius: 6 }} />
+          <Legend wrapperStyle={{ fontSize: 13 }} />
+          <Line dataKey="revenue" stroke="#14b8a6" strokeWidth={2} />
+          <Line dataKey="cost" stroke="#e11d48" strokeWidth={2} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+createRoot(document.getElementById("root")!).render(<App />)
+```
+
+**index.html**
+
+```html
+<div id="root"></div>
+```
+
+**styles.css**
+
+```css
+.wrap {
+  max-width: 720px;        /* readability cap — omit when the chart earns spread width */
+  margin: 0 auto;          /* horizontal centering only */
+  padding: 24px 16px;      /* vertical space as padding, never margin (see Sizing) */
+  font: 14px system-ui, sans-serif;
+}
+h1 { font-size: 18px; margin: 0 0 12px; }
+```
+
+**data.txt**
+
+```txt
+[
+  { "month": "Jan", "revenue": 12, "cost": 8 },
+  { "month": "Feb", "revenue": 14, "cost": 9 },
+  { "month": "Mar", "revenue": 11, "cost": 10 },
+  { "month": "Apr", "revenue": 17, "cost": 10 },
+  { "month": "May", "revenue": 21, "cost": 12 },
+  { "month": "Jun", "revenue": 24, "cost": 12 }
+]
+```
+
+**config.json**
+
+```json
+{
+  "description": "Monthly revenue vs cost as a two-series line chart.",
+  "dependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "recharts": "^3.8.1"
+  }
+}
+```
+````
+
+The non-obvious bits: axes and grid off `currentColor` (light/dark with zero theme JS), the tooltip on `Canvas`/`CanvasText` system colors, and an explicit height on `ResponsiveContainer` — a chart has no natural height; the root still sizes to content. For point-dense marks (thousands of scatter dots or bars) or types recharts lacks (heatmap, candlestick, gauge), use `echarts` (canvas) instead.
 
 ## License
 
