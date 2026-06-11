@@ -157,7 +157,8 @@ body {
 .picker, .servers-pop {
   --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
                               mismatched cap reads as a glitch; .picker grows to it, .servers-pop
-                              is fixed at it (see its comment). Sized to show exactly 12 rows
+                              too (the drilled-in console is the one fixed-height exception, see
+                              .log-mode). Sized to show exactly 12 rows
                               (12 × --menu-row-h + 11 gaps + filter + padding) — recognition fades
                               past ~12 and search owns the tail. Plain px: desktop-only surface,
                               every desktop window fits it. 428, not 427: at 427 the two menus land
@@ -166,6 +167,16 @@ body {
   --menu-row-h: 29px;      /* one row height for both menus' lists — rows must match pitch exactly
                               or the side-by-side menus read as two designs. Whole px, eyeball-tuned;
                               the row paddings are kept below it so this floor is what governs. */
+  /* ONE geometry contract for both menus — sizing policy, padding, stacking. Stating it twice is
+     how every sibling discrepancy of June '26 happened (row pitch, gaps, fixed-vs-grow). max-height,
+     not height: a menu hugs its content and caps at the 12 rows above — a fixed height left a
+     1-bulb project with a row floating atop a 400px void. Per-menu rules keep only width. */
+  max-height: var(--menu-h);
+  overflow: hidden;
+  padding: .35rem;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
   position: absolute;
   bottom: calc(100% + .35rem);
   right: 0;
@@ -220,15 +231,7 @@ body {
 
 /* Session list — shares the popover chrome (.picker above); these are
    just its own dimensions. */
-.picker {
-  width: min(440px, calc(100vw - 2rem));
-  max-height: var(--menu-h);
-  overflow: hidden;
-  padding: .35rem;
-  display: flex;
-  flex-direction: column;
-  gap: .15rem;
-}
+.picker { width: min(440px, calc(100vw - 2rem)); }
 /* The filter (.bulb-filter-control) pins at the bottom — the popover's anchored edge, so it never
    jumps as the filtered list changes height; the row list scrolls inside the capped box, resting at
    its end (newest-at-bottom) — same shape as the launcher's .servers-pop / .bulb-list. */
@@ -298,18 +301,8 @@ body {
    and the metadata/controls form a right-aligned cluster of fixed-width columns (logs · trust ·
    time/port) that line up row-to-row — right-anchored, so the rightmost (time/port) always aligns and
    the rest stack inward (logs and time/port share a width; trust is wider, to fit "restricted"). The
-   box is a FIXED size shared with the drilled-in console (.log-mode below): flipping list⇄console
-   swaps only the contents, not the frame, so it doesn't jump. The filter pins to the top and the list
-   scrolls inside (see .bulb-list). */
-.servers-pop {
-  width: min(560px, calc(100vw - 2rem));
-  height: var(--menu-h);
-  overflow: hidden;
-  padding: .35rem;
-  display: flex;
-  flex-direction: column;
-  gap: .15rem;
-}
+   filter pins at the bottom and the list scrolls inside (see .bulb-list). */
+.servers-pop { width: min(560px, calc(100vw - 2rem)); }
 .server-row {
   /* Subgrid: all rows share ONE set of column tracks (defined on .bulb-list). A per-row grid sizes
      its columns independently — which is exactly what broke alignment (a stopped row with no
@@ -457,7 +450,10 @@ a.server-port:hover { text-decoration: underline; }
    body fills the popover's height. overflow:hidden lets the rounded popover border clip the
    square head/body; the body scrolls internally. */
 .servers-pop.log-mode {
-  padding: 0;   /* same fixed width/height as the list (.servers-pop); only the chrome differs */
+  padding: 0;
+  /* The one fixed-height surface: a console wants its full frame regardless of how little it has
+     logged yet — a height that tracked the log would grow line by line. */
+  height: var(--menu-h);
 }
 .servers-pop.log-mode:focus { outline: none; }
 .bulb-log-head {
