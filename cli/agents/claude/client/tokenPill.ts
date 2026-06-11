@@ -18,6 +18,6 @@ export class TokenPill extends Component {
     // (no separate statusbar element): the chip shimmers while CC is mid-turn, the count
     // frozen until the flush; a fresh session has no count yet, so the word stands in.
     return span({ class: 'token-wrap' },
-      span({ class: ['token', busy ? 'busy' : ''] }, total > 0 ? `${formatTokens(total)} tokens` : 'working…'))
+      span({ class: ['token', busy ? 'busy shimmer shimmer-slow' : ''] }, total > 0 ? `${formatTokens(total)} tokens` : 'working…'))
   }
 }

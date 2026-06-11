@@ -145,7 +145,7 @@ export class BulbEmbed extends Component {
         () => { this.showingCode = !this.showingCode; this.update() }),
       this.#pill(['bulb-copy', this.copied ? 'done' : ''], this.copied ? 'copied' : 'copy',
         "Copy this bulb's full source", () => this.#copy()),
-      button({ class: ['overlay-pill', 'bulb-breakout', this.#breakoutState === 'busy' ? 'launching' : ''], type: 'button',
+      button({ class: ['overlay-pill', 'bulb-breakout', this.#breakoutState === 'busy' ? 'launching shimmer' : ''], type: 'button',
         disabled: this.#breakoutState !== 'idle', title: 'Save as a standalone .bulb.md and open it with typebulb',
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.#breakout() } }, breakoutLabel),
     )

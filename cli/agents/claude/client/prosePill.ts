@@ -11,7 +11,7 @@ export class ProsePill extends Component {
     const on = this.parent.prose
     return button({
       class: ['pill', 'glyph', on ? 'on' : ''],
-      title: on ? 'Show tool steps' : 'Prose only — hide tool steps',
+      title: on ? 'Trace view' : 'Content view',
       onClick: () => { this.parent.prose = !on; this.update() },
     }, span({ class: 'glyph-img' }, '🙈'))
   }

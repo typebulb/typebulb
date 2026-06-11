@@ -669,6 +669,70 @@ export async function listSessions() {
     .map(({ sessionId, file, mtime }) => ({ sessionId, mtime, preview: readPreview(file) }))
 }
 
+// ---- full-text session search ----
+
+// The searchable text of one transcript, display-cleaned through the same cleanUserText /
+// isHiddenTurn path the chat renders through — a hit is something that was said, never a harness
+// envelope or a tool echo. Lazy in-memory cache keyed by mtime: the first query pays the scan,
+// repeats are instant, a changed file re-extracts alone. Pure parse, no inference (Invariant 1).
+type SearchTurn = { text: string; lower: string }
+const searchCache = new Map<string, { mtime: number; turns: SearchTurn[] }>()
+
+function searchTurns(file: string, mtime: number): SearchTurn[] {
+  const hit = searchCache.get(file)
+  if (hit && hit.mtime === mtime) return hit.turns
+  const turns: SearchTurn[] = []
+  let raw = ''
+  try { raw = readFileSync(file, 'utf8') } catch { return [] }
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    let e: JsonlEntry
+    try { e = JSON.parse(line) } catch { continue }
+    if (!e || isHiddenTurn(e) || (e.type !== 'user' && e.type !== 'assistant')) continue
+    const c = e.message?.content
+    let text = ''
+    if (typeof c === 'string') text = cleanUserText(c)
+    else if (Array.isArray(c)) {
+      const blocks = c as ContentBlock[]
+      text = e.type === 'user'
+        ? blocks.map(userTextBlock).filter(Boolean).join(' ')
+        : blocks.filter(b => b.type === 'text' && typeof b.text === 'string').map(b => b.text!).join(' ')
+    }
+    text = text.replace(/\s+/g, ' ').trim()
+    if (text) turns.push({ text, lower: text.toLowerCase() })
+  }
+  searchCache.set(file, { mtime, turns })
+  return turns
+}
+
+const SEARCH_MAX_SESSIONS = 50
+const SEARCH_SNIPPET_CHARS = 110
+
+// Newest-first, so the cap keeps the most recent matching sessions. hitCount counts matching turns;
+// the snippet is the first hit with context either side, highlighted client-side.
+export async function searchSessions(query: string) {
+  const q = query.toLowerCase()
+  const out: { sessionId: string; mtime: number; preview: string; hitCount: number; snippet: string }[] = []
+  for (const { sessionId, file, mtime } of sessionFiles(state.cwd).sort((a, b) => b.mtime - a.mtime)) {
+    let hitCount = 0
+    let snippet = ''
+    for (const turn of searchTurns(file, mtime)) {
+      const i = turn.lower.indexOf(q)
+      if (i < 0) continue
+      hitCount++
+      if (!snippet) {
+        const start = Math.max(0, i - SEARCH_SNIPPET_CHARS)
+        const end = Math.min(turn.text.length, i + q.length + SEARCH_SNIPPET_CHARS)
+        snippet = (start > 0 ? '…' : '') + turn.text.slice(start, end) + (end < turn.text.length ? '…' : '')
+      }
+    }
+    if (!hitCount) continue
+    out.push({ sessionId, mtime, preview: readPreview(file), hitCount, snippet })
+    if (out.length >= SEARCH_MAX_SESSIONS) break
+  }
+  return out
+}
+
 export async function attach(sessionId: string) {
   const s = state
   const file = join(projectDir(s.cwd), `${sessionId}.jsonl`)

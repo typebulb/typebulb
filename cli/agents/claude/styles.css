@@ -155,6 +155,17 @@ body {
    cluster spaces evenly regardless of which pills are present. */
 .token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty { display: none; }
 .picker, .servers-pop {
+  --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
+                              mismatched cap reads as a glitch; .picker grows to it, .servers-pop
+                              is fixed at it (see its comment). Sized to show exactly 12 rows
+                              (12 × --menu-row-h + 11 gaps + filter + padding) — recognition fades
+                              past ~12 and search owns the tail. Plain px: desktop-only surface,
+                              every desktop window fits it. 428, not 427: at 427 the two menus land
+                              on different device-pixel roundings, a 1px sibling mismatch — the
+                              lesser evil is 1px off the ideal height. */
+  --menu-row-h: 29px;      /* one row height for both menus' lists — rows must match pitch exactly
+                              or the side-by-side menus read as two designs. Whole px, eyeball-tuned;
+                              the row paddings are kept below it so this floor is what governs. */
   position: absolute;
   bottom: calc(100% + .35rem);
   right: 0;
@@ -165,56 +176,86 @@ body {
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
 
+/* ---- Shimmer — the one "working" cue. One gradient, one keyframes, composed via class, never
+   re-pasted (paste-drift is how each new shimmer kept landing at its own speed). `.shimmer` sweeps
+   the element's background; `.shimmer-text` clips the sweep to the glyphs alone. Knobs, set by the
+   using rule: --shimmer-base (the gradient's resting color — transparent for see-through chrome, an
+   opaque surface for pills that must cover content) and --shimmer-mix (accent strength). Pick the
+   cadence by the band's LINEAR speed, which is what reads consistent: travel is proportional to
+   element width (background-size 250%), and ~2rem/s is the calibrated pace — so narrow chrome
+   (a 1.7rem play button) takes the 2.2s default and anything text-width or wider takes
+   `.shimmer-slow` (7s). A fast sweep reads as urgency, not progress. */
+/* The state longhands are !important: this class composes onto elements whose resting rules set a
+   `background:` shorthand at arbitrary specificity (button resets, .overlay-pill, :hover tints) —
+   any of which would silently kill the gradient (the bug that ate the play button's shimmer). A
+   working cue must win while it's on; resting background-color still shows beneath the sweep. */
+.shimmer, .shimmer-text { background-size: 250% 100% !important; animation: bulb-shimmer var(--shimmer-speed, 2.2s) linear infinite !important; }
+.shimmer {
+  background-image: linear-gradient(100deg, var(--shimmer-base, transparent) 30%, color-mix(in srgb, var(--accent) var(--shimmer-mix, 35%), var(--shimmer-base, transparent)) 50%, var(--shimmer-base, transparent) 70%) !important;
+  background-color: var(--shimmer-base, transparent);
+}
+.shimmer-text {
+  /* Shrink-to-fit, so the sweep paces the text's own length, not the container's — on a full-width
+     box the band spends most of its run off-glyph (same move as typebulb.com's shimmer.ts). */
+  display: inline-block;
+  background-image: linear-gradient(100deg, currentColor 35%, var(--accent) 50%, currentColor 65%) !important;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.shimmer-slow { --shimmer-speed: 7s; }
+@keyframes bulb-shimmer { from { background-position: 250% 0; } to { background-position: -250% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none !important; background: color-mix(in srgb, var(--accent) 15%, var(--shimmer-base, transparent)) !important; }
+  .shimmer-text { animation: none !important; background: none !important; -webkit-text-fill-color: currentColor; }
+}
+
 /* CC mid-turn: the token pill doubles as the working indicator — an accent shimmer
    over the chip, the count frozen until the turn flushes. Passive — driven by the
    live-chain leaf, not a live token stream (the JSONL is flushed in batches, so this
-   can sit lit through a multi-minute buffering window). The sweep blends with
-   --panel, not transparent like .launching's: statusbar pills must stay opaque over
-   the message text the strip lets through. */
-.token.busy {
-  border-color: var(--accent);
-  background: linear-gradient(100deg, var(--panel) 30%, color-mix(in srgb, var(--accent) 25%, var(--panel)) 50%, var(--panel) 70%);
-  background-size: 250% 100%;
-  /* Much slower than .launching's sweep: that one paces a ~2s wait, this can sit lit for
-     minutes — at that dwell a fast sweep reads as urgency, not progress. */
-  animation: bulb-shimmer 7s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .token.busy { animation: none; background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
-}
+   can sit lit through a multi-minute buffering window — hence shimmer-slow). The sweep
+   blends with --panel, not transparent like the launch buttons': statusbar pills must
+   stay opaque over the message text the strip lets through. */
+.token.busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
 
 /* Session list — shares the popover chrome (.picker above); these are
    just its own dimensions. */
 .picker {
   width: min(440px, calc(100vw - 2rem));
-  max-height: 60vh;
+  max-height: var(--menu-h);
   overflow: hidden;
   padding: .35rem;
   display: flex;
   flex-direction: column;
   gap: .15rem;
 }
-/* The filter (.bulb-filter-control) pins at the top; the row list scrolls inside the capped box —
-   same shape as the launcher's .servers-pop / .bulb-list. */
+/* The filter (.bulb-filter-control) pins at the bottom — the popover's anchored edge, so it never
+   jumps as the filtered list changes height; the row list scrolls inside the capped box, resting at
+   its end (newest-at-bottom) — same shape as the launcher's .servers-pop / .bulb-list. */
 .picker-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .picker-empty { padding: .8rem; color: var(--muted); font-size: .85rem; text-align: center; }
 .picker-row {
   display: flex;
-  gap: .6rem;
-  align-items: baseline;
-  padding: .45rem .55rem;
+  flex-direction: column;
+  /* flex:none — the explicit min-height below replaces flexbox's implicit min-height:auto floor,
+     which would otherwise let an overflowing list squash rows below their content (snippet rows
+     rendered as overlapping text). The list scrolls; rows never compress. */
+  flex: none;
+  gap: .2rem;
+  /* min-height, not height: a full-text result row grows for its snippet line. */
+  padding: .35rem .55rem;
+  min-height: var(--menu-row-h);
+  box-sizing: border-box;
+  justify-content: center;
   border-radius: 6px;
   cursor: pointer;
-  border: 1px solid transparent;
   font-size: .85rem;
 }
+.picker-row-main { display: flex; gap: .6rem; align-items: baseline; }
 .picker:focus { outline: none; }   /* the list owns its own highlight; no focus ring */
 .picker-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-/* Keyboard cursor (arrow keys / hover) — matches the bulb picker's .active row. */
-.picker-row.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
+/* Keyboard cursor (arrow keys / hover) — same borderless tint as the launcher's .server-row.active. */
+.picker-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 /* The attached session — a leading accent dot in its own gutter slot, reserved (transparent) on
    every row so titles align whether or not it's shown, and filled only on the attached row so it
    reads as "you are here" even when the cursor has moved off. */
@@ -237,6 +278,20 @@ body {
   font-size: .72rem;
   min-width: 2.6rem; text-align: right;
 }
+.picker-hits { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+/* Full-text result context: first matching turn, indented past the dot gutter into the title column. */
+.picker-snippet {
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.4;
+  margin-left: calc(7px + .6rem);
+  overflow-wrap: anywhere;
+}
+.picker-mark {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 2px;
+  color: var(--fg);
+}
 
 /* Running-breakouts list — shares the popover chrome (.servers-pop above); its own dimensions +
    per-row layout: the play/stop button + name read together on the left (▶/■ Title, name flex:1),
@@ -248,7 +303,7 @@ body {
    scrolls inside (see .bulb-list). */
 .servers-pop {
   width: min(560px, calc(100vw - 2rem));
-  height: min(66vh, 560px);
+  height: var(--menu-h);
   overflow: hidden;
   padding: .35rem;
   display: flex;
@@ -271,7 +326,8 @@ body {
      the left, an asymmetry). Text gets its breathing room inside the highlight via end-item margins
      (.server-stop/.bulb-launch on the left, .server-port/.bulb-time on the right) rather than row
      padding, which would shift the subgrid tracks and break alignment. */
-  padding: .15rem 0;
+  padding: .05rem 0;
+  min-height: var(--menu-row-h);
   border-radius: 6px;
   font-size: .85rem;
 }
@@ -294,7 +350,7 @@ a.server-port:hover { text-decoration: underline; }
 /* Launcher filter box — pinned above the list; type to narrow (matches name + path). The control
    wrapper pins to the top and anchors the clear (×) at the far right (position:relative + the
    input's right padding reserves its room). */
-.bulb-filter-control { position: relative; flex: none; margin-bottom: .35rem; }
+.bulb-filter-control { position: relative; flex: none; margin-top: .35rem; }
 .bulb-filter {
   font: inherit;
   font-size: .82rem;
@@ -315,11 +371,29 @@ a.server-port:hover { text-decoration: underline; }
   color: var(--muted); font-size: 1.05rem; line-height: 1; padding: 0 .3rem; border-radius: 4px;
 }
 .bulb-filter-clear:hover { color: var(--accent); }
+/* Filter-mode toggle (full-text search) — inset at the input's right edge; the clear × shifts
+   inward beside it. Only rendered when the host passes a trailing control (the session picker). */
+.bulb-filter-control.has-trailing .bulb-filter { padding-right: 3.8rem; }
+.bulb-filter-control.has-trailing .bulb-filter-clear { right: 2.5rem; }
+.bulb-filter-mode {
+  /* Stretches flush to the input's top/right/bottom, inside its 1px border; the right corners
+     match the input's 6px radius so the latched fill reads as part of the box. */
+  position: absolute; right: 1px; top: 1px; bottom: 1px;
+  appearance: none; border: none; background: transparent; cursor: pointer;
+  font-size: .8rem; line-height: 1; padding: 0 .45rem;
+  border-radius: 0 5px 5px 0;
+}
+/* Same state cue as the prose pill's glyph: the emoji can't take currentColor, so it goes
+   grayscale at rest, color while hovered or on — filtered on the inner span, never the button. */
+.bulb-filter-mode .glyph-img { filter: grayscale(1); opacity: .75; }
+.bulb-filter-mode:hover .glyph-img, .bulb-filter-mode.on .glyph-img { filter: none; opacity: 1; }
+/* Latched: a --panel fill — the popover's own surface, one step off the input's --bg. */
+.bulb-filter-mode.on { background: var(--panel); }
 /* Scrolls within the fixed-height popover so the filter stays put and the box never grows. */
 /* The shared grid for the launcher rows: each .server-row is a subgrid spanning these tracks, so
    columns line up row-to-row. auto cols size to their widest content (tight, no slack); 1fr is the
    name. A small right padding keeps the selected-row highlight off the scrollbar. */
-.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; column-gap: .6rem; row-gap: .05rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
 .bulb-time { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; margin-right: .4rem; }
@@ -331,7 +405,9 @@ a.server-port:hover { text-decoration: underline; }
   background: transparent; border: 1px solid var(--border); border-radius: 5px;
   height: 1.7rem; display: inline-flex; align-items: center; justify-content: center;
 }
-.trust-toggle { font-size: .76rem; padding: 0 .5rem; color: var(--muted); justify-self: center; }
+/* Shorter than the icon buttons: a bordered text pill at full row height reads as cramped, where
+   the round play/stop icons are meant to fill it. */
+.trust-toggle { font-size: .76rem; height: 1.45rem; padding: 0 .5rem; color: var(--muted); justify-self: center; }
 .trust-toggle:hover, .trust-toggle.on { color: var(--accent); border-color: var(--accent); }
 .server-stop, .bulb-launch { width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
 .btn-icon { display: block; }
@@ -344,18 +420,7 @@ a.server-port:hover { text-decoration: underline; }
 /* Launching: stays visible (hover-independent) and shimmers until the row flips to a stop button,
    so the ~2s wait reads as "working" rather than a dead click. Transient — driven by the in-memory
    launching set, never persisted. */
-.bulb-launch.launching {
-  visibility: visible; border-color: var(--accent);
-  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 70%);
-  background-size: 250% 100%;
-  /* One full pass per ~2s wait — slow enough to stay calm, fast enough that the band
-     is guaranteed to cross while the user is actually watching. */
-  animation: bulb-shimmer 2.2s linear infinite;
-}
-@keyframes bulb-shimmer { from { background-position: 250% 0; } to { background-position: -250% 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .bulb-launch.launching { animation: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
-}
+.bulb-launch.launching { visibility: visible; border-color: var(--accent); }
 .server-stop { color: var(--muted); }
 .server-stop:hover { color: var(--err); border-color: var(--err); }
 /* Elevation prompt (VS-Code-Workspace-Trust style) — a modal over the whole view, since a
@@ -789,18 +854,10 @@ a.server-port:hover { text-decoration: underline; }
 .md .bulb-embed:hover .bulb-controls .overlay-pill,
 .md .bulb-controls .overlay-pill:focus-visible { opacity: 1; }
 .md .bulb-breakout:disabled { cursor: default; opacity: 1; }
-/* Breakout in flight: shimmer through the ~2s write+spawn wait so the click reads as "working"
-   rather than dead — the same treatment (and shared keyframes) as the launcher's play button
-   (.bulb-launch.launching). :disabled already keeps it visible if the pointer leaves. */
-.md .bulb-breakout.launching {
-  color: var(--accent); border-color: var(--accent);
-  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 70%);
-  background-size: 250% 100%;
-  animation: bulb-shimmer 2.2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .md .bulb-breakout.launching { animation: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
-}
+/* Breakout in flight: shimmers through the ~2s write+spawn wait so the click reads as "working"
+   rather than dead — same treatment as the launcher's play button (.bulb-launch.launching).
+   :disabled already keeps it visible if the pointer leaves. */
+.md .bulb-breakout.launching { color: var(--accent); border-color: var(--accent); }
 /* Copy pill "copied" flash — mirrors the message .copy.done accent cue, scoped to the
    embed control so it doesn't pick up the bubble-hover reveal. */
 .md .bulb-copy.done { color: var(--accent); border-color: var(--accent); }

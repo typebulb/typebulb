@@ -38,11 +38,12 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   reportEnv(envResult, path.join(basePath, 'mirror'))
 
   // The mirror's built assets live beside this bundle in `dist/agents/claude/`
-  // (client.js + styles.css + index.html, emitted by esbuild.config.mjs). The matching source is
-  // a sibling of `dist/` (repo only — a published install ships just `dist/`); it drives hot reload.
+  // (client.js + styles.css + index.html, emitted by esbuild.config.mjs). The matching source lives
+  // in `cli/agents/claude` beside `dist/` (repo only — a published install ships just `dist/`, so
+  // the dir won't exist there); it drives hot reload.
   const distDir = path.dirname(fileURLToPath(import.meta.url))
   const assetDir = path.join(distDir, 'agents', 'claude')
-  const sourceDir = path.join(distDir, '..', 'agents', 'claude')
+  const sourceDir = path.join(distDir, '..', 'cli', 'agents', 'claude')
   const stylesPath = path.join(assetDir, 'styles.css')
   const mountPath = path.join(assetDir, 'index.html')
 

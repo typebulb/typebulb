@@ -1,4 +1,4 @@
-import { Component } from 'domeleon'
+import { Component, type UpdateEvent } from 'domeleon'
 import { armOutsideClose } from './ui.js'
 import type { IRoot } from './types.js'
 
@@ -64,9 +64,26 @@ export abstract class ComboboxPill extends StatusPill {
 
   clearFilter() {
     this.filter = ''
-    this.highlighted = 0
+    this.onFilterChanged()
     this.update()
     this.focusFilter()
+  }
+
+  // Bottom-anchored layout (TB-Agent-Mirror.md): the popovers open upward with the filter at the
+  // anchored edge and rows newest-at-bottom, so the list rests scrolled to its end.
+  protected pinToBottom() {
+    setTimeout(() => { const el = this.listEl(); if (el) el.scrollTop = el.scrollHeight })
+  }
+
+  // A filter edit lands here after the bound input has updated the model — so itemCount() sees the
+  // refiltered list — restarting the highlight at the row nearest the input (the newest) and
+  // re-pinning the scroll (shrinking clamps to the end by itself; growing back doesn't).
+  override onUpdated(e: UpdateEvent) {
+    if (e.component === this && e.key === 'filter') this.onFilterChanged()
+  }
+  protected onFilterChanged() {
+    this.highlighted = Math.max(0, this.itemCount() - 1)
+    this.pinToBottom()
   }
 
   // Combobox cursor: move the highlight within the current list and scroll it into view (the one
@@ -85,12 +102,12 @@ export abstract class ComboboxPill extends StatusPill {
   }
 
   // Filter-input keys: nav keys move/activate the highlight, Escape closes; any other key falls
-  // through to edit the filter, restarting the highlight at the top.
+  // through to edit the filter — the highlight restart happens in onFilterChanged, once the
+  // refiltered list has rendered.
   protected onFilterKey(e: KeyboardEvent) {
     if (e.key === 'Escape') this.close()
     else if (e.key === 'ArrowDown') { e.preventDefault(); this.moveHighlight(1) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); this.moveHighlight(-1) }
     else if (e.key === 'Enter') { e.preventDefault(); this.activateHighlighted() }
-    else this.highlighted = 0
   }
 }

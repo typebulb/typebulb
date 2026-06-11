@@ -1,4 +1,4 @@
-import { Component, div, button, inputText } from 'domeleon'
+import { Component, div, button, inputText, type VElement } from 'domeleon'
 
 // Shared filter input + clear (×) for the bulb launcher and the session picker — one copy of the
 // filter chrome (the bulb-local analogue of client's uiHelpers/searchBox; the bulb can't import
@@ -12,8 +12,9 @@ export function searchFilter(opts: {
   hasValue: boolean
   onKeyDown: (e: KeyboardEvent) => void
   onClear: () => void
+  trailing?: VElement     // a host control inset at the input's right edge (the picker's mode toggle)
 }) {
-  return div({ class: 'bulb-filter-control' },
+  return div({ class: ['bulb-filter-control', opts.trailing ? 'has-trailing' : ''] },
     inputText({
       target: opts.target,
       prop: opts.prop,
@@ -25,6 +26,7 @@ export function searchFilter(opts: {
       ? button({ class: 'bulb-filter-clear', type: 'button', title: 'Clear filter', ariaLabel: 'Clear filter',
           onClick: (e: MouseEvent) => { e.stopPropagation(); opts.onClear() } }, '×')
       : null,
+    opts.trailing ?? null,
   )
 }
 

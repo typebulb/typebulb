@@ -105,8 +105,8 @@ export class BulbsPill extends ComboboxPill {
   // Project files ∪ running servers, keyed by path. The host's own file (and byte-identical copies)
   // are already dropped server-side in listBulbFiles; its own running server is dropped here by pid.
   // A running server outside the project still shows so the off-switch stays unified. MRU = max(file
-  // mtime, server startedAt), so just-edited and just-launched both float up. Filter matches name + path.
-  rows(): BulbRow[] {
+  // mtime, server startedAt).
+  merged(): BulbRow[] {
     const byKey = new Map<string, BulbRow>()
     for (const f of this.files) {
       byKey.set(pathKey(f.path), { path: f.path, name: f.name, recent: f.mtime, trusted: f.trusted })
@@ -120,17 +120,24 @@ export class BulbsPill extends ComboboxPill {
       row.recent = Math.max(row.recent, s.startedAt)
       byKey.set(k, row)
     }
+    return [...byKey.values()]
+  }
+
+  // Display order is newest-at-bottom, so just-edited and just-launched both sit adjacent to the
+  // filter input at the anchored edge. Filter matches name + path.
+  rows(): BulbRow[] {
     const q = this.filter.trim().toLowerCase()
-    let rows = [...byKey.values()]
+    let rows = this.merged()
     if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
-    return rows.sort((a, b) => b.recent - a.recent)
+    return rows.sort((a, b) => a.recent - b.recent)
   }
 
   show() {
     this.beginOpen()
-    this.highlighted = 0
     this.refresh()
+    this.highlighted = Math.max(0, this.itemCount() - 1)
     this.update()
+    this.pinToBottom()
     this.armClose()
     this.focusFilter()
   }
@@ -288,16 +295,25 @@ export class BulbsPill extends ComboboxPill {
 
   // Shared modal chrome for both trust prompts (TB-Security.md). It lives here, in the
   // launcher — a surface the launched bulb's page can't script — so a bulb can trigger a prompt but
-  // never self-grant (Trust spec Invariant 3). Backdrop click runs onDismiss.
+  // never self-grant (Trust spec Invariant 3). Backdrop click and Escape both run onDismiss;
+  // focused on mount so Escape lands here without a click first.
   trustModal(cfg: { heading: string; body: string; warn: string; noLabel: string; yesLabel: string; onNo: () => void; onYes: () => void; onDismiss: () => void }) {
-    return div({ class: 'trust-back', onClick: (e: MouseEvent) => { e.stopPropagation(); cfg.onDismiss() } },
+    // Every way out of the modal shares one exit protocol: swallow the event, run the action, and
+    // return focus to the filter (when the popover is open) — the modal stole focus on mount, and
+    // unmounting would drop it on <body>, where the next Esc — which should close the popover —
+    // lands on nothing.
+    const act = (e: Event, fn: () => void) => { e.stopPropagation(); fn(); if (this.open) this.focusFilter() }
+    return div({ class: 'trust-back', tabIndex: 0,
+        onMounted: (el: Element) => (el as HTMLElement).focus(),
+        onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Escape') act(e, cfg.onDismiss) },
+        onClick: (e: MouseEvent) => act(e, cfg.onDismiss) },
       div({ class: 'trust-modal', onClick: (e: MouseEvent) => e.stopPropagation() },
         div({ class: 'trust-modal-h' }, cfg.heading),
         div({ class: 'trust-modal-b' }, cfg.body),
         div({ class: 'trust-modal-warn' }, cfg.warn),
         div({ class: 'trust-modal-acts' },
-          button({ class: 'trust-no', onClick: (e: MouseEvent) => { e.stopPropagation(); cfg.onNo() } }, cfg.noLabel),
-          button({ class: 'trust-yes', onClick: (e: MouseEvent) => { e.stopPropagation(); cfg.onYes() } }, cfg.yesLabel),
+          button({ class: 'trust-no', onClick: (e: MouseEvent) => act(e, cfg.onNo) }, cfg.noLabel),
+          button({ class: 'trust-yes', onClick: (e: MouseEvent) => act(e, cfg.onYes) }, cfg.yesLabel),
         ),
       ),
     )
@@ -350,21 +366,22 @@ export class BulbsPill extends ComboboxPill {
     // so they take turns in the popover rather than the console hiding below a scrolling list.
     if (this.openLog) return this.consoleView(this.openLog)
     const rows = this.rows()
+    const total = this.merged().length
     return div({ class: 'servers-pop' },
-      // Nav keys move the highlight; any other key edits the filter, which refilters the list — so
-      // restart the highlight at the top (applied on the input event's re-render, no extra update).
+      rows.length === 0
+        ? div({ class: 'picker-empty' }, this.filter ? 'No match.' : 'No bulbs in this project yet.')
+        : div({ class: 'bulb-list' }, rows.map((r, i) => this.row(r, i))),
+      // The filter sits below the list, at the popover's anchored edge — it never jumps as the
+      // list's height changes. Nav keys move the highlight; any other key edits the filter.
       searchFilter({
         target: this,
         prop: () => this.filter,
         id: 'bulb-filter',
-        placeholder: 'Filter bulbs…',
+        placeholder: total ? `Filter ${total} bulb${total === 1 ? '' : 's'}…` : 'Filter bulbs…',
         hasValue: !!this.filter,
         onKeyDown: (e: KeyboardEvent) => this.onFilterKey(e),
         onClear: () => this.clearFilter(),
       }),
-      rows.length === 0
-        ? div({ class: 'picker-empty' }, this.filter ? 'No match.' : 'No bulbs in this project yet.')
-        : div({ class: 'bulb-list' }, rows.map((r, i) => this.row(r, i))),
     )
   }
 
@@ -398,7 +415,7 @@ export class BulbsPill extends ComboboxPill {
         onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } } },
       s
         ? button({ class: 'server-stop', title: 'Stop this server', ariaLabel: 'Stop', onClick: (e: MouseEvent) => { e.stopPropagation(); this.stop(s.pid) } }, iconStop())
-        : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching' : ''], title: trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); this.launch(r.path) } }, iconPlay()),
+        : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); this.launch(r.path) } }, iconPlay()),
       // The name opens the bulb's .bulb.md in the editor (running or stopped). The live app is
       // reachable separately via the :port link; the play button launches. Not a launch trigger.
       span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
