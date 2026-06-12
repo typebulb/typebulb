@@ -1,4 +1,4 @@
-import { Component, div, button, inputText, type VElement } from 'domeleon'
+import { Component, div, span, button, inputText, type VElement } from 'domeleon'
 
 // Shared filter input + clear (×) for the bulb launcher and the session picker — one copy of the
 // filter chrome (the bulb-local analogue of client's uiHelpers/searchBox; the bulb can't import
@@ -29,6 +29,28 @@ export function searchFilter(opts: {
     opts.trailing ?? null,
   )
 }
+
+// ---- full-text result chrome, shared by both pickers so a hit reads the same in each ----
+
+// The query split around its case-insensitive matches, match spans wrapped for the highlight CSS.
+function highlight(text: string, q: string): (string | VElement)[] {
+  const parts: (string | VElement)[] = []
+  const lower = text.toLowerCase(), ql = q.toLowerCase()
+  let i = 0
+  for (;;) {
+    const j = ql ? lower.indexOf(ql, i) : -1
+    if (j < 0) { parts.push(text.slice(i)); break }
+    parts.push(text.slice(i, j), span({ class: 'picker-mark' }, text.slice(j, j + ql.length)))
+    i = j + ql.length
+  }
+  return parts
+}
+
+export const hitsBadge = (n: number | undefined) =>
+  n ? span({ class: 'picker-hits' }, `${n} hit${n === 1 ? '' : 's'}`) : null
+
+export const snippetLine = (snippet: string | undefined, q: string) =>
+  snippet ? div({ class: 'picker-snippet' }, highlight(snippet, q)) : null
 
 // Outside-click closer. Deferred via setTimeout so the opening click doesn't
 // immediately fire it; `armed` covers disarm racing ahead of the addEventListener.

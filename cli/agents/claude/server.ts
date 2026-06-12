@@ -708,24 +708,31 @@ function searchTurns(file: string, mtime: number): SearchTurn[] {
 const SEARCH_MAX_SESSIONS = 50
 const SEARCH_SNIPPET_CHARS = 110
 
-// Newest-first, so the cap keeps the most recent matching sessions. hitCount counts matching turns;
-// the snippet is the first hit with context either side, highlighted client-side.
+// Hit count + first-hit snippet for one corpus (a transcript's turns / a bulb file's lines):
+// hitCount counts matching chunks; the snippet is the first hit with context either side,
+// highlighted client-side. Shared by searchSessions and searchBulbs.
+function searchHits(chunks: SearchTurn[], q: string): { hitCount: number; snippet: string } {
+  let hitCount = 0
+  let snippet = ''
+  for (const c of chunks) {
+    const i = c.lower.indexOf(q)
+    if (i < 0) continue
+    hitCount++
+    if (!snippet) {
+      const start = Math.max(0, i - SEARCH_SNIPPET_CHARS)
+      const end = Math.min(c.text.length, i + q.length + SEARCH_SNIPPET_CHARS)
+      snippet = (start > 0 ? '…' : '') + c.text.slice(start, end) + (end < c.text.length ? '…' : '')
+    }
+  }
+  return { hitCount, snippet }
+}
+
+// Newest-first, so the cap keeps the most recent matching sessions.
 export async function searchSessions(query: string) {
   const q = query.toLowerCase()
   const out: { sessionId: string; mtime: number; preview: string; hitCount: number; snippet: string }[] = []
   for (const { sessionId, file, mtime } of sessionFiles(state.cwd).sort((a, b) => b.mtime - a.mtime)) {
-    let hitCount = 0
-    let snippet = ''
-    for (const turn of searchTurns(file, mtime)) {
-      const i = turn.lower.indexOf(q)
-      if (i < 0) continue
-      hitCount++
-      if (!snippet) {
-        const start = Math.max(0, i - SEARCH_SNIPPET_CHARS)
-        const end = Math.min(turn.text.length, i + q.length + SEARCH_SNIPPET_CHARS)
-        snippet = (start > 0 ? '…' : '') + turn.text.slice(start, end) + (end < turn.text.length ? '…' : '')
-      }
-    }
+    const { hitCount, snippet } = searchHits(searchTurns(file, mtime), q)
     if (!hitCount) continue
     out.push({ sessionId, mtime, preview: readPreview(file), hitCount, snippet })
     if (out.length >= SEARCH_MAX_SESSIONS) break
@@ -815,6 +822,29 @@ export async function stopBreakout(pid: number) {
 export async function listBulbFiles() {
   return listProjectBulbFiles(state.cwd)
     .map(f => ({ ...f, trusted: isBulbTrusted(f.path) }))
+}
+
+// Full-text search over the project's bulb files — the launcher's analogue of searchSessions, for
+// finding a bulb by what's inside it (a dependency, an API, a phrase in its data) when the name
+// doesn't say. The corpus is each file's non-empty lines read raw: a bulb file is all content, so
+// none of the transcript's display-cleaning applies — and at a handful of small files per
+// (debounced) query, no cache either; the session cache exists for MB-scale JSONL parses.
+// Newest-first, matching searchSessions' contract; the launcher re-sorts after joining its rows.
+export async function searchBulbs(query: string) {
+  const q = query.toLowerCase()
+  const out: { path: string; hitCount: number; snippet: string }[] = []
+  for (const f of listProjectBulbFiles(state.cwd).sort((a, b) => b.mtime - a.mtime)) {
+    let raw = ''
+    try { raw = readFileSync(f.path, 'utf8') } catch { continue }
+    const chunks: SearchTurn[] = []
+    for (const line of raw.split('\n')) {
+      const text = line.replace(/\s+/g, ' ').trim()
+      if (text) chunks.push({ text, lower: text.toLowerCase() })
+    }
+    const { hitCount, snippet } = searchHits(chunks, q)
+    if (hitCount) out.push({ path: f.path, hitCount, snippet })
+  }
+  return out
 }
 
 // Launch (or re-attach to) a dev server for an existing project bulb — the same node capability

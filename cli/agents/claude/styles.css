@@ -365,7 +365,7 @@ a.server-port:hover { text-decoration: underline; }
 }
 .bulb-filter-clear:hover { color: var(--accent); }
 /* Filter-mode toggle (full-text search) — inset at the input's right edge; the clear × shifts
-   inward beside it. Only rendered when the host passes a trailing control (the session picker). */
+   inward beside it. Both comboboxes render it (SearchComboboxPill's modeToggle). */
 .bulb-filter-control.has-trailing .bulb-filter { padding-right: 3.8rem; }
 .bulb-filter-control.has-trailing .bulb-filter-clear { right: 2.5rem; }
 .bulb-filter-mode {
@@ -386,9 +386,19 @@ a.server-port:hover { text-decoration: underline; }
 /* The shared grid for the launcher rows: each .server-row is a subgrid spanning these tracks, so
    columns line up row-to-row. auto cols size to their widest content (tight, no slack); 1fr is the
    name. A small right padding keeps the selected-row highlight off the scrollbar. */
-.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+/* grid-auto-rows: max-content — the grid twin of .picker-row's flex:none: when the list overflows
+   the popover cap, plain auto rows compress to each row's min-height contribution, so a full-text
+   row's snippet line bleeds under the next row as overlapping text. max-content tracks never
+   compress; the list scrolls, rows keep their content height. */
+.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
+/* The 1fr name column: name + (in full-text mode) its hit count read together, the badge
+   right-aligned at the column's end by the name's flex:1 — the session row's preview/hits layout. */
+.bulb-name-cell { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
+/* Full-text snippet in the launcher: a second internal row of the row's subgrid, aligned under the
+   name column (the session picker indents past its dot gutter instead — override that margin). */
+.bulb-list .picker-snippet { grid-column: 2 / -1; margin: 0 .4rem .2rem 0; }
 .bulb-time { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; margin-right: .4rem; }
 /* The row's chrome buttons share one reset; sizing + colour differ below. Play/stop are round icon
    buttons (friendlier, space-economic); the trust switch is text. Logs is a link, not a button

@@ -42,7 +42,10 @@ export interface Msg { id: number; role: 'user' | 'assistant'; text: string; thi
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }
+// One full-text hit over a project bulb file (searchBulbs), joined onto its BulbRow for display.
+export interface BulbHit { path: string; hitCount: number; snippet: string }
 // One launcher row: a project bulb and/or a running server, merged by path. `running`
 // present ⇒ live (open link + stop); absent ⇒ stopped (launch). `recent` = MRU sort key.
-// `trusted` = a remembered trust decision (applies to the next launch).
-export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer }
+// `trusted` = a remembered trust decision (applies to the next launch). `hitCount`/`snippet`
+// are the full-text decoration, set only on search-mode rows.
+export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string }

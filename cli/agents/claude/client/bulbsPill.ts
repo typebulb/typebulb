@@ -1,8 +1,8 @@
 import { div, span, a, button, pre, svg, path, rect } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
-import { searchFilter } from './ui.js'
+import { hitsBadge, snippetLine } from './ui.js'
 import { pathKey, basename, bulbBasename, relTime } from './util.js'
-import type { RunningServer, BulbFile, BulbRow } from './types.js'
+import type { RunningServer, BulbFile, BulbRow, BulbHit } from './types.js'
 
 // Inline SVG play/stop icons for the launch/stop controls (the pattern from
 // typebulbs/xor-x-ray.bulb.md): font glyphs centre unpredictably across platforms, a fixed
@@ -24,11 +24,13 @@ const iconStop = () => btnIcon(rect({ x: 3, y: 3, width: 10, height: 10, fill: '
 // yourself — identified by *pid*, not filename, so it survives a rename and doesn't hide a
 // second, unrelated mirror. Polls on a lazy cadence: the set changes on a launch / stop /
 // breakout / edit, not per-frame.
-export class BulbsPill extends ComboboxPill {
+export class BulbsPill extends ComboboxPill<BulbHit> {
   files: BulbFile[] = []
   servers: RunningServer[] = []
   protected keepOpenSelector = '.servers-wrap'
   protected filterId = 'bulb-filter'
+  protected listSelector = '.bulb-list'
+  protected filterNoun = 'name'
   // Bulb paths (pathKey) mid-launch — a transient in-memory state (NO persistence): launchBulbServer
   // doesn't resolve until the server registers (~2s), so the play button shimmers until then.
   launching = new Set<string>()
@@ -43,8 +45,7 @@ export class BulbsPill extends ComboboxPill {
   openLog?: { pid: number; name: string; text: string; offset: number }
   #logTimer?: ReturnType<typeof setInterval>
 
-  protected itemCount() { return this.rows().length }
-  protected listEl() { return document.querySelector('.bulb-list') }
+  protected search(query: string) { return tb.server.searchBulbs(query) as Promise<BulbHit[]> }
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
   protected onActivate(i: number) {
     const r = this.rows()[i]
@@ -124,20 +125,29 @@ export class BulbsPill extends ComboboxPill {
   }
 
   // Display order is newest-at-bottom, so just-edited and just-launched both sit adjacent to the
-  // filter input at the anchored edge. Filter matches name + path.
+  // filter input at the anchored edge. The default filter matches name + path; full-text mode keeps
+  // only the rows the server search hit, decorated with hit count + snippet — unlike the session
+  // picker's results-only list, a search row here stays an ordinary row (launch/stop/trust intact),
+  // just fewer of them.
   rows(): BulbRow[] {
-    const q = this.filter.trim().toLowerCase()
     let rows = this.merged()
-    if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
+    if (this.searchActive) {
+      const hits = new Map(this.results.map(h => [pathKey(h.path), h]))
+      rows = rows.flatMap(r => {
+        const h = hits.get(pathKey(r.path))
+        return h ? [{ ...r, hitCount: h.hitCount, snippet: h.snippet }] : []
+      })
+    } else {
+      const q = this.filter.trim().toLowerCase()
+      if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
+    }
     return rows.sort((a, b) => a.recent - b.recent)
   }
 
   show() {
     this.beginOpen()
     this.refresh()
-    this.highlighted = Math.max(0, this.itemCount() - 1)
-    this.update()
-    this.pinToBottom()
+    this.refreshList()
     this.armClose()
     this.focusFilter()
   }
@@ -366,22 +376,11 @@ export class BulbsPill extends ComboboxPill {
     // so they take turns in the popover rather than the console hiding below a scrolling list.
     if (this.openLog) return this.consoleView(this.openLog)
     const rows = this.rows()
-    const total = this.merged().length
     return div({ class: 'servers-pop' },
       rows.length === 0
-        ? div({ class: 'picker-empty' }, this.filter ? 'No match.' : 'No bulbs in this project yet.')
+        ? this.emptyState('No bulbs in this project yet.')
         : div({ class: 'bulb-list' }, rows.map((r, i) => this.row(r, i))),
-      // The filter sits below the list, at the popover's anchored edge — it never jumps as the
-      // list's height changes. Nav keys move the highlight; any other key edits the filter.
-      searchFilter({
-        target: this,
-        prop: () => this.filter,
-        id: 'bulb-filter',
-        placeholder: total ? `Filter ${total} bulb${total === 1 ? '' : 's'}…` : 'Filter bulbs…',
-        hasValue: !!this.filter,
-        onKeyDown: (e: KeyboardEvent) => this.onFilterKey(e),
-        onClear: () => this.clearFilter(),
-      }),
+      this.filterBox(this.merged().length, 'bulb'),
     )
   }
 
@@ -418,7 +417,10 @@ export class BulbsPill extends ComboboxPill {
         : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); this.launch(r.path) } }, iconPlay()),
       // The name opens the bulb's .bulb.md in the editor (running or stopped). The live app is
       // reachable separately via the :port link; the play button launches. Not a launch trigger.
-      span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
+      div({ class: 'bulb-name-cell' },
+        span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
+        hitsBadge(r.hitCount),
+      ),
       // Trust toggle. Shown for a running server (the live tier matters) or a trusted-remembered
       // stopped bulb; a plain restricted stopped bulb shows an empty cell — "restricted" is the
       // implicit default and repeating it down every row is noise — but the cell still holds its grid
@@ -431,6 +433,8 @@ export class BulbsPill extends ComboboxPill {
       s
         ? a({ class: 'server-port', href: s.url, target: '_blank', rel: 'noopener noreferrer', title: `Open ${s.url}` }, `:${s.port}`)
         : span({ class: 'bulb-time' }, relTime(r.recent)),
+      // Full-text mode only: the first matching line, on a second subgrid row under the name column.
+      snippetLine(r.snippet, this.filter.trim()),
     )
   }
 

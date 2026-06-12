@@ -1,39 +1,22 @@
-import { div, span, button, type VElement } from 'domeleon'
+import { div, span, button, VElement } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
-import { searchFilter } from './ui.js'
+import { hitsBadge, snippetLine } from './ui.js'
 import { relTime, truncate } from './util.js'
 
 type SessionRow = { sessionId: string; mtime: number; preview: string; hitCount?: number; snippet?: string }
 
-// The query split around its case-insensitive matches, match spans wrapped for the highlight CSS.
-function highlight(text: string, q: string): (string | VElement)[] {
-  const parts: (string | VElement)[] = []
-  const lower = text.toLowerCase(), ql = q.toLowerCase()
-  let i = 0
-  for (;;) {
-    const j = ql ? lower.indexOf(ql, i) : -1
-    if (j < 0) { parts.push(text.slice(i)); break }
-    parts.push(text.slice(i, j), span({ class: 'picker-mark' }, text.slice(j, j + ql.length)))
-    i = j + ql.length
-  }
-  return parts
-}
-
 // Sessions chip + dropdown. Owns the session list; reaches up to Root for sessionId/cwd and
 // updateTitle/stickToBottomNextRender. Opens on the attached session so the highlight starts where
 // you are; the `.active` row is the keyboard cursor.
-export class SessionPicker extends ComboboxPill {
+export class SessionPicker extends ComboboxPill<SessionRow> {
   sessions: { sessionId: string; mtime: number; preview: string }[] = []
-  fullText = false                         // filter mode: preview match (default) vs full-text search
-  results: SessionRow[] = []
-  searching = false
-  #searchTimer?: number
-  #searchSeq = 0
   protected keepOpenSelector = '.sid-wrap'
   protected filterId = 'session-filter'
+  protected listSelector = '#session-list'
+  protected filterNoun = 'title'
 
-  protected itemCount() { return this.rows().length }
-  protected listEl() { return document.getElementById('session-list') }
+  protected search(query: string) { return tb.server.searchSessions(query) as Promise<SessionRow[]> }
+
   protected onActivate(i: number) { const s = this.rows()[i]; if (s) this.pick(s.sessionId) }
 
   // The (possibly filtered) sessions the dropdown shows — matches preview text, case-insensitive.
@@ -43,64 +26,8 @@ export class SessionPicker extends ComboboxPill {
     return q ? this.sessions.filter(s => s.preview.toLowerCase().includes(q)) : this.sessions
   }
 
-  // Full-text needs 2+ chars — except a lone non-ASCII char: one CJK ideograph is a word's worth of
-  // selectivity, where one Latin char matches everything.
-  get searchActive() {
-    const q = this.filter.trim()
-    return this.fullText && (q.length >= 2 || /[^\x00-\x7f]/.test(q))
-  }
-
   // What the dropdown lists: server search results in full-text mode, the preview filter otherwise.
   rows(): SessionRow[] { return this.searchActive ? this.results : this.filtered() }
-
-  // A filter edit also drives the (debounced) full-text search.
-  protected override onFilterChanged() {
-    super.onFilterChanged()
-    this.queueSearch()
-  }
-
-  // delay 0 = search now (the mode toggle); the default debounces keystrokes.
-  queueSearch(delay = 150) {
-    window.clearTimeout(this.#searchTimer)
-    if (!this.searchActive) { this.searching = false; return }
-    this.searching = true
-    this.#searchTimer = window.setTimeout(() => this.runSearch(), delay)
-  }
-
-  async runSearch() {
-    const seq = ++this.#searchSeq
-    try {
-      const results = await tb.server.searchSessions(this.filter.trim())
-      if (seq !== this.#searchSeq || !this.open) return   // a newer query superseded this one
-      this.results = results.reverse()                    // server sends newest-first; display is newest-at-bottom
-      this.searching = false
-      this.highlighted = Math.max(0, this.results.length - 1)
-      this.update()
-      this.pinToBottom()
-    } catch (err) {
-      console.error('[mirror] searchSessions failed', err)
-      // Without this a failed RPC leaves "Searching…" shimmering forever.
-      if (seq === this.#searchSeq) { this.searching = false; this.update() }
-    }
-  }
-
-  toggleFullText() {
-    this.fullText = !this.fullText
-    this.results = []
-    this.queueSearch(0)
-    this.highlighted = Math.max(0, this.itemCount() - 1)
-    this.update()
-    this.pinToBottom()
-    this.focusFilter()
-  }
-
-  // Mode survives close/reopen (in-memory only — it dies with the page); the query doesn't.
-  protected override onClosed() {
-    super.onClosed()
-    window.clearTimeout(this.#searchTimer)
-    this.results = []
-    this.searching = false
-  }
 
   // Index of the currently-attached session in the filtered list (0 if it isn't listed yet).
   currentIndex(): number {
@@ -128,17 +55,13 @@ export class SessionPicker extends ComboboxPill {
 
   async show() {
     this.beginOpen()
-    this.highlighted = this.currentIndex()
-    this.update()
-    this.pinToBottom()
+    this.refreshList(this.currentIndex())
     // Focus the filter input so it captures typing + arrow/Enter/Esc; domeleon patches
     // #session-filter in place across the reload below, so focus survives without re-focusing.
     this.focusFilter()
     try {
       await this.loadSessions()
-      this.highlighted = this.currentIndex()
-      this.update()
-      this.pinToBottom()
+      this.refreshList(this.currentIndex())
     } catch (err) {
       console.error('[mirror] listSessions failed', err)
     }
@@ -153,7 +76,7 @@ export class SessionPicker extends ComboboxPill {
     await tb.server.attach(sessionId)
   }
 
-  view() {
+  view() : VElement {
     const p = this.parent
     if (!p.sessionId) return div({ class: 'sid-wrap' })
     const raw = this.currentPreview() || 'current'
@@ -171,33 +94,11 @@ export class SessionPicker extends ComboboxPill {
 
   picker() {
     const sessions = this.rows()
-    const total = this.sessions.length
-    const noun = `${total} session${total === 1 ? '' : 's'}`
     return div({ class: 'picker' },
       sessions.length === 0
-        ? div({ class: 'picker-empty' },
-            this.searchActive && this.searching ? span({ class: 'shimmer-text shimmer-slow' }, 'Searching…')
-            : this.filter ? 'No match.'
-            : 'No sessions yet — start one in your terminal.')
+        ? this.emptyState('No sessions yet — start one in your terminal.')
         : div({ id: 'session-list', class: 'picker-list' }, sessions.map((s, i) => this.pickerRow(s, i))),
-      // The filter sits below the list, at the popover's anchored edge — it never jumps as the
-      // list's height changes. Reuses the launcher's filter chrome; the host owns the value + keys.
-      searchFilter({
-        target: this,
-        prop: () => this.filter,
-        id: 'session-filter',
-        placeholder: total ? (this.fullText ? `Search ${noun}…` : `Filter ${noun}…`) : 'Filter sessions…',
-        hasValue: !!this.filter,
-        onKeyDown: (e: KeyboardEvent) => this.onFilterKey(e),
-        onClear: () => this.clearFilter(),
-        trailing: button({
-          class: ['bulb-filter-mode', this.fullText ? 'on' : ''],
-          type: 'button',
-          title: this.fullText ? 'Back to title filter' : 'Full-text search',
-          ariaLabel: 'Full-text search',
-          onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleFullText() },
-        }, span({ class: 'glyph-img' }, '🔬')),
-      }),
+      this.filterBox(this.sessions.length, 'session'),
     )
   }
 
@@ -213,10 +114,10 @@ export class SessionPicker extends ComboboxPill {
       div({ class: 'picker-row-main' },
         span({ class: 'picker-dot' }),
         span({ class: 'picker-preview' }, s.preview || '(no preview)'),
-        s.hitCount ? span({ class: 'picker-hits' }, `${s.hitCount} hit${s.hitCount === 1 ? '' : 's'}`) : null,
+        hitsBadge(s.hitCount),
         span({ class: 'picker-time' }, relTime(s.mtime)),
       ),
-      s.snippet ? div({ class: 'picker-snippet' }, highlight(s.snippet, this.filter.trim())) : null,
+      snippetLine(s.snippet, this.filter.trim()),
     )
   }
 }
