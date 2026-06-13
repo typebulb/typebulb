@@ -82,7 +82,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
           s.predicted !== this.servers[i]?.predicted ||
           s.trust !== this.servers[i]?.trust)
       this.servers = servers
-      if (changed) this.update()
+      if (changed) { this.update(); this.keepBottom() }
     } catch (err) {
       console.error('[mirror] server list refresh failed', err)
     }
@@ -97,7 +97,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         files.length !== this.files.length ||
         files.some((f, i) => f.path !== this.files[i]?.path || f.mtime !== this.files[i]?.mtime)
       this.files = files
-      if (changed) this.update()
+      if (changed) { this.update(); this.keepBottom() }
     } catch (err) {
       console.error('[mirror] bulb list refresh failed', err)
     }
@@ -379,7 +379,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     return div({ class: 'servers-pop' },
       rows.length === 0
         ? this.emptyState('No bulbs in this project yet.')
-        : div({ class: 'bulb-list' }, rows.map((r, i) => this.row(r, i))),
+        : div({ class: 'bulb-list', onScroll: () => this.onListScroll() }, rows.map((r, i) => this.row(r, i))),
       this.filterBox(this.merged().length, 'bulb'),
     )
   }

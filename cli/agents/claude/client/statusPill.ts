@@ -55,6 +55,10 @@ export abstract class ComboboxPill<R> extends StatusPill {
   searching = false
   #searchTimer?: number
   #searchSeq = 0
+  // Whether the list currently rests at its bottom edge — the newest-at-bottom anchor (TB-Agent-Mirror.md).
+  // Tracked from the scroll event so a background data refresh can keep a bottom-resting list pinned
+  // (keepBottom) without yanking a user who has scrolled up to read older rows.
+  #stuck = true
 
   protected abstract filterId: string
   // CSS selector for the rows' scroll container (pinToBottom / scrollIntoView need the real node).
@@ -89,10 +93,31 @@ export abstract class ComboboxPill<R> extends StatusPill {
 
   protected listEl() { return document.querySelector(this.listSelector) }
 
-  // Bottom-anchored layout (TB-Agent-Mirror.md): the popovers open upward with the filter at the
-  // anchored edge and rows newest-at-bottom, so the list rests scrolled to its end.
-  protected pinToBottom() {
+  // Wire onto the rows' scroll container so #stuck tracks whether it rests at its end — for the
+  // user scrolling, or a moveHighlight scrollIntoView that happens to land near the bottom.
+  protected onListScroll() {
+    const el = this.listEl()
+    if (el) this.#stuck = el.scrollHeight - (el.scrollTop + el.clientHeight) < 24
+  }
+
+  #scrollToEnd() {
     setTimeout(() => { const el = this.listEl(); if (el) el.scrollTop = el.scrollHeight })
+  }
+
+  // Bottom-anchored layout (TB-Agent-Mirror.md): the popovers open upward with the filter at the
+  // anchored edge and rows newest-at-bottom, so the list rests scrolled to its end. An explicit
+  // pin (open / filter / mode toggle) re-arms the bottom anchor.
+  protected pinToBottom() {
+    this.#stuck = true
+    this.#scrollToEnd()
+  }
+
+  // After a background data refresh re-renders: hold the bottom edge only if the list was already
+  // resting there. A user scrolled up to read older rows keeps their place; one at the bottom rides
+  // the new newest-at-bottom row in. (With the old newest-at-top order this fell out for free — new
+  // rows landed above the scroll position; newest-at-bottom needs this.)
+  protected keepBottom() {
+    if (this.#stuck) this.#scrollToEnd()
   }
 
   // Land the keyboard cursor (on the newest row unless told otherwise), re-render, re-pin.

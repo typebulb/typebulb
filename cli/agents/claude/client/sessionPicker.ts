@@ -97,7 +97,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     return div({ class: 'picker' },
       sessions.length === 0
         ? this.emptyState('No sessions yet — start one in your terminal.')
-        : div({ id: 'session-list', class: 'picker-list' }, sessions.map((s, i) => this.pickerRow(s, i))),
+        : div({ id: 'session-list', class: 'picker-list', onScroll: () => this.onListScroll() }, sessions.map((s, i) => this.pickerRow(s, i))),
       this.filterBox(this.sessions.length, 'session'),
     )
   }
