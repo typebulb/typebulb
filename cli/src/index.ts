@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   // Lifecycle / policy commands don't need a resolved (existing) bulb file — dispatch before file
   // resolution. (`trust` can pre-trust a path that doesn't exist yet; `logs`/`stop` query the registry.)
   if (args.subcommand === 'logs') {
-    await runLogs(args.file || undefined, { follow: args.follow, clear: args.clear, lines: args.lines })
+    await runLogs(args.file || undefined, { follow: args.follow, clear: args.clear, run: args.run, lines: args.lines })
     return
   }
   if (args.subcommand === 'wait') {

@@ -3,11 +3,10 @@ import { launchAgentViewer, type BulbServer } from '../serve/serverRegistry.js'
 import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
 
 /**
- * `typebulb agent` (no `:target`) — the first command an agent runs. It prints two sections
- * (TB-Skill.md): a **neutral status line** carrying this project's mirror URL — a live mirror is
- * reused, otherwise one is started detached and windowless (`agent:<name> --no-open`) — then, after
- * a blank line, an **`Agents:`-tagged directive** to read the authoring skill (assembled via
- * `typebulb skill`, or its two on-disk parts) before writing a bulb. It launches rather than
+ * `typebulb agent` (no `:target`) — the first command an agent runs. It prints (TB-Skill.md) a status
+ * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
+ * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged directive to read the authoring
+ * skill before writing a bulb (delivery details in the `skill` block below). It launches rather than
  * instructs because the user's kickoff sentence pre-approves exactly one command: stdout answering
  * "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
  * command that approval never covered. It always exits 0: this is a status report, and even a launch

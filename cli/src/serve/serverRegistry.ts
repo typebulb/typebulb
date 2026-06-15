@@ -155,6 +155,42 @@ export function readServerLog(pid: number, offset = 0): { text: string; offset: 
   }
 }
 
+// ---- run markers ----
+// Hot reload appends to one log across every reload, with no run boundary to filter on. A run marker
+// delimits each run — run 1 is the process's initial compile, each successful reload bumps it — so
+// `typebulb logs --run` can show just one run's output from the append-only stream (TB-CLI.md). The
+// runner emits it with console.log, so it lands in the teed log AND doubles as a terminal separator.
+
+const RUN_MARKER_RE = /^── run (\d+) ── /
+
+/** The boundary line a run starts with. `runId` 1 = initial compile; +1 per successful reload. */
+export function runMarker(runId: number): string {
+  return `── run ${runId} ── ${new Date().toTimeString().slice(0, 8)}`
+}
+
+/** The run id a line marks, or undefined if it isn't a run boundary. */
+function lineRunId(line: string): number | undefined {
+  const m = RUN_MARKER_RE.exec(line)
+  return m ? Number(m[1]) : undefined
+}
+
+/**
+ * Slice a captured log to one run's output: the run's marker line plus everything up to the next
+ * marker. `'latest'` is the highest-id run present. A log with no markers degrades gracefully — the
+ * whole text for `'latest'`, '' for a specific id; a specific run trimmed out of the size-capped log
+ * also returns '' (the caller notes it).
+ */
+export function sliceRunLog(text: string, run: number | 'latest'): string {
+  const lines = text.split('\n')
+  const bounds: { id: number; idx: number }[] = []
+  lines.forEach((l, i) => { const id = lineRunId(l); if (id !== undefined) bounds.push({ id, idx: i }) })
+  if (!bounds.length) return run === 'latest' ? text : ''
+  const target = run === 'latest' ? bounds[bounds.length - 1] : bounds.find(b => b.id === run)
+  if (!target) return ''
+  const next = bounds.find(b => b.idx > target.idx)
+  return lines.slice(target.idx, next ? next.idx : lines.length).join('\n')
+}
+
 // process.kill(pid, 0) sends no signal but runs the existence/permission check:
 // ESRCH = no such process (dead); EPERM = exists but not ours to signal (alive).
 // Exported for `typebulb wait`, which holds one server across a long block and must

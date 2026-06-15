@@ -43,7 +43,7 @@ typebulb send <file> [msg]     Push a message into a running bulb's page (its tb
 typebulb check [file.bulb.md]  Type-check a bulb without running it
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
-typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail, --clear for a clean run)
+typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail, --run latest|N for one reload's output, --clear to empty it)
 typebulb wait [file|agent]     Block until the target server logs a new line, print it, exit — an agent's wake-up
                                (--match <substr> filters; --timeout <sec>, default 1800, exit 2)
 typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
@@ -247,7 +247,7 @@ Run a bulb **once** and let hot reload drive the loop.
 - **Don't relaunch, and don't wrap it in `timeout`.** A relaunch only replaces the running server (one per bulb file); `timeout` kills it, and the racing relaunch is what spawns a second window on a fresh port.
 - **What needs a restart:** a `.env` change (read once at boot) and in-memory `server.ts` state (reset on each reload).
 - **Each reload re-runs the bulb.** A save re-executes `code.tsx` from scratch, so work you start on mount repeats every edit — re-spending GPU/network, re-firing side effects, flooding the log. Put expensive or side-effecting work behind a trigger: `tb.onMessage(() => start())`, then `typebulb send <file>` when ready (also a general terminal→page channel — pass params, drive a loop).
-- **Reading the log:** `typebulb logs --clear <file>` empties it first, so you see only the next run.
+- **Reading the log:** it appends across every reload, so `typebulb logs --run latest <file>` shows just the current run (no need to clear).
 - **When done:** Ctrl-C, or `typebulb stop <file>` — closing the terminal leaves the server running detached.
 
 ## Tips for Agents

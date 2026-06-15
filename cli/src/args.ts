@@ -35,6 +35,8 @@ export interface CliArgs {
   follow: boolean
   /** `logs --clear`: truncate the target server's captured log instead of printing it. */
   clear: boolean
+  /** `logs --run <latest|N>`: filter output to one hot-reload run (default: the whole log). */
+  run?: number | 'latest'
   /** `logs --lines N`: print only the last N lines (default: the whole captured log). */
   lines?: number
   /** `wait --match <substring>`: only lines containing this wake the wait (default: any new line). */
@@ -119,6 +121,17 @@ export function parseArgs(args: string[]): CliArgs {
       result.follow = true
     } else if (arg === '--clear') {
       result.clear = true
+    } else if (arg === '--run') {
+      const v = args[++i]
+      if (v === 'latest') result.run = 'latest'
+      else {
+        const n = parseInt(v, 10)
+        if (isNaN(n) || n < 1) {
+          console.error(`Invalid --run value: ${v} (a run number, or 'latest')`)
+          process.exit(1)
+        }
+        result.run = n
+      }
     } else if (arg === '--bulbs') {
       result.stopScope = 'bulbs'
     } else if (arg === '--agent') {
@@ -233,9 +246,10 @@ Usage:
                                  keys in your .env (the exact ids to pass).
   typebulb logs [file|pid]       Print a running bulb server's captured console
                                  (no arg: list this project's running servers;
-                                 --clear <file|pid> empties it for a clean run).
-                                 For agents: fetch tb.server.log / errors of a
-                                 bulb you launched without watching its terminal.
+                                 --run latest|N shows just one hot-reload run;
+                                 --clear empties it). For agents: fetch
+                                 tb.server.log / errors of a bulb you launched
+                                 without watching its terminal.
   typebulb send <file> [msg]     Push a message into a running bulb's page —
                                  its tb.onMessage(cb) handlers receive it. The
                                  client-side twin of 'call'; use it to kick off
@@ -260,6 +274,8 @@ Usage:
 
 Options:
   -f, --follow                Stream new log output until interrupted (logs)
+  --run <latest|N>            Show only one hot-reload run's output: 'latest'
+                              (the current run) or run number N (logs)
   --clear                     Empty the target server's log instead of
                               printing it, for a clean run (logs)
   -n, --lines <n>             Print only the last n lines (logs)

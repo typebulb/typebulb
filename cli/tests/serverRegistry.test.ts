@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
-import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, type BulbServer } from '../src/serve/serverRegistry.js'
+import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, runMarker, sliceRunLog, type BulbServer } from '../src/serve/serverRegistry.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -120,6 +120,26 @@ describe('serverRegistry', () => {
 
     await writeFile(serverLogPath(process.pid), 'run 2\n')           // the next, clean run
     expect(readServerLog(process.pid, staleOffset).text).toBe('run 2\n')   // offset > length ⇒ from 0
+  })
+
+  // `typebulb logs --run` (TB-CLI.md): slice the append-across-reloads log to one run, delimited by
+  // the `runMarker` the runner emits at startup + each successful reload.
+  it('sliceRunLog slices to one run, supports latest, and degrades when absent', () => {
+    // Capture each marker once — runMarker stamps a wall-clock time, so re-calling it could differ.
+    const [m1, m2, m3] = [runMarker(1), runMarker(2), runMarker(3)]
+    const log = [
+      m1, 'boot line', 'run-1 output',
+      m2, 'run-2 output A', 'run-2 output B',
+      m3, 'run-3 output',
+    ].join('\n')
+
+    expect(sliceRunLog(log, 1).split('\n')).toEqual([m1, 'boot line', 'run-1 output'])
+    expect(sliceRunLog(log, 2).split('\n')).toEqual([m2, 'run-2 output A', 'run-2 output B'])
+    expect(sliceRunLog(log, 'latest').split('\n')).toEqual([m3, 'run-3 output'])
+    expect(sliceRunLog(log, 9)).toBe('')                          // a run absent from the (trimmed) log
+    // No markers (pre-feature / never reloaded): whole text for latest, nothing for a specific id.
+    expect(sliceRunLog('raw\nlines', 'latest')).toBe('raw\nlines')
+    expect(sliceRunLog('raw\nlines', 1)).toBe('')
   })
 
   // One server per bulb file (TB-CLI.md "a launch replaces, never stacks"): the pure filter

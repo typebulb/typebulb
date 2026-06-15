@@ -8,7 +8,7 @@ import { predictTrust } from '../bulb/predictTrust.js'
 import { startServer, findAvailablePort } from '../serve/server.js'
 import { openBrowser } from '../serve/browser.js'
 import { watchBulb, watchDir } from '../serve/watcher.js'
-import { registerServer, unregisterServer, startServerLog, stopServersForBulb } from '../serve/serverRegistry.js'
+import { registerServer, unregisterServer, startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -43,6 +43,12 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // lands on the same port and an old tab's reload reconnects.
   const replaced = await stopServersForBulb(bulbPath)
   if (replaced.length) console.log(`Replacing the running server for this bulb (pid ${replaced.map(s => s.pid).join(', ')})`)
+
+  // Run id: run 1 is this process's initial compile, each successful hot reload bumps it. Emitting
+  // the marker here (the first teed line) makes all of run 1's output — startup chrome and the bulb's
+  // own logs — filterable via `typebulb logs --run` (TB-CLI.md).
+  let runId = 1
+  console.log(runMarker(runId))
 
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)
@@ -105,9 +111,12 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         const result = await loadAndCompile(bulbPath, true, args.trust, local, serverCacheDir)
         html = result.html
         serverExports = result.serverExports
+        // New run boundary (only on a successful recompile — a compile error keeps the old run
+        // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
+        runId++
+        console.log(runMarker(runId))
         // Signal browser to reload
         reloadEmitter.emit('reload')
-        console.log('Done. Browser reloading...\n')
       } catch (e) {
         console.error('Compile error:', e)
       }

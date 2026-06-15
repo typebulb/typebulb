@@ -1,6 +1,6 @@
 import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
-import { listBulbServers, readServerLog, clearServerLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
@@ -56,7 +56,7 @@ function requireServer(servers: BulbServer[], arg: string, verb: string, cwd?: s
  * `tb.server.log` / error output — the terminal-side equivalent of claude.bulb's logs pane. No arg
  * lists the running servers; `--follow` streams new output; `--lines N` tails the last N lines.
  */
-export async function runLogs(arg: string | undefined, opts: { follow: boolean; clear?: boolean; lines?: number }): Promise<void> {
+export async function runLogs(arg: string | undefined, opts: { follow: boolean; clear?: boolean; run?: number | 'latest'; lines?: number }): Promise<void> {
   // No arg ⇒ list *this project's* running servers (scoped to cwd, like claude.bulb's launcher).
   // With an arg, target globally: a pid (or built-in name) names a specific process anywhere.
   if (!arg) {
@@ -77,6 +77,12 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
 
   const snap = readServerLog(server.pid)
   let text = snap.text
+  // `--run latest|N`: slice to one hot-reload run's output (TB-CLI.md). A run absent from the
+  // size-capped log yields nothing — say so rather than printing a silent blank.
+  if (opts.run !== undefined) {
+    text = sliceRunLog(text, opts.run)
+    if (!text && opts.run !== 'latest') console.error(`No output for run ${opts.run} (it hasn't started, or was trimmed from the log).`)
+  }
   if (opts.lines && opts.lines > 0) {
     const lines = text.split('\n')
     if (lines.length && lines[lines.length - 1] === '') lines.pop()   // ignore the trailing newline's empty cell
@@ -85,7 +91,8 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
   process.stdout.write(text)
   if (text && !text.endsWith('\n')) process.stdout.write('\n')
 
-  if (opts.follow) {
+  // `--run` is a snapshot of that run, not a live tail — following would mix in later runs' output.
+  if (opts.follow && opts.run === undefined) {
     let cursor = snap.offset
     const timer = setInterval(() => {
       const r = readServerLog(server.pid, cursor)
