@@ -39,10 +39,11 @@ typebulb agent                 An agent's first command — brings up the agent 
                                prints its URL + the authoring-skill paths; always exits 0
 typebulb skill                 Print this README as an Agent Skill on stdout
 typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
+typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust
 typebulb check [file.bulb.md]  Type-check a bulb without running it
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
-typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail)
+typebulb logs [file|pid]       Print a running bulb's captured console (no arg: list running servers; -f follow, -n N tail, --clear for a clean run)
 typebulb wait [file|agent]     Block until the target server logs a new line, print it, exit — an agent's wake-up
                                (--match <substr> filters; --timeout <sec>, default 1800, exit 2)
 typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
@@ -175,6 +176,7 @@ npm install -g typebulb
 | `tb.copy(text)` | Copy text to the clipboard | ✅ | ✅ |
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | ✅ | ✅ |
 | `tb.models()` | List available AI models (for dynamic model selectors); returns `[]` when embedded (no host AI) | ✅ | ✅ |
+| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send` — inert when embedded (no sender) | ✅ | ✅ |
 | `tb.fs.read/readBytes/write` | Read and write local files | ✅ `--trust` | ❌ |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | ✅ `--trust` | ❌ |
 | `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | ✅ `--trust` | ❌ |
@@ -237,12 +239,23 @@ The host owns a bulb's **width**; you own its **height**.
 
 **Keep every loop command argument-stable.** A harness that permission-matches exact command strings prompts the user on *every* event if varying data (a move, a payload) rides the command line. Keep it off: write the args to a fixed file and pipe them — `cat <bulb-folder>/args.json | typebulb call <file> <fn> --args -` — so each of the loop's commands is one constant string, approved once. `wait` and a `getState` call are constant already.
 
+## Iterating on a local bulb
+
+Run a bulb **once** and let hot reload drive the loop.
+
+- **Launch once.** `npx typebulb foo.bulb.md` opens one server and tab and watches the file — every save recompiles and reloads, `server.ts` included. Editing the file *is* the loop.
+- **Don't relaunch, and don't wrap it in `timeout`.** A relaunch only replaces the running server (one per bulb file); `timeout` kills it, and the racing relaunch is what spawns a second window on a fresh port.
+- **What needs a restart:** a `.env` change (read once at boot) and in-memory `server.ts` state (reset on each reload).
+- **Each reload re-runs the bulb.** A save re-executes `code.tsx` from scratch, so work you start on mount repeats every edit — re-spending GPU/network, re-firing side effects, flooding the log. Put expensive or side-effecting work behind a trigger: `tb.onMessage(() => start())`, then `typebulb send <file>` when ready (also a general terminal→page channel — pass params, drive a loop).
+- **Reading the log:** `typebulb logs --clear <file>` empties it first, so you see only the next run.
+- **When done:** Ctrl-C, or `typebulb stop <file>` — closing the terminal leaves the server running detached.
+
 ## Tips for Agents
 
-- **`config.json` `description`** is the bulb's SEO meta description — keep it to one or two plain sentences (~150–160 chars), or it gets truncated.
-- **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`).
+- **`config.json` `description`** is the bulb's search-result blurb — what makes someone open it, kept short (it truncates past ~160 chars).
+- **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
+- **A bulb's working files belong beside it**, in a folder named for its slug. `tb.fs`/`server.ts` paths are relative to the launch dir (cwd), not the bulb's folder — so run from the project root and prefix the bulb's path: `typebulbs/counter/…`, not a bare `counter/…`.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
-- **A bulb's working files live in a folder named after the bulb.** Whether written by `server.ts` or `tb.fs.write`, favor a sibling folder matching the bulb's slug.
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`.** Bare imports (`react`, `d3`, `three`, …) auto-resolve from a CDN — no install step. Declare them in `config.json` `dependencies` anyway: that's what lets `npx typebulb check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`) and pins versions.

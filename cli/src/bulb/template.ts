@@ -27,7 +27,7 @@ export interface RenderOptions {
 
 /** Render a bulb to a complete HTML page */
 export function renderHtml(options: RenderOptions): string {
-  const { name, code, css, html, data, insight, importMap, watch, theme, embedded } = options
+  const { name, code, css, html, data, insight, importMap, theme, embedded } = options
 
   // Default HTML if none provided
   const userHtml = html.trim() || '<div id="app"></div>'
@@ -69,7 +69,6 @@ ${userHtml}
 
 ${data.length > 0 ? `<script>window.__TB_DATA__ = ${escapeScript(JSON.stringify(data))};</script>` : ''}
 ${insight ? `<script>window.__TB_INSIGHT__ = ${escapeScript(JSON.stringify(insight))};</script>` : ''}
-${watch ? '<script>window.__TYPEBULB_WATCH__ = true;</script>' : ''}
 
 <script>
 ${typebulbShim}

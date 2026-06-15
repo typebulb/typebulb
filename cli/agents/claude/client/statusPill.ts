@@ -59,6 +59,11 @@ export abstract class ComboboxPill<R> extends StatusPill {
   // Tracked from the scroll event so a background data refresh can keep a bottom-resting list pinned
   // (keepBottom) without yanking a user who has scrolled up to read older rows.
   #stuck = true
+  // Set by #scrollToEnd, consumed in onRendered. The scroll must run AFTER the DOM patch: domeleon
+  // patches inside a rAF, after an await (App.render), so a bare setTimeout/rAF fires before the new
+  // rows are laid out and reads a stale scrollHeight — landing at the previous bottom (the bug where
+  // the first menu-open isn't scrolled but the second is). onRendered fires right after the patch.
+  #pinPending = false
 
   protected abstract filterId: string
   // CSS selector for the rows' scroll container (pinToBottom / scrollIntoView need the real node).
@@ -100,8 +105,16 @@ export abstract class ComboboxPill<R> extends StatusPill {
     if (el) this.#stuck = el.scrollHeight - (el.scrollTop + el.clientHeight) < 24
   }
 
-  #scrollToEnd() {
-    setTimeout(() => { const el = this.listEl(); if (el) el.scrollTop = el.scrollHeight })
+  #scrollToEnd() { this.#pinPending = true }
+
+  // Domeleon calls onRendered right after it patches the DOM, so the new rows are laid out and
+  // scrollHeight is current — the post-render hook a bottom-pin needs. Fires on every render; the
+  // flag gates it to a requested pin.
+  override onRendered() {
+    if (!this.#pinPending) return
+    this.#pinPending = false
+    const el = this.listEl()
+    if (el) el.scrollTop = el.scrollHeight
   }
 
   // Bottom-anchored layout (TB-Agent-Mirror.md): the popovers open upward with the filter at the

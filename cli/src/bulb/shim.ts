@@ -33,6 +33,11 @@ export const typebulbShim = `
   // Read from window each time so updates are visible
   const getData = () => window.__TB_DATA__ || [];
 
+  // tb.onMessage subscribers, fed by the events-SSE 'message' channel (typebulb send). A message is
+  // JSON-or-string: parse as JSON, else hand back the raw string; '' (a bare \`send\`) ⇒ undefined.
+  const messageHandlers = new Set();
+  const parseMsg = (s) => { if (s === '' || s == null) return undefined; try { return JSON.parse(s); } catch { return s; } };
+
   // Filesystem API - calls back to the local server.
   // The server returns raw bytes (no JSON envelope); read() decodes as UTF-8.
   const failIfNotOk = async (resp, action, path) => {
@@ -190,6 +195,14 @@ export const typebulbShim = `
     // Filesystem - local CLI extension
     fs,
 
+    // Receive a value pushed from the terminal via \`typebulb send\` (data-in, the dual of the
+    // ungated tb.server.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
+    // sender; the handler is registered but never fires (cf. tb.models returning []).
+    onMessage: (handler) => {
+      if (typeof handler === 'function') messageHandlers.add(handler);
+      return () => messageHandlers.delete(handler);
+    },
+
     // Environment ('embedded' when running as a bulb-in-a-bulb)
     mode: isEmbedded ? 'embedded' : 'local',
 
@@ -200,12 +213,21 @@ export const typebulbShim = `
     set theme(v) { if (window.__tbTheme) window.__tbTheme.set(v); }
   });
 
-  // Hot reload listener
-  if (window.__TYPEBULB_WATCH__) {
+  // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
+  // 'message' delivers \`typebulb send\` pushes to tb.onMessage. Connect for a CLI-served page (http
+  // origin, not an embed); a srcdoc embed or a file:// static export has no server, so onMessage just
+  // stays inert there. Opening it independent of watch is what lets send reach a --no-watch page.
+  if (!isEmbedded && location.protocol.indexOf('http') === 0) {
     const es = new EventSource('/__reload');
     es.addEventListener('reload', () => {
       console.log('[typebulb] Reloading...');
       window.location.reload();
+    });
+    es.addEventListener('message', (e) => {
+      // Wire payload is JSON-encoded (SSE-line-safe); decode it, then interpret JSON-or-string.
+      let value;
+      try { value = parseMsg(JSON.parse(e.data)); } catch { value = undefined; }
+      messageHandlers.forEach((h) => { try { h(value); } catch (err) { console.error(err); } });
     });
     es.onerror = () => {
       // Server closed, stop trying

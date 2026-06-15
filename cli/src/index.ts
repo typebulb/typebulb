@@ -32,6 +32,7 @@ import { runAgent } from './commands/agent.js'
 import { runModels } from './commands/models.js'
 import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
+import { runSend } from './commands/send.js'
 import { findProjectViewer } from './serve/serverRegistry.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -72,7 +73,7 @@ async function main(): Promise<void> {
   // Lifecycle / policy commands don't need a resolved (existing) bulb file — dispatch before file
   // resolution. (`trust` can pre-trust a path that doesn't exist yet; `logs`/`stop` query the registry.)
   if (args.subcommand === 'logs') {
-    await runLogs(args.file || undefined, { follow: args.follow, lines: args.lines })
+    await runLogs(args.file || undefined, { follow: args.follow, clear: args.clear, lines: args.lines })
     return
   }
   if (args.subcommand === 'wait') {
@@ -82,6 +83,12 @@ async function main(): Promise<void> {
   if (args.subcommand === 'stop') {
     if (args.stopScope) await runStopScope(args.stopScope)
     else await runStop(args.file || undefined)
+    return
+  }
+  if (args.subcommand === 'send') {
+    // Resolves the target in the registry by file path (like logs/stop) — no bulb file needs to
+    // exist on disk, and the push is trust-free, so dispatch before file/trust resolution.
+    await runSend(args.file, args.sendMessage)
     return
   }
   if (args.subcommand === 'skill') {
@@ -96,7 +103,7 @@ async function main(): Promise<void> {
     // Bare `agent` → ensure this project's mirror is up (launching one detached if none is) and
     // print the what-to-do guidance. `agent:<name>` serves that mirror in the foreground.
     if (!args.agentTarget) {
-      await runAgent()
+      await runAgent(VERSION)
       return
     }
     // `agent:<name>` → serve that mirror (TB-Agent-Mirror.md).

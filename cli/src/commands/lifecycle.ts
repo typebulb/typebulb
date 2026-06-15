@@ -1,6 +1,6 @@
 import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
-import { listBulbServers, readServerLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, clearServerLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
@@ -56,13 +56,24 @@ function requireServer(servers: BulbServer[], arg: string, verb: string, cwd?: s
  * `tb.server.log` / error output — the terminal-side equivalent of claude.bulb's logs pane. No arg
  * lists the running servers; `--follow` streams new output; `--lines N` tails the last N lines.
  */
-export async function runLogs(arg: string | undefined, opts: { follow: boolean; lines?: number }): Promise<void> {
+export async function runLogs(arg: string | undefined, opts: { follow: boolean; clear?: boolean; lines?: number }): Promise<void> {
   // No arg ⇒ list *this project's* running servers (scoped to cwd, like claude.bulb's launcher).
   // With an arg, target globally: a pid (or built-in name) names a specific process anywhere.
-  if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb logs <file|pid>` to print one server\'s console.'); return }
+  if (!arg) {
+    if (opts.clear) { console.error('Specify which server to clear: typebulb logs --clear <file|pid>'); process.exit(1) }
+    listServers(await listBulbServers(process.cwd()), 'Run `typebulb logs <file|pid>` to print one server\'s console.'); return
+  }
   // A reserved agent name (`claude`) targets the running mirror by its `agent` field (findServer),
   // preferring this cwd's mirror; a pid or path targets any server globally.
   const server = requireServer(await listBulbServers(), arg, 'logs', process.cwd())
+
+  // `--clear`: truncate the log instead of printing it — the agent's "start a clean run" reset, since
+  // hot reload never restarts the process to clear it on its own (TB-CLI.md).
+  if (opts.clear) {
+    clearServerLog(server.pid)
+    console.log(`Cleared log for ${serverLabel(server)} (pid ${server.pid}).`)
+    return
+  }
 
   const snap = readServerLog(server.pid)
   let text = snap.text

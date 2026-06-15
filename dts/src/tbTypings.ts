@@ -44,7 +44,7 @@ const ai = `
   ai(options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
-    /** Reasoning depth hint (0=min, 1=low, 2=med, 3=max). Mapped to provider-specific parameters (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Default: 0. */
+    /** Reasoning depth hint (0=min, 1=low, 2=med, 3=high). Mapped to provider-specific parameters (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Default: 0. */
     reasoning?: 0 | 1 | 2 | 3;
     provider?: string;
     model?: string;
@@ -99,7 +99,8 @@ const fs = `
   /**
    * Local filesystem access (CLI only).
    *
-   * Paths are resolved relative to the directory containing the bulb file.
+   * Paths are resolved relative to the current working directory (where the CLI
+   * was launched), consistent with the .env cascade — not the bulb file's folder.
    * Throws in editor/published mode.
    */
   fs: {
@@ -190,6 +191,23 @@ const clientOnlyMembers = `
    */
   url(): Promise<string>;`
 
+const onMessage = `
+  /**
+   * Subscribe to a value pushed from the terminal via \`typebulb send <file> [message]\`.
+   *
+   * The dual of \`tb.server.log\` (data out): a value sent *in* from the CLI, no \`--trust\` required.
+   * Use it to start expensive work on demand instead of on load — e.g. \`tb.onMessage(() => start())\`
+   * — so hot reloads don't re-trigger it while you edit, and an agent kicks off one run when ready.
+   *
+   * The message is the JSON-parsed value of what \`send\` was given (or the raw string if it isn't
+   * JSON; \`undefined\` for a bare \`typebulb send <file>\`). Returns an unsubscribe function. Inert in
+   * an embedded bulb (no sender) — the handler is registered but never fires.
+   *
+   * @param handler - Called with each pushed message.
+   * @returns An unsubscribe function.
+   */
+  onMessage(handler: (message: any) => void): () => void;`
+
 const clientServerProxy = `
   /**
    * Server-side function proxy.
@@ -206,7 +224,7 @@ export const clientTbTypings = `
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerProxy}${ai}${fs}${models}${theme}${mode}
+declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerProxy}${onMessage}${ai}${fs}${models}${theme}${mode}
 };
 `
 

@@ -29,6 +29,11 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Set up reload emitter for watch mode
   const reloadEmitter = args.watch ? new EventEmitter() : undefined
 
+  // The `typebulb send` channel — created regardless of watch (send must work under --no-watch too).
+  // One listener per connected page; uncapped so many tabs don't trip Node's default 10-listener warning.
+  const messageEmitter = new EventEmitter()
+  messageEmitter.setMaxListeners(0)
+
   // Load the cwd .env cascade before loadAndCompile — it imports server.ts, which reads
   // process.env at import time (TB-Env.md). Report after, once the bulb is read.
   const envResult = loadEnv(args.mode)
@@ -53,6 +58,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     basePath,
     port,
     reloadEmitter,
+    messageEmitter,
     getServerExports: () => serverExports,
     localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
     trusted: args.trust,
@@ -128,9 +134,13 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     }
   }
 
-  // Open browser
+  // Open browser — unless this launch replaced a live server on the same port, in which case its
+  // existing tab reconnects over SSE and reloads on its own. Opening a second tab would only pile up
+  // (the orphaned-tab complaint); the relaunch loop reuses one tab instead. (Stopping the predecessor
+  // before findAvailablePort is what frees the port in time to land on it again — see above.)
   if (args.open) {
-    await openBrowser(url)
+    if (replaced.some(s => s.port === port)) console.log('  Reusing the open browser tab.\n')
+    else await openBrowser(url)
   }
 
   // Handle shutdown

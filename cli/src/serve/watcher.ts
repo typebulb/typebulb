@@ -19,20 +19,27 @@ const WATCH_OPTIONS = {
 export interface WatcherOptions {
   bulbPath: string
   emitter: EventEmitter
+  /** Trailing debounce so a rapid save-burst (an editor's format-on-save double-write, a few
+   *  edits saved back-to-back) collapses to one reload instead of one restart per save. */
+  debounceMs?: number
 }
 
 /** Watch a bulb file for changes */
 export function watchBulb(options: WatcherOptions): () => void {
-  const { bulbPath, emitter } = options
+  const { bulbPath, emitter, debounceMs = 150 } = options
 
+  let timer: ReturnType<typeof setTimeout> | undefined
   const watcher = chokidar.watch(bulbPath, WATCH_OPTIONS)
 
   watcher.on('change', () => {
-    emitter.emit('reload')
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => emitter.emit('reload'), debounceMs)
   })
 
-  // Return cleanup function
-  return () => watcher.close()
+  return () => {
+    if (timer) clearTimeout(timer)
+    void watcher.close()
+  }
 }
 
 export interface DirWatcherOptions {

@@ -60,6 +60,11 @@ export interface ServerOptions {
   basePath: string
   port: number
   reloadEmitter?: EventEmitter
+  /** Carries `typebulb send` pushes to connected pages as `message` SSE events (TB-CLI.md).
+   *  Created unconditionally by the web runner (unlike `reloadEmitter`, which is watch-only) so
+   *  send works even under `--no-watch`. Each connected page adds one `message` listener, so its
+   *  `listenerCount('message')` is the count `/__send` reports back. */
+  messageEmitter?: EventEmitter
   getServerExports?: () => Record<string, Function> | null
   /** Local package override: serve `<name>`'s bytes read-only from `serveDir`. */
   localOverride?: { name: string; serveDir: string }
@@ -84,7 +89,7 @@ export interface ServerInstance {
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, port, reloadEmitter, getServerExports, localOverride, trusted = false, trustHint, staticAssets } = options
+  const { getHtml, basePath, port, reloadEmitter, messageEmitter, getServerExports, localOverride, trusted = false, trustHint, staticAssets } = options
 
   const app = new Hono()
 
@@ -173,6 +178,24 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     } catch { /* malformed body — never error a fire-and-forget log */ }
     return c.json({ ok: true })
   })
+
+  // `typebulb send` push (TB-CLI.md) — re-emit the posted body to every connected page as a
+  // `message` SSE event the shim hands to `tb.onMessage`. Data-in, the dual of the ungated
+  // `tb.server.log` (data-out): it runs no user code, spends no key, touches no fs, so it crosses no
+  // capability boundary and needs no --trust. Still CSRF-guarded like /__log: the CLI (no Origin)
+  // passes, a cross-site browser POST is refused, so no other page can inject into the bulb. The
+  // body is forwarded verbatim; the shim interprets it (JSON-or-string). Returns the connected-page
+  // count so `send` can report delivery — best-effort, never buffered (no listeners ⇒ the agent retries).
+  if (messageEmitter) {
+    app.use('/__send', csrfGuard)
+    app.post('/__send', async (c) => {
+      let payload = ''
+      try { payload = await c.req.text() } catch { /* empty body ⇒ a bare trigger */ }
+      const clients = messageEmitter.listenerCount('message')
+      messageEmitter.emit('message', payload)
+      return c.json({ clients })
+    })
+  }
 
   // Main page - serve the compiled bulb HTML (dynamic for hot reload)
   app.get('/', (c) => {
@@ -364,16 +387,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   }
 
-  // Hot reload SSE endpoint
-  if (reloadEmitter) {
+  // Events SSE — one connection per page carrying two channels: `reload` (hot reload, watch-only)
+  // and `message` (`typebulb send`). The page's shim opens this whenever it's served by the dev
+  // server. Registered if either channel is active. The message payload is JSON-encoded on the wire
+  // so a multi-line value can't break SSE's line framing; the shim JSON-decodes it back.
+  if (reloadEmitter || messageEmitter) {
     app.get('/__reload', (c) => {
       return streamSSE(c, async (stream) => {
-        const handler = () => {
-          stream.writeSSE({ event: 'reload', data: '' })
-        }
-        reloadEmitter.on('reload', handler)
+        const onReload = () => { stream.writeSSE({ event: 'reload', data: '' }) }
+        const onMessage = (payload: string) => { stream.writeSSE({ event: 'message', data: JSON.stringify(payload) }) }
+        reloadEmitter?.on('reload', onReload)
+        messageEmitter?.on('message', onMessage)
         stream.onAbort(() => {
-          reloadEmitter.removeListener('reload', handler)
+          reloadEmitter?.removeListener('reload', onReload)
+          messageEmitter?.removeListener('message', onMessage)
         })
 
         // Keep connection alive

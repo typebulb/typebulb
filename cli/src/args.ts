@@ -1,10 +1,13 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
+  /** `send <file> [message]`: the value to push into the running bulb's page (tb.onMessage).
+   *  Optional — a bare `send <file>` delivers `undefined` (a pure trigger). */
+  sendMessage?: string
   /** `call`: positional args after `<fn>`, captured verbatim (each JSON-or-string-parsed at call time). */
   callArgs: string[]
   /** `call --args <json>`: the whole argument list as one JSON array (`-` reads it from stdin). */
@@ -30,6 +33,8 @@ export interface CliArgs {
   mode?: string
   /** `logs --follow`: stream new console output until interrupted (default: snapshot). */
   follow: boolean
+  /** `logs --clear`: truncate the target server's captured log instead of printing it. */
+  clear: boolean
   /** `logs --lines N`: print only the last N lines (default: the whole captured log). */
   lines?: number
   /** `wait --match <substring>`: only lines containing this wake the wait (default: any new line). */
@@ -57,6 +62,7 @@ export function parseArgs(args: string[]): CliArgs {
     trust: false,
     noTrust: false,
     follow: false,
+    clear: false,
     help: false,
     version: false,
     callArgs: [],
@@ -66,7 +72,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -111,6 +117,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.mode = m
     } else if (arg === '--follow' || arg === '-f') {
       result.follow = true
+    } else if (arg === '--clear') {
+      result.clear = true
     } else if (arg === '--bulbs') {
       result.stopScope = 'bulbs'
     } else if (arg === '--agent') {
@@ -171,7 +179,7 @@ export function parseArgs(args: string[]): CliArgs {
       }
       result.argsJson = value
     } else if (!arg.startsWith('-')) {
-      if (result.subcommand === 'call') callPositionals.push(arg)
+      if (result.subcommand === 'call' || result.subcommand === 'send') callPositionals.push(arg)
       else result.file = arg
     }
   }
@@ -185,6 +193,16 @@ export function parseArgs(args: string[]): CliArgs {
     result.file = callPositionals[0]
     result.fn = callPositionals[1]
     result.callArgs = callPositionals.slice(2)
+  }
+
+  // send <file> [message]: first bare token is the file, the optional second is the message.
+  if (result.subcommand === 'send') {
+    if (callPositionals.length < 1) {
+      console.error('Usage: typebulb send <file> [message]')
+      process.exit(1)
+    }
+    result.file = callPositionals[0]
+    result.sendMessage = callPositionals[1]
   }
 
   return result
@@ -214,9 +232,15 @@ Usage:
   typebulb models                List AI models for tb.ai, filtered by the API
                                  keys in your .env (the exact ids to pass).
   typebulb logs [file|pid]       Print a running bulb server's captured console
-                                 (no arg: list this project's running servers).
+                                 (no arg: list this project's running servers;
+                                 --clear <file|pid> empties it for a clean run).
                                  For agents: fetch tb.server.log / errors of a
                                  bulb you launched without watching its terminal.
+  typebulb send <file> [msg]     Push a message into a running bulb's page —
+                                 its tb.onMessage(cb) handlers receive it. The
+                                 client-side twin of 'call'; use it to kick off
+                                 work on demand (msg is JSON-or-string; omit it
+                                 for a bare trigger). Needs no --trust.
   typebulb wait [file|pid]       Block until the target server logs a new line,
                                  print it, exit (2: timeout; 3: server died).
                                  For agents: run it in the background — the exit
@@ -236,6 +260,8 @@ Usage:
 
 Options:
   -f, --follow                Stream new log output until interrupted (logs)
+  --clear                     Empty the target server's log instead of
+                              printing it, for a clean run (logs)
   -n, --lines <n>             Print only the last n lines (logs)
   --match <substring>         Only lines containing this end the wait (wait)
   --timeout <sec>             Give up waiting after this long; exit 2 (wait,

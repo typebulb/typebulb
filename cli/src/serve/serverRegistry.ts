@@ -131,6 +131,17 @@ export function startServerLog(pid: number): () => void {
 }
 
 /**
+ * Truncate a server's console log in place (`typebulb logs --clear`). Hot reload never restarts the
+ * process — the log is otherwise only reset when a process boots (startServerLog) — so this is the
+ * only mid-session reset. Readers resync for free: readServerLog restarts from 0 when its stored
+ * offset now exceeds the file length (the same guard the LOG_CAP trim relies on), so `logs -f` and
+ * `wait` survive a clear without missing the next run. Best-effort.
+ */
+export function clearServerLog(pid: number): void {
+  try { writeFileSync(serverLogPath(pid), '') } catch { /* best-effort — a failed clear just leaves the log */ }
+}
+
+/**
  * New console bytes since `offset`. If the file was trimmed below `offset` (it grew past the
  * cap), restart from 0 so the reader resyncs rather than missing the tail. Absent file ⇒ empty.
  */

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readdir } from 'fs/promises'
+import { mkdtemp, rm, readdir, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
-import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, type BulbServer } from '../src/serve/serverRegistry.js'
+import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, type BulbServer } from '../src/serve/serverRegistry.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -105,6 +105,21 @@ describe('serverRegistry', () => {
     writeWaitCursor(DEAD_PID, 42)
     await stopBulbServer(DEAD_PID)
     expect(readWaitCursor(DEAD_PID)).toBeUndefined()
+  })
+
+  // `typebulb logs --clear` (TB-CLI.md): the mid-session reset hot reload can't do. Truncates the
+  // log, and a reader holding a pre-clear offset resyncs to 0 (the size-cap guard) rather than missing
+  // the next run.
+  it('clearServerLog truncates the log, and readServerLog resyncs a stale offset to 0', async () => {
+    await writeFile(serverLogPath(process.pid), 'run 1 output\n')
+    const staleOffset = readServerLog(process.pid).offset           // a reader caught up to here
+    expect(readServerLog(process.pid).text).toBe('run 1 output\n')
+
+    clearServerLog(process.pid)
+    expect(readServerLog(process.pid).text).toBe('')
+
+    await writeFile(serverLogPath(process.pid), 'run 2\n')           // the next, clean run
+    expect(readServerLog(process.pid, staleOffset).text).toBe('run 2\n')   // offset > length ⇒ from 0
   })
 
   // One server per bulb file (TB-CLI.md "a launch replaces, never stacks"): the pure filter
