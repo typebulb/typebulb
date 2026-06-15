@@ -92,6 +92,18 @@ export class MessageList extends Component {
     return msg
   }
 
+  // The current turn's assistant prose, joined: walk back from the newest message to the last user
+  // message, collecting assistant text. Feeds the shared turn-level copy in prose mode.
+  #turnProseText(): string {
+    const out: string[] = []
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]!
+      if (m.role === 'user') break
+      if (m.text) out.unshift(m.text)
+    }
+    return out.join('\n\n')
+  }
+
   // Set right before navigating to a new chat (session-switch) so the
   // next render lands at the bottom of the new transcript rather than carrying
   // over the previous scroll position.
@@ -124,6 +136,13 @@ export class MessageList extends Component {
       thinking: e.thinking,
       tools: e.tools.map(t => ({ ...t, isError: false })),
     })
+    // Prose mode shows one copy per turn over the joined assistant prose — the per-message split is
+    // tool-call timing, not authorship. Share one CopyButton across the turn's consecutive assistant
+    // messages (reuse the previous one's when same-turn, else start fresh) and keep its text current
+    // as the turn grows; bubble() renders it on the turn's last prose bubble.
+    const prev = this.messages[this.messages.length - 2]
+    msg.turnCopy = (prev?.role === 'assistant' && prev.turnCopy) || this.#makeCopy('')
+    msg.turnCopy.setText(this.#turnProseText())
     this.#attachEmbeds(msg, e.text)
     this.#recomputeChains()
     // Auto-expand live edits; leave historical (replayed) ones collapsed.
@@ -237,9 +256,17 @@ export class MessageList extends Component {
   // so surfacing it (free, exact) beats any generated paraphrase. See the spec.
   renderTurn(msgs: Msg[], turnIdx: number, isLast: boolean) {
     // Prose mode: only what the agent said. Tool-only bubbles drop with no summary stub,
-    // and turn-collapse is moot — its tally counts exactly the steps the mode hides.
+    // and turn-collapse is moot — its tally counts exactly the steps the mode hides. One copy per
+    // turn (the per-message split is tool timing, not authorship): the shared turnCopy renders on the
+    // last assistant prose bubble; user bubbles keep their own (a deliberate merged-send is one copy too).
     if (this.parent.prose) {
-      return msgs.filter(m => m.role === 'user' || m.text || m.body).map(m => this.bubble(m, turnIdx))
+      const visible = msgs.filter(m => m.role === 'user' || m.text || m.body)
+      const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && !!m.text)
+      return visible.map(m => {
+        // User bubbles keep their own pill; the turn's assistant prose gets one, on its last prose bubble.
+        const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
+        return this.bubble(m, turnIdx, copy ?? null)
+      })
     }
     const assistants = msgs.filter(m => m.role === 'assistant')
     if (isLast || assistants.length < 2) return msgs.map(m => this.bubble(m, turnIdx))
@@ -271,7 +298,9 @@ export class MessageList extends Component {
     )
   }
 
-  bubble(msg: Msg, turnIdx: number) {
+  // `copy` is the pill to render (defaults to the message's own). Prose mode passes the shared
+  // turn-level copy on the last prose bubble and `null` on the rest, so a turn shows a single pill.
+  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy) {
     const prose = this.parent.prose
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
@@ -280,7 +309,7 @@ export class MessageList extends Component {
       !prose && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
       prose ? null : msg.tools.map(t => this.tool(t)),
-      msg.copy ? msg.copy.view() : null,
+      copy ? copy.view() : null,
     )
   }
 

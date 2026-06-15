@@ -38,7 +38,9 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set
 // only when an assistant message contains live ````bulb```` embeds: the text split into markdown
 // chunks (string) and BulbEmbed components, rendered in order in place of the single markdown div.
-export interface Msg { id: number; role: 'user' | 'assistant'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[] }
+// `turnCopy` is the prose-mode copy shared across a turn's assistant messages — one pill over the
+// joined turn prose, rendered on the turn's last prose bubble (see MessageList.renderTurn).
+export interface Msg { id: number; role: 'user' | 'assistant'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[] }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }

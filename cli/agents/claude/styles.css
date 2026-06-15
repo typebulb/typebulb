@@ -589,13 +589,14 @@ a.server-port:hover { text-decoration: underline; }
 .md :first-child { margin-top: 0; }
 .md :last-child { margin-bottom: 0; }
 .md p { margin: .5rem 0; }
-/* Thematic break — also the divider between merged consecutive user sends (see
-   applyUser); faint so the bubble still reads as one turn. */
+/* Thematic break — also the divider between merged consecutive user sends (see applyUser): faint
+   so the bubble still reads as one turn, but legible in both themes. Mixed off --fg (text contrast)
+   rather than --border + opacity: --border is itself dim in dark mode, so dimming it again left the
+   line invisible there — and the faintness is a property of the line's color, not the element. */
 .md hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
   margin: .55rem 0;
-  opacity: .5;
 }
 .md pre {
   background: var(--veil);
