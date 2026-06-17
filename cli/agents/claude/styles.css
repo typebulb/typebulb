@@ -945,6 +945,18 @@ a.server-port:hover { text-decoration: underline; }
   white-space: pre-wrap;
 }
 
+/* Structural-defect strip (a malformed bulb that still rendered) — same shape as the error strip but
+   amber: a warning, not a failure. */
+.md .bulb-warn-strip {
+  padding: .45rem .7rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, rgb(200 140 30) 10%, var(--bg));
+  font-family: ui-monospace, monospace;
+  font-size: .8em;
+  color: color-mix(in srgb, rgb(200 140 30) 80%, var(--fg));
+  white-space: pre-wrap;
+}
+
 /* tool calls */
 /* Closed tool: just a single-line row, no chrome — a tool-only turn stays a
    tight list, not N stacked panels. Open tools get the panel treatment below. */

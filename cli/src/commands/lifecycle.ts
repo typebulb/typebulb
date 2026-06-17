@@ -128,10 +128,13 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
 
-  // Resume from the stored cursor when it still locates a point in the log; a missing cursor (first
-  // wait on a never-`call`ed target) or one past the end (log restarted/trimmed) degrades to a snapshot.
+  // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
+  // the bare-wait / `call` baseline (the empty key), then to a snapshot. Per-pattern offsets mean one
+  // waiter's exit can't advance past a line another pattern hasn't matched (TB-Agent-Mirror-Embed-Iterate.md).
+  // A cursor past the end (log restarted/trimmed) also degrades to the snapshot.
+  const match = opts.match ?? ''
   const end = readServerLog(server.pid).offset
-  const stored = readWaitCursor(server.pid)
+  const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
   let cursor = stored !== undefined && stored <= end ? stored : end
   const deadline = Date.now() + opts.timeoutSec * 1000
   // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
@@ -169,8 +172,9 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
     }
     await delay(400)
   }
-  // Every survived exit is a sync point — a timeout too: everything read was seen.
-  writeWaitCursor(server.pid, cursor)
+  // Every survived exit is a sync point — a timeout too: everything read was seen. Written under this
+  // wait's own `--match`, so it never moves another pattern's offset.
+  writeWaitCursor(server.pid, cursor, match)
   process.exit(exitCode)
 }
 

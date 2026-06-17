@@ -18,6 +18,9 @@ import { fetchHttpClient } from './deps/fetchHttpClient.js'
 // Pure bulb-source helpers, re-exported on the browser entry so a host embedding
 // bulbs (code-view, copy, breakout) needn't re-derive frontmatter parsing.
 export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
+// Structural validation (unterminated-fence detection), re-exported so a host can flag a malformed
+// embed that still rendered — same reason: it shouldn't re-derive the block grammar.
+export { validateBulbStructure } from './bulb/bulbParser.js'
 
 export interface RenderBulbResult {
   /** Complete standalone HTML document, ready for an iframe srcdoc. */

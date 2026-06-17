@@ -85,6 +85,25 @@ describe('serverRegistry', () => {
     expect(readWaitCursor(DEAD_PID)).toBeUndefined()
   })
 
+  // Per-`--match` keying (TB-Agent-Mirror-Embed-Iterate.md): each pattern is its own consumer group,
+  // so one waiter's exit can't move another pattern's offset. The empty key is the bare-wait baseline.
+  it('wait cursors are keyed per --match and isolated from each other', async () => {
+    writeWaitCursor(process.pid, 100, '[embed A')
+    writeWaitCursor(process.pid, 200, '[embed B')
+    writeWaitCursor(process.pid, 50)                          // bare baseline (empty key)
+    expect(readWaitCursor(process.pid, '[embed A')).toBe(100)
+    expect(readWaitCursor(process.pid, '[embed B')).toBe(200) // writing A left B untouched
+    expect(readWaitCursor(process.pid)).toBe(50)
+    expect(readWaitCursor(process.pid, '[embed C')).toBeUndefined()  // unseen pattern ⇒ caller falls back
+  })
+
+  // A pre-keying `{ offset }` file still resumes — read as the bare-wait baseline (empty key).
+  it('a legacy single-offset cursor file degrades to the bare-wait baseline', async () => {
+    await writeFile(path.join(dir, `${process.pid}.wait.json`), JSON.stringify({ offset: 321 }))
+    expect(readWaitCursor(process.pid)).toBe(321)
+    expect(readWaitCursor(process.pid, '[embed A')).toBeUndefined()
+  })
+
   // Regression: the prune once parsed `<pid>.wait.json` as a registry entry (a bare `.json` suffix
   // test), found no pid, and unlinked it as garbage — every registry read ate the cursor, so `wait`
   // never resumed. A live server's sidecars must survive the prune untouched.

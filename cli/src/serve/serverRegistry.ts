@@ -75,21 +75,36 @@ function waitCursorPath(pid: number): string {
   return path.join(serversDir(), `${pid}.wait.json`)
 }
 
-/** The stored consumer offset for a server's log, or undefined when absent/unreadable. */
-export function readWaitCursor(pid: number): number | undefined {
+// Consumer offsets for a server's log, one per `wait --match` pattern (the empty key for a bare wait),
+// held as one map in `<pid>.wait.json`. Keying by match is what keeps two subscriptions on one target
+// from burying each other: a single shared offset advanced to EOF by one pattern would strand an
+// earlier line another pattern hadn't matched yet (TB-Agent-Mirror-Embed-Iterate.md).
+type WaitCursors = Record<string, number>
+
+function readWaitCursors(pid: number): WaitCursors {
   try {
-    const v = JSON.parse(readFileSync(waitCursorPath(pid), 'utf8')) as { offset?: unknown }
-    return typeof v.offset === 'number' && Number.isFinite(v.offset) && v.offset >= 0 ? v.offset : undefined
+    const raw = JSON.parse(readFileSync(waitCursorPath(pid), 'utf8')) as { cursors?: unknown; offset?: unknown }
+    if (raw.cursors && typeof raw.cursors === 'object') return raw.cursors as WaitCursors
+    if (typeof raw.offset === 'number') return { '': raw.offset }   // legacy single-offset file ⇒ bare baseline
+    return {}
   } catch {
-    return undefined
+    return {}
   }
 }
 
-/** Persist the consumer offset for a server's log. */
-export function writeWaitCursor(pid: number, offset: number): void {
+/** The stored consumer offset under `match` (empty string = bare wait), or undefined when absent/unreadable. */
+export function readWaitCursor(pid: number, match = ''): number | undefined {
+  const v = readWaitCursors(pid)[match]
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
+}
+
+/** Persist the consumer offset under `match` (empty string = bare wait), leaving other patterns' offsets intact. */
+export function writeWaitCursor(pid: number, offset: number, match = ''): void {
   try {
     mkdirSync(serversDir(), { recursive: true })
-    writeFileSync(waitCursorPath(pid), JSON.stringify({ offset }))
+    const cursors = readWaitCursors(pid)
+    cursors[match] = offset
+    writeFileSync(waitCursorPath(pid), JSON.stringify({ cursors }))
   } catch { /* best-effort — a lost cursor degrades to a snapshot */ }
 }
 

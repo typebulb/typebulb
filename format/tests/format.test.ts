@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
+  validateBulbStructure,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -37,6 +38,79 @@ describe('parse — happy path', () => {
     expect(d.code).toBe('console.log("hi")')
     expect(d.html).toBe('')
     expect(d.config).toBe('')
+  })
+})
+
+describe('validateBulbStructure — unterminated fences', () => {
+  it('a well-formed bulb has no warnings', () => {
+    expect(validateBulbStructure(CANONICAL)).toEqual([])
+  })
+
+  it('flags an unterminated fence that swallowed a later block (the reported case)', () => {
+    const malformed = `---
+format: typebulb/v1
+name: Demo
+---
+
+**code.tsx**
+
+\`\`\`tsx
+x
+\`\`\`
+
+**styles.css**
+
+\`\`\`css
+.a {}
+
+**config.json**
+
+\`\`\`json
+{}
+\`\`\`
+`
+    const w = validateBulbStructure(malformed)
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('styles.css')
+    expect(w[0]).toContain('config.json')
+  })
+
+  it('flags a fence left open at end of file', () => {
+    const malformed = `---
+format: typebulb/v1
+name: Demo
+---
+
+**code.tsx**
+
+\`\`\`tsx
+never closed
+`
+    const w = validateBulbStructure(malformed)
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('code.tsx')
+    expect(w[0]).toContain('end of the file')
+  })
+
+  it('does not false-positive on a block name mentioned in prose (no fence after)', () => {
+    const fine = `---
+format: typebulb/v1
+name: Demo
+---
+
+**code.tsx**
+
+\`\`\`tsx
+x
+\`\`\`
+
+**notes.md**
+
+\`\`\`md
+Set up your **config.json** with the deps you need.
+\`\`\`
+`
+    expect(validateBulbStructure(fine)).toEqual([])
   })
 })
 

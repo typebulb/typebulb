@@ -133,6 +133,10 @@ export declare function slugifyBulbName(source: string): string
 
 /** The source with its leading \`---\` frontmatter block stripped. */
 export declare function stripFrontmatter(source: string): string
+
+/** Structural problems a bulb's Markdown has (chiefly an unterminated fence that swallowed a block);
+ *  one message per problem, empty when well-formed. */
+export declare function validateBulbStructure(content: string): string[]
 `)
 
 // Hand-authored .d.ts for the node `./servers` entry, same rationale as render.d.ts.

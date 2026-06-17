@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
-import { parseBulb, toLocalBulb, parseDataChunks, parseConfig, type LocalBulb } from './bulb/bulbParser.js'
+import { parseBulb, toLocalBulb, parseDataChunks, parseConfig, validateBulbStructure, type LocalBulb } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
 import { packageService } from './deps/resolver.js'
 import { renderHtml } from './bulb/template.js'
@@ -20,12 +20,12 @@ export async function findBulbFile(dir: string): Promise<string | null> {
  * CLI-only `server.ts`) and the parsed `config.json` block. Throws on malformed
  * input — callers decide whether to exit or propagate.
  */
-export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; config: ReturnType<typeof parseConfig> }> {
+export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; config: ReturnType<typeof parseConfig>; warnings: string[] }> {
   const content = await fs.readFile(bulbPath, 'utf-8')
   const parsed = parseBulb(content)
   if (!parsed) throw new Error('Invalid .bulb.md file format')
   const bulb = toLocalBulb(parsed)
-  return { bulb, config: parseConfig(bulb.config) }
+  return { bulb, config: parseConfig(bulb.config), warnings: validateBulbStructure(content) }
 }
 
 /** Compile server source, write to .typebulb/server.mjs, and dynamic-import it */

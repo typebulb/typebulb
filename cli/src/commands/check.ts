@@ -15,7 +15,7 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * role (`client` or `server`) so multi-role output stays parseable.
  */
 export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride): Promise<void> {
-  const { bulb, config } = await readBulb(bulbPath)
+  const { bulb, config, warnings } = await readBulb(bulbPath)
 
   if (!bulb.code && !bulb.server) {
     console.error('Bulb has neither **code.tsx** nor **server.ts**; nothing to check.')
@@ -23,6 +23,11 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   }
 
   let anyFailed = false
+
+  // Structural problems (an unterminated fence swallowing a block) parse "successfully" but produce
+  // wrong blocks, so a bulb can compile and run while malformed — `check` is the gate that catches it.
+  for (const w of warnings) console.log(`structure\t${w}`)
+  if (warnings.length) anyFailed = true
 
   // Lint first — shared with typebulb.com via `typebulb/lint`, cheap, and catches the import-map /
   // Sucrase-unsupported patterns `tsc` can't see. `code.tsx` gets the browser ruleset, `server.ts`

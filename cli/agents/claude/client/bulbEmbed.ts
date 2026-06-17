@@ -1,5 +1,5 @@
 import { Component, div, button } from 'domeleon'
-import { createBulbFrame, stripFrontmatter, bulbName } from '../../../src/render.js'
+import { createBulbFrame, stripFrontmatter, bulbName, validateBulbStructure } from '../../../src/render.js'
 import { mdPlain } from './markdown.js'
 
 // A live ````bulb```` embed: a sandboxed nested app plus its controls. createBulbFrame (the
@@ -19,6 +19,7 @@ export class BulbEmbed extends Component {
   #source: string
   #key: string
   #name?: string                                       // chain key + error-log tag; undefined → singleton, never folded
+  #malformed?: string                                  // structural defect (e.g. an unterminated fence); the bulb still renders
   #frame?: HTMLElement
   #compileError?: string
   #runtimeError?: string
@@ -33,6 +34,8 @@ export class BulbEmbed extends Component {
     this.#source = source
     this.#key = key
     this.#name = bulbName(source)
+    const w = validateBulbStructure(source)
+    this.#malformed = w.length ? w.join(' ') : undefined
   }
 
   get name() { return this.#name }
@@ -68,7 +71,9 @@ export class BulbEmbed extends Component {
       createBulbFrame(this.#source, {
         signal: this.#abort.signal,
         onError: (m: string) => { this.#runtimeError = m; this.#log('runtime', m); this.update() },
-        onReady: () => this.#log('ok'),
+        // A malformed bulb usually still paints (e.g. a swallowed config.json), so onReady fires — but
+        // `ok` would read as a clean render. Forward the structural defect instead, so the verdict is honest.
+        onReady: () => this.#log(this.#malformed ? 'malformed' : 'ok', this.#malformed),
       })
         .then(frame => {
           this.#building = false
@@ -103,10 +108,12 @@ export class BulbEmbed extends Component {
   // piling up the same line (Invariant 7). Diagnostics only — fire-and-forget, drives nothing (Invariant 2).
   // `ok` fires from createBulbFrame's onReady (first paint, never after an error); the host-side guards
   // here can't race it because a compile error means no frame and a folded embed never built one.
-  #log(kind: 'ok' | 'compile' | 'runtime', message?: string) {
+  #log(kind: 'ok' | 'compile' | 'runtime' | 'malformed', message?: string) {
     const tag = this.#name ?? this.#key
-    const line = `[embed ${tag} v${this.#chainPos}] ${kind === 'ok' ? 'ok' : `${kind} error: ${message}`}`
-    void tb.server.logEmbedStatus(tag, line).catch(() => {})
+    const body = kind === 'ok' ? 'ok'
+      : kind === 'malformed' ? `malformed: ${message}`
+      : `${kind} error: ${message}`
+    void tb.server.logEmbedStatus(tag, `[embed ${tag} v${this.#chainPos}] ${body}`).catch(() => {})
   }
 
   // Abort the host-side listener when the whole transcript is dropped (session switch); the embed
@@ -129,6 +136,7 @@ export class BulbEmbed extends Component {
           div({ class: 'bulb-frame', key: 'frame', onMounted: (el: Element) => { if (this.#frame) el.replaceChildren(this.#frame) } }),
           this.showingCode ? this.#codeView() : null,
           this.#runtimeError ? div({ class: 'bulb-err-strip', key: 'err' }, `⚠ ${tag}${this.#runtimeError}`) : null,
+          this.#malformed ? div({ class: 'bulb-warn-strip', key: 'warn' }, `⚠ ${tag}malformed: ${this.#malformed}`) : null,
         ]
     // Wrapped in `.md` so the embed's CSS (`.md .bulb-embed …`) applies as a bubble sibling.
     return div({ class: 'md', key: this.#key }, div({ class: cls }, ...inner))
