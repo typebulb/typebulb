@@ -54,12 +54,18 @@ export interface CliArgs {
 }
 
 export function parseArgs(args: string[]): CliArgs {
+  // Auto-open the external browser by default — except inside VS Code's integrated terminal, where the
+  // printed URL is a clickable terminal link: left-click opens it inline in a Simple Browser pane,
+  // right-click offers the external browser. Auto-opening external there picks the heavier option and
+  // throws that per-launch choice away. `--open` / `--no-open` override this either way.
+  const inVsCode = process.env.TERM_PROGRAM === 'vscode'
+
   const result: CliArgs = {
     subcommand: 'run',
     file: '',
     port: 3000,
     watch: true,
-    open: true,
+    open: !inVsCode,
     server: false,
     trust: false,
     noTrust: false,
@@ -102,6 +108,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.version = true
     } else if (arg === '--no-watch') {
       result.watch = false
+    } else if (arg === '--open') {
+      result.open = true
     } else if (arg === '--no-open') {
       result.open = false
     } else if (arg === '--server') {
@@ -284,6 +292,8 @@ Options:
                               default 1800)
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Use a specific port (default: 3000)
+  --open                      Force-open the external browser (default off
+                              inside VS Code's integrated terminal)
   --no-open                   Don't auto-open browser
   --trust                     Grant privileged capabilities (filesystem, AI,
                               and server.ts) for this run. Without it a bulb runs

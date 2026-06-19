@@ -333,9 +333,12 @@ body {
   color: var(--accent); text-decoration: none; cursor: pointer;
 }
 .server-name:hover { text-decoration: underline; }
-/* Port links to the running server (localhost:<port>) — accent like the name, so a running
-   bulb's clickable :port reads as live against a stopped bulb's muted last-run time. */
-.server-port { color: var(--accent); font-size: .76rem; font-variant-numeric: tabular-nums; text-decoration: none; text-align: right; margin-right: .4rem; }
+/* Port links to the running server (localhost:<port>) — painted the bright fold-marker green
+   (lime in dark, deep green in light), not the name's blue accent: the :port sits at the row's
+   far right, away from the play button, so making it the most prominent thing in the row lets the
+   eye snap to it the moment a just-launched row lands. The green also distinguishes "open the live
+   app" (port) from "open the source" (the blue name), and echoes the fold-marker on collapsed bulbs. */
+.server-port { color: var(--fold-marker); font-size: .76rem; font-variant-numeric: tabular-nums; text-decoration: none; text-align: right; margin-right: .4rem; }
 a.server-port:hover { text-decoration: underline; }
 /* Logs reads like a link (flips to this server's console), not a button. */
 .server-logs { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; margin-left: .5rem; }

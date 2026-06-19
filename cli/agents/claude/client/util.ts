@@ -6,13 +6,17 @@ export const asStr = (v: unknown): string | undefined => (typeof v === 'string' 
 export const TURN_PALETTE_SIZE = 5
 export const turnClassFor = (i: number) => `turn-${i % TURN_PALETTE_SIZE}`
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export function relTime(ms: number): string {
   const d = Math.max(0, Date.now() - ms)
   if (d < 60_000) return 'now'
   if (d < 3_600_000) return `${Math.floor(d / 60_000)}m`
   if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h`
   if (d < 7 * 86_400_000) return `${Math.floor(d / 86_400_000)}d`
-  return new Date(ms).toLocaleDateString()
+  // Older than a week: a lean `5 Jan` (DD MMM) — leanest form that matches the `:port` column width
+  // it now shares; the year is dropped (a launcher rarely lists year-old bulbs).
+  const date = new Date(ms)
+  return `${date.getDate()} ${MONTHS[date.getMonth()]}`
 }
 
 export function formatTokens(n: number): string {
