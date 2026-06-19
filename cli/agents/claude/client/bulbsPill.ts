@@ -189,6 +189,10 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     finally { this.launching.delete(key) }
     if (suppressNag && pid) this.dismissedDenials.add(pid)
     await this.refresh()
+    // A launch is a deliberate foreground action: the now-running row jumped to the bottom (newest),
+    // so force the list there to reveal it + its green :port. Unlike keepBottom (a background refresh
+    // only holds the bottom if already resting there), this pins regardless of current scroll.
+    this.pinToBottom()
   }
 
   // Bulb's frontmatter name when known (nicer than the filename), else the basename sans extension.

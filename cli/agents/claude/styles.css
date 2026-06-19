@@ -419,14 +419,16 @@ a.server-port:hover { text-decoration: underline; }
 .btn-icon { display: block; }
 /* A stopped bulb's play button is dormant — the title is the primary launch target — so it's
    hidden until the row is hovered or keyboard-selected. visibility (not display) reserves its slot,
-   so the name column doesn't shift when it appears. */
-.bulb-launch { color: var(--accent); visibility: hidden; }
+   so the name column doesn't shift when it appears. Painted the fold-marker green, matching the
+   :port link: green is the live-app axis (play to launch → :port to open it), distinct from the
+   blue source/name. The green even travels left→right as a bulb goes stopped→running. */
+.bulb-launch { color: var(--fold-marker); visibility: hidden; }
 .server-row:hover .bulb-launch, .server-row.active .bulb-launch { visibility: visible; }
-.bulb-launch:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.bulb-launch:hover { border-color: var(--fold-marker); background: color-mix(in srgb, var(--fold-marker) 12%, transparent); }
 /* Launching: stays visible (hover-independent) and shimmers until the row flips to a stop button,
    so the ~2s wait reads as "working" rather than a dead click. Transient — driven by the in-memory
    launching set, never persisted. */
-.bulb-launch.launching { visibility: visible; border-color: var(--accent); }
+.bulb-launch.launching { visibility: visible; border-color: var(--fold-marker); }
 .server-stop { color: var(--muted); }
 .server-stop:hover { color: var(--err); border-color: var(--err); }
 /* Elevation prompt (VS-Code-Workspace-Trust style) — a modal over the whole view, since a
