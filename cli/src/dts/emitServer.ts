@@ -116,7 +116,8 @@ function buildServerTsconfig(local?: { name: string; typesAbs?: string }) {
     const fwd = (p: string) => p.replace(/\\/g, '/')
     const distDir = fwd(path.dirname(local.typesAbs))
     const bareTypes = fwd(local.typesAbs).replace(/\.d\.ts$/, '')
-    compilerOptions.baseUrl = '.'
+    // No `baseUrl` (deprecated TS 6.0 / removed 7.0, and would fail `check` on the config itself):
+    // these `paths` values are absolute, so tsc resolves them without one.
     compilerOptions.paths = {
       [local.name]: [bareTypes],
       [`${local.name}/*`]: [`${distDir}/*`],

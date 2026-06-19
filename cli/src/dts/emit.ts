@@ -155,7 +155,10 @@ function buildTsconfig(jsxImportSource: string | undefined, paths: Record<string
       esModuleInterop: true,
       allowSyntheticDefaultImports: true,
       forceConsistentCasingInFileNames: true,
-      baseUrl: '.',
+      // No `baseUrl`: deprecated in TS 6.0 (TS5101), removed in 7.0 — emitting it makes a recent
+      // consumer's `tsc` fail on this generated config itself, before it ever reads the bulb. It's
+      // also unneeded — every `paths` value is `./`-relative, which tsc resolves against this
+      // tsconfig's own directory (no baseUrl required since TS 4.1).
       paths,
     },
     include: ['code.tsx', 'tb.d.ts', ...ambientIncludes],
