@@ -18,6 +18,7 @@
   --veil: rgba(0, 0, 0, 0.05);      /* one shade step; alpha-stacks as panels nest */
   --tool-bg: var(--panel);
   --err: rgb(206, 60, 60);
+  --warn: rgb(176, 120, 12);          /* amber — the cache-leak (cost-caution) tier, milder than --err */
   --diff-add: rgb(40, 140, 70);
   --fold-marker: rgb(24, 145, 72);
   /* Prose measure for text (bubbles + notes) — kept to a readable line length.
@@ -37,6 +38,7 @@ html[data-theme="dark"] {
   --veil: rgba(255, 255, 255, 0.06);
   --tool-bg: var(--panel);
   --err: rgb(230, 60, 60);
+  --warn: rgb(232, 184, 80);          /* amber — the cache-leak (cost-caution) tier, milder than --err */
   --diff-add: rgb(100, 210, 130);
   --fold-marker: rgb(0, 255, 0);
   color-scheme: dark;
@@ -147,13 +149,13 @@ body {
    session list). Wrap = positioning context; the popover anchors bottom/right and
    grows up-and-left — the chips sit in the right-aligned cluster, so left:0 would
    run them off the viewport's right edge. */
-.token-wrap, .sid-wrap, .servers-wrap { position: relative; display: inline-block; }
+.token-wrap, .sid-wrap, .servers-wrap, .model-wrap { position: relative; display: inline-block; }
 /* Each pill renders its wrap unconditionally, emitting an empty div when it has
    nothing to show (no tokens / no session / nothing running). An empty wrap is
    still a flex child, so .statusbar-actions' gap lands on both its sides —
    doubling the visible gap between its neighbours. Collapse the empties so the
    cluster spaces evenly regardless of which pills are present. */
-.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty { display: none; }
+.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty { display: none; }
 .picker, .servers-pop {
   --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
                               mismatched cap reads as a glitch; .picker grows to it, .servers-pop
@@ -209,6 +211,11 @@ body {
   /* Shrink-to-fit, so the sweep paces the text's own length, not the container's — on a full-width
      box the band spends most of its run off-glyph (same move as typebulb.com's shimmer.ts). */
   display: inline-block;
+  /* background-clip:text paints the glyphs through this element's own box, so the box must be tall
+     enough to cover descenders — inheriting the statusbar's line-height:1 clips the "g" in "probing"/
+     "working…" at the baseline. A descender-clearing line-height restores the paint area; the button
+     centres this box, so the extra height never unbalances the row. */
+  line-height: 1.3;
   background-image: linear-gradient(100deg, currentColor 35%, var(--accent) 50%, currentColor 65%) !important;
   -webkit-background-clip: text;
   background-clip: text;
@@ -295,6 +302,180 @@ body {
   border-radius: 2px;
   color: var(--fg);
 }
+
+/* Agent switcher (TB-Agent-Switcher.md) — reuses the .picker popover + rows; just its own width and
+   the no-key entry form. The active model is marked with .picker-row.current (the accent dot), like
+   the attached session; the "active" tag rides .picker-time's muted right-aligned slot. */
+.model-picker { width: min(380px, calc(100vw - 2rem)); }
+.model-err { color: var(--danger, #f87171); font-size: .76rem; padding: .3rem .55rem; }
+/* Key-entry form: the popover flips to this in place of the list when no key is set yet. */
+.key-entry { gap: .5rem; padding: .7rem; }
+.key-entry-head { font-size: .85rem; color: var(--fg); }
+.key-entry .bulb-filter { width: 100%; }
+.key-entry-acts { display: flex; gap: .4rem; justify-content: flex-end; }
+.key-entry-note { font-size: .72rem; color: var(--muted); line-height: 1.4; }
+
+/* Agent switcher watchdog (TB-Agent-Switcher.md). TWO tiers, both surfaced live while the menu is
+   closed: RED when an Anthropic model is riding the OpenRouter route (the $-per-turn Opus footgun), and
+   AMBER when the route served a turn uncached (the cache flip — a cost leak, pennies-scale, so quieter
+   than red so the red stays meaningful). The latch outranks the .on accent (equal specificity → source
+   order wins): coloured border + text, the bar's loudest states. */
+.pill.danger, .pill.danger:hover { border-color: var(--err); color: var(--err); }
+.pill.warn, .pill.warn:hover { border-color: var(--warn); color: var(--warn); }
+/* The watchdog banner: rendered by Root just above the statusbar, anchored to the .app box. Centered,
+   capped width, opaque so it reads over the message text the strip lets through. Only present when a
+   tier is live, so it never costs layout in the common case. .danger is red + a glow ring (loud);
+   .warn is amber, no ring (a quieter cost cue). */
+.model-banner {
+  position: absolute;
+  left: 0; right: 0; bottom: 2.6rem;
+  margin: 0 auto;
+  max-width: min(640px, calc(100vw - 2rem));
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  padding: .55rem .75rem;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: .8rem;
+  line-height: 1.4;
+}
+.model-banner.danger { border: 1px solid var(--err); box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 22%, transparent), 0 4px 14px rgba(0,0,0,.25); }
+.model-banner.warn { border: 1px solid var(--warn); box-shadow: 0 4px 14px rgba(0,0,0,.22); }
+.model-banner-icon { flex: none; }
+.model-banner-text { color: var(--fg); }
+/* L2 predictor: a status line at the top of the model popover saying what the next send will bill.
+   Muted by default; red when the live model is the Anthropic-via-OpenRouter footgun. */
+/* The model menu's top section: ONE row — the route headline (ellipsizing) + the reasoning dial pinned
+   right. Height is one model-row minus its own border, so the row + border + the popover gap to the list
+   equal one list-row pitch — the section subtracts a whole row, never a fraction, so no model is clipped
+   under the scroll. (Eyeball-tune the height; exact pixel math isn't worth it.) The headline carries only
+   what the user cares about; reroute/uncached mechanics live in its title, not on the line. */
+.model-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex: none;
+  height: calc(var(--menu-row-h) - 1px); box-sizing: border-box;
+  /* left padding lines "More info" up with the model titles (row padding .55rem + dot 7px + gap .6rem);
+     right padding lines the dial up with the per-row "probe" column (row padding .55rem + list
+     padding-right 4px + scrollbar ~15px — the scrollbar is effectively always present, so it's accounted
+     for unconditionally; tweak the 15px by eye). */
+  padding: 0 calc(.55rem + 4px + 15px) 0 calc(.55rem + 7px + .6rem);
+  border-bottom: 1px solid var(--border);
+  font-size: .74rem; line-height: 1.35; color: var(--muted);  /* line-height clears "g"/"y" descenders */
+}
+/* The external-override warning is the one case that still puts words on this row. */
+.model-route { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-route.warn { color: var(--warn); }
+/* "More info" — a quiet text link (not a pill); drills into the routing/reasoning explainer (diag chrome). */
+.model-info-toggle {
+  appearance: none; background: none; border: 0; margin: 0; padding: 0;
+  font: inherit; font-size: .74rem; color: var(--accent); cursor: pointer; flex: none;
+}
+.model-info-toggle:hover { text-decoration: underline; }
+/* The reasoning label sits a clear gap to the left of the dial; the pair hugs the right edge. */
+.reasoning-ctl { display: flex; align-items: center; gap: .5rem; flex: none; }
+.reasoning-label { flex: none; }
+
+/* The reasoning dial — a Min/Low/Med/High native select styled as an accent pill (a full combobox is
+   over-powered for four fixed levels), pinned to the right of the headline so the dropdown is the row's
+   last element. */
+.reasoning-select {
+  appearance: none; margin: 0; font: inherit; font-size: .72rem;
+  width: 4rem;                          /* match the probe button so the dial shares its column */
+  /* centred text (symmetric padding) so the label sits like the probe button's centred caption; the
+     chevron still rides the right padding zone. */
+  height: 1.5rem; padding: 0 1.1rem; text-align: center; text-align-last: center; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  /* OPAQUE (mixed over --panel, not transparent) so the OPEN native option list matches the CLOSED
+     pill — a transparent fill left the open list on the browser's default bg, a jarring mismatch.
+     The option rows reuse the same --rs-bg so the two states are identical. */
+  --rs-bg: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  background-color: var(--rs-bg);
+  color: var(--accent); cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%237aa2fa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right .5rem center;
+}
+.reasoning-select option { background-color: var(--rs-bg); color: var(--fg); }
+.reasoning-select:hover { border-color: var(--accent); }
+.reasoning-select:focus { outline: none; border-color: var(--accent); }
+
+/* The Anthropic brand glyph stands in for the word on the default pill (same square footprint as the
+   prose toggle). currentColor tracks the pill's muted→accent state; grayscale at rest like the monkey. */
+.anthropic-glyph { display: block; }
+.pill.glyph .anthropic-glyph { filter: grayscale(1); opacity: .8; }
+.pill.glyph:hover .anthropic-glyph { filter: none; opacity: 1; }
+
+.model-row .picker-row-main { align-items: center; }
+/* Hold the shared --menu-row-h pitch (TB-Agent-Mirror.md: "rows must match pitch exactly or the
+   side-by-side menus read as two designs"). The trailing control is the tallest per-row element; like
+   the launcher's .server-row, trim the inherited .picker-row vertical padding so it stays under the
+   --menu-row-h floor and that floor — not the padded content — governs the row height. The highlight
+   still fills the full 29px (it paints the row box, not the padding). */
+.model-row { padding-top: .05rem; padding-bottom: .05rem; }
+/* The Anthropic (default) row is its own group below the OpenRouter models — it's the distinct "off the
+   proxy, back to your subscription" choice, not just another model. Marked with a subtle background wash
+   rather than a divider line: a line fought the rows' rounded corners + inset highlights (poking corners,
+   uneven gaps), whereas the wash inherits the row's own 6px radius, so it reads as a contained band that
+   sits naturally. Zero layout impact; lower specificity than :hover/.active, so the row still gives its
+   normal accent feedback on top. */
+.model-default-row { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+/* Right-aligned trailing cluster: the green `active` marker (only on the current row) then the
+   fixed-width status control. The status control is rightmost + fixed width, so its column never moves
+   as rows probe — least musical chairs. */
+.model-trailing { flex: none; display: flex; gap: .35rem; justify-content: flex-end; align-items: center; }
+/* ONE button look AND width shared by every trailing pill — probe, probing, the measured status, and
+   the active marker — so they all line up and a transition only ever changes colour/text, never the
+   shape. The width is snug to the widest short label ("uncached"); the labels are kept terse precisely
+   so this stays tight rather than gutter-heavy. */
+.model-btn {
+  appearance: none; margin: 0; font: inherit; font-size: .72rem;
+  width: 4rem; height: 1.5rem; padding: 0 .25rem; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  white-space: nowrap; cursor: pointer;
+}
+.model-status.probe:hover { color: var(--accent); border-color: var(--accent); }
+/* Measured states. cached = the blue accent (the positive "good route" cue); uncached/unavailable =
+   red (the states that bite on cost); cache-unconfirmed = neutral. All reuse existing theme colours. */
+.model-status.ok { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.model-status.bad { color: var(--err); border-color: color-mix(in srgb, var(--err) 50%, transparent); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.model-status.warn { color: var(--muted); border-color: var(--border); }
+.model-status.ok:hover, .model-status.bad:hover, .model-status.warn:hover { filter: brightness(1.12); text-decoration: underline; }
+/* Same pill as every other state — only the text/colour change across probe → probing → result, never
+   the box. Non-interactive (cursor default); the accent-tinted border holds against the row's accent
+   hover tint, where the faint default --border washed out. */
+.model-status.probing { color: var(--muted); border-color: color-mix(in srgb, var(--accent) 35%, transparent); cursor: default; }
+/* The active marker — the lime/green live-axis colour (--fold-marker), matching the launcher's running
+   :port. A cue, not a control: no hover, default cursor. */
+.model-active { color: var(--fold-marker); border-color: color-mix(in srgb, var(--fold-marker) 50%, transparent); background: color-mix(in srgb, var(--fold-marker) 12%, transparent); cursor: default; }
+/* Don't double-mark the current row: the green `active` pill is the marker now, so drop the accent dot
+   fill (keep the gutter transparent for name alignment). */
+.model-picker .picker-row.current .picker-dot { background: transparent; }
+
+/* Drill-in surface — the probe diagnostics and the "More info" routing/reasoning explainer (the
+   launcher's logs analogue). Flips the whole popover; reuses the console head/back chrome. Held at the
+   FULL menu height (not content-sized) so drilling in from the list never resizes the popover — the body
+   fills and scrolls if the content is long, leaving quiet space if it's short. */
+.model-picker.diag-mode { padding: 0; gap: 0; height: var(--menu-h); }
+.model-picker.diag-mode .diag-body { flex: 1; min-height: 0; overflow-y: auto; }
+.model-picker.diag-mode:focus { outline: none; }
+.diag-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .35rem .5rem; background: var(--panel); border-bottom: 1px solid var(--border); }
+.diag-head-acts { display: flex; gap: .4rem; align-items: center; flex: none; }
+.diag-back:disabled { opacity: .5; cursor: default; }
+/* line-height clears descenders: the popover inherits the statusbar's line-height:1, and overflow:hidden
+   would otherwise crop the tails of "g"/"y" (same root cause as .shimmer-text's fix). */
+.diag-name { min-width: 0; color: var(--fg); font-size: .8rem; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.diag-back { font: inherit; font-size: .76rem; appearance: none; margin: 0; padding: .15rem .5rem; border-radius: 5px; background: transparent; border: 1px solid var(--border); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.diag-back:hover { color: var(--accent); border-color: var(--accent); }
+.diag-body { display: flex; flex-direction: column; gap: .4rem; padding: .6rem; background: var(--bg); }
+.diag-line { font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere; }
+/* Hanging-indent bullet under a lead-in line — wrapped lines align past the “• ”. */
+.diag-bullet { padding-left: 1rem; text-indent: -0.55rem; }
+.diag-line.ok { color: var(--diff-add); }
+.diag-line.bad { color: var(--err); }
+.diag-line.warn { color: var(--fg); }
+.diag-line.muted { color: var(--muted); }
+.diag-line.small { font-size: .72rem; }
 
 /* Running-breakouts list — shares the popover chrome (.servers-pop above); its own dimensions +
    per-row layout: the play/stop button + name read together on the left (▶/■ Title, name flex:1),
@@ -1097,6 +1278,8 @@ a.server-port:hover { text-decoration: underline; }
 }
 
 .thinking { margin-bottom: .4rem; font-size: .82rem; color: var(--muted); }
+/* The <summary> toggle defaults to a text cursor — give it the pointer every other expandable uses. */
+.thinking summary { cursor: pointer; }
 .thinking pre { white-space: pre-wrap; }
 
 /* Copy button: an .overlay-pill revealed on bubble-hover. */

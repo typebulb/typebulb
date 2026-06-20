@@ -19,6 +19,9 @@ export interface IRoot {
   ownPid: number
   prose: boolean
   working: boolean
+  // The model the last assistant turn resolved to (from poll) — the agent switcher's live watchdog
+  // reads it to catch an Anthropic model riding the OpenRouter route (TB-Agent-Switcher.md L1).
+  latestModel: string | null
   tokens: TokenCounts
   messageList: IMessageList
   closePopups(except?: unknown): void

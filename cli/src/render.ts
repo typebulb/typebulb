@@ -21,7 +21,7 @@ export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
 // Structural validation (unterminated-fence detection), re-exported so a host can flag a malformed
 // embed that still rendered — same reason: it shouldn't re-derive the block grammar. `parseBulb` rides
 // along so a host can structurally test whether an arbitrary fence body *is* a bulb (mislabel tolerance).
-export { validateBulbStructure, parseBulb } from './bulb/bulbParser.js'
+export { validateBulbStructure, parseBulb, findEmbeddedBulbs } from './bulb/bulbParser.js'
 
 export interface RenderBulbResult {
   /** Complete standalone HTML document, ready for an iframe srcdoc. */

@@ -20,6 +20,14 @@ export interface ParsedBulb {
   files: Map<string, string>
   /** Structural defects tolerated during parse (an unterminated fence); empty when well-formed. */
   warnings: string[]
+  /**
+   * Line index (0-based, into the parsed content's `split('\n')`) just past the last *captured* block's
+   * closing fence — i.e. where the bulb's body ends. NOT end-of-content: trailing lines that set no block
+   * (prose, a stray `---`) sit beyond it. Equals the line after the frontmatter when no block was captured.
+   * Lets a caller slice a bulb out of surrounding prose without swallowing what follows it (see
+   * `findEmbeddedBulbs`).
+   */
+  bodyEndLine: number
 }
 
 /** Structured per-block content, keyed by kind. */
@@ -49,6 +57,9 @@ export function parseBulb(content: string): ParsedBulb | null {
     // Parse file sections
     const files = new Map<string, string>()
     const warnings: string[] = []
+    // Where the body ends: bumped to the line past each captured block's closing fence. Starts at the
+    // first line after the frontmatter, so a block-less bulb reports that.
+    let bodyEndLine = i
 
     while (i < lines.length) {
       const line = lines[i]?.trim()
@@ -79,12 +90,13 @@ export function parseBulb(content: string): ParsedBulb | null {
 
         warnings.push(...blockWarnings(filename, contentLines, terminated))
         files.set(filename, contentLines.join('\n'))
+        bodyEndLine = i
       } else {
         i++
       }
     }
 
-    return { frontmatter, files, warnings }
+    return { frontmatter, files, warnings, bodyEndLine }
   } catch {
     return null
   }
@@ -142,6 +154,48 @@ function parseFrontmatter(lines: string[]): BulbFrontmatter | null {
  */
 export function validateBulbStructure(content: string): string[] {
   return parseBulb(content)?.warnings ?? []
+}
+
+/** A bulb found sitting "naked" in prose — frontmatter and blocks dumped straight into the text with no
+ * enclosing ````bulb```` fence. `start`/`end` are the half-open `[start, end)` line range (0-based, into
+ * `content.split('\n')`); `source` is that slice, ready to feed back to `parseBulb` or a renderer. */
+export interface EmbeddedBulb {
+  start: number
+  end: number
+  source: string
+}
+
+/**
+ * Find bulbs embedded unfenced in arbitrary prose. The normal path wraps a bulb in a ````bulb```` fence
+ * (and the mislabel-tolerant host promotes a fence whose body parses); but some non-SOTA models — Kimi
+ * notably — skip the fence entirely and dump the raw frontmatter + blocks into the message, using `---`
+ * thematic breaks as ad-hoc delimiters, so no fence token ever wraps the bulb. This scans for that.
+ *
+ * The frontmatter gate (`---\nformat: typebulb…`) is the same near-zero-false-positive signal the fenced
+ * mislabel tolerance leans on, so we anchor on a `---` line, run `parseBulb` from there, and accept it
+ * only if it yields at least one real block. The extent is `parseBulb`'s own `bodyEndLine` (just past the
+ * last captured block) — NOT end-of-text — so trailing prose after the bulb (Kimi's closing `---`, a
+ * follow-up paragraph) stays prose instead of being swallowed into the embed. Returned spans are
+ * non-overlapping and in document order; the caller slices the surrounding prose around them.
+ */
+export function findEmbeddedBulbs(content: string): EmbeddedBulb[] {
+  const lines = content.split('\n')
+  const found: EmbeddedBulb[] = []
+  let i = 0
+  while (i < lines.length) {
+    if (lines[i]?.trim() !== '---') { i++; continue }
+    const parsed = parseBulb(lines.slice(i).join('\n'))
+    // Require at least one captured block: a lone `---…---` frontmatter region with no blocks isn't a
+    // renderable bulb (and `bodyEndLine` would be the frontmatter end — an empty slice).
+    if (parsed && parsed.files.size > 0) {
+      const end = i + parsed.bodyEndLine
+      found.push({ start: i, end, source: lines.slice(i, end).join('\n') })
+      i = end
+    } else {
+      i++
+    }
+  }
+  return found
 }
 
 /** Convert a parsed bulb to a structured per-kind object (missing blocks become ''). */

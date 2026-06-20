@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure,
+  validateBulbStructure, findEmbeddedBulbs,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -111,6 +111,70 @@ Set up your **config.json** with the deps you need.
 \`\`\`
 `
     expect(validateBulbStructure(fine)).toEqual([])
+  })
+})
+
+describe('findEmbeddedBulbs — naked bulbs in prose (no enclosing fence)', () => {
+  // The Kimi failure mode: the bulb is dumped straight into the message, framed by `---` thematic
+  // breaks instead of a ````bulb```` fence, with trailing prose after it.
+  const KIMI = `Here's a fireworks bulb, rendered inline below.
+
+---
+
+---
+format: typebulb/v1
+name: Fireworks
+---
+
+**code.tsx**
+
+\`\`\`tsx
+console.log("boom")
+\`\`\`
+
+**config.json**
+
+\`\`\`json
+{ "description": "fireworks" }
+\`\`\`
+
+---
+
+The agent mirror is live at http://localhost:3000.`
+
+  it('finds the bulb framed by --- and parses it', () => {
+    const found = findEmbeddedBulbs(KIMI)
+    expect(found).toHaveLength(1)
+    const p = parseBulb(found[0].source)!
+    expect(p).not.toBeNull()
+    expect(p.frontmatter.name).toBe('Fireworks')
+    expect(p.files.get('code.tsx')).toBe('console.log("boom")')
+    expect(p.files.get('config.json')).toBe('{ "description": "fireworks" }')
+  })
+
+  it('does not swallow trailing prose into the source', () => {
+    const [b] = findEmbeddedBulbs(KIMI)
+    expect(b.source).not.toContain('The agent mirror is live')
+    // The closing `---` thematic break is past the last block, so it stays out of the bulb too.
+    const lines = KIMI.split('\n')
+    expect(lines.slice(0, b.start).join('\n')).toContain("Here's a fireworks bulb")
+    expect(lines.slice(b.end).join('\n')).toContain('The agent mirror is live')
+  })
+
+  it('ignores a lone --- frontmatter region with no blocks', () => {
+    expect(findEmbeddedBulbs('intro\n\n---\nformat: typebulb/v1\nname: x\n---\n\nmore prose')).toEqual([])
+  })
+
+  it('does not fire on ordinary prose with horizontal rules', () => {
+    expect(findEmbeddedBulbs('one\n\n---\n\ntwo\n\n---\n\nthree')).toEqual([])
+  })
+
+  it('reports bodyEndLine just past the last captured block, not end of content', () => {
+    const src = '---\nformat: typebulb/v1\nname: x\n---\n\n**code.tsx**\n\n```tsx\nok\n```\n\ntrailing prose\nmore'
+    const p = parseBulb(src)!
+    // closing ``` is line index 9 (0-based); bodyEndLine points just past it.
+    expect(src.split('\n')[p.bodyEndLine - 1]).toBe('```')
+    expect(src.split('\n').slice(p.bodyEndLine).join('\n')).toContain('trailing prose')
   })
 })
 

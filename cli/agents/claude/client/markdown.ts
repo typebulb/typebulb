@@ -9,7 +9,7 @@ import hljsCss from 'highlight.js/lib/languages/css'
 import hljsJson from 'highlight.js/lib/languages/json'
 import hljsMarkdown from 'highlight.js/lib/languages/markdown'
 import hljsPlaintext from 'highlight.js/lib/languages/plaintext'
-import { parseBulb } from '../../../src/render.js'
+import { parseBulb, findEmbeddedBulbs } from '../../../src/render.js'
 import type { Msg } from './types.js'
 
 // `html: true` lets the agent's natural semantic HTML through the parser — today only <details>/<summary>
@@ -464,34 +464,53 @@ export const userMarkdown = (msg: Msg) => {
   return renderMarkdown(src, { userMessage: true })
 }
 
-// Split an assistant message into ordered markdown chunks and live ````bulb```` sources, using
-// markdown-it's own parser (md.parse) rather than a hand-rolled fence regex — the same tokenizer
-// that renders the prose, so nested ``` fences and fence-length rules are handled for free. A
-// `fence` token tagged `bulb` carries its body in `token.content`; `token.map` gives its line span
-// so the surrounding prose slices out cleanly. The caller turns each bulb source into a BulbEmbed.
+// Split an assistant message into ordered markdown chunks and live bulb sources. Bulbs reach us two ways,
+// both keyed off the near-zero-false-positive frontmatter gate in parseBulb (`---\nformat: typebulb…`):
 //
-// Mislabel tolerance: the info string is *not* the authoritative test — the structural parse is. Some
-// models (GLM, consistently) tag the fence ````markdown instead of ````bulb, or double the opener as
-// ````markdown\n````bulb with a single closer (so markdown-it sees one `markdown` fence whose body
-// begins with a stray ````bulb opener line). The frontmatter gate in parseBulb (`---\nformat: bulb…`)
-// is a near-zero-false-positive signal, so we promote any fence whose body parses as a real bulb,
-// after stripping a stray leading bulb-opener. A genuinely-mislabeled bulb renders; a real markdown
-// snippet (no bulb frontmatter) stays prose. Don't revert this to an info-string-only check.
+// (a) Fenced — the normal route. We walk markdown-it's own parser (md.parse) rather than a hand-rolled
+//     fence regex — the same tokenizer that renders the prose, so nested ``` fences and fence-length rules
+//     are handled for free. A `fence` token carries its body in `token.content`, `token.map` its line span.
+//     The info string is *not* the authoritative test — the structural parse is. Some models (GLM,
+//     consistently) tag the fence ````markdown instead of ````bulb, or double the opener as
+//     ````markdown\n````bulb with a single closer (so markdown-it sees one `markdown` fence whose body
+//     begins with a stray ````bulb opener line). So we promote any fence whose body parses as a real bulb,
+//     after stripping a stray leading bulb-opener. Don't revert this to an info-string-only check.
+//
+// (b) Naked — no enclosing fence at all (findEmbeddedBulbs). Kimi notably skips the fence and dumps the
+//     raw frontmatter + blocks into the message, using `---` thematic breaks as delimiters, so md.parse
+//     only ever sees the bulb's *inner* ```tsx/```css fences — none of which parses as a whole bulb — and
+//     path (a) finds nothing. We scan the raw lines for the frontmatter signature instead.
+//
+// The two are merged by line span: a naked hit whose start falls inside a fenced span is the same bulb
+// seen twice (the frontmatter sits inside the fence) and is dropped, so a normal fenced bulb is unaffected.
+// A genuinely-mislabeled or unfenced bulb renders; a real markdown snippet (no bulb frontmatter) stays prose.
 export type BulbSegment = { kind: 'md'; text: string } | { kind: 'bulb'; source: string }
 const STRAY_BULB_OPENER = /^`{3,}\s*bulb\s*\n/
 export function splitBulbSegments(text: string): BulbSegment[] {
   const lines = text.split('\n')
-  const segs: BulbSegment[] = []
-  let cursor = 0
+  type Span = { start: number; end: number; source: string }
+  const spans: Span[] = []
+  // (a) Fenced bulbs, incl. GLM-style mislabels.
   for (const t of md.parse(text, {})) {
     if (t.type !== 'fence' || !t.map) continue
     const source = t.content.replace(STRAY_BULB_OPENER, '')
     const isBulb = (t.info ?? '').trim().toLowerCase() === 'bulb' || parseBulb(source) != null
-    if (!isBulb) continue
-    const [start, end] = t.map
-    if (start > cursor) segs.push({ kind: 'md', text: lines.slice(cursor, start).join('\n') })
-    segs.push({ kind: 'bulb', source })
-    cursor = end
+    if (isBulb) spans.push({ start: t.map[0], end: t.map[1], source })
+  }
+  // (b) Naked bulbs, skipping any that sit inside a fenced span we already have.
+  for (const b of findEmbeddedBulbs(text)) {
+    if (spans.some(s => b.start >= s.start && b.start < s.end)) continue
+    spans.push({ start: b.start, end: b.end, source: b.source })
+  }
+  spans.sort((a, b) => a.start - b.start)
+
+  const segs: BulbSegment[] = []
+  let cursor = 0
+  for (const s of spans) {
+    if (s.start < cursor) continue // overlaps a bulb already emitted — keep the first
+    if (s.start > cursor) segs.push({ kind: 'md', text: lines.slice(cursor, s.start).join('\n') })
+    segs.push({ kind: 'bulb', source: s.source })
+    cursor = s.end
   }
   if (cursor < lines.length) segs.push({ kind: 'md', text: lines.slice(cursor).join('\n') })
   return segs

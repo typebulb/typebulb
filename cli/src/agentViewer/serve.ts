@@ -140,6 +140,9 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
 
   const cleanup = async () => {
     console.log('\nShutting down...')
+    // Fail-safe: the agent switcher removes its OpenRouter route on a clean shutdown so a closed mirror
+    // never leaves CC pointed at a dead proxy port (TB-Agent-Switcher.md — Lifecycle).
+    try { (agentServer as { shutdownSwitcher?: () => void }).shutdownSwitcher?.() } catch { /* best-effort */ }
     server.close()
     cleanupWatcher?.()
     stopLog()
