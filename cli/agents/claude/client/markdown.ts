@@ -9,6 +9,7 @@ import hljsCss from 'highlight.js/lib/languages/css'
 import hljsJson from 'highlight.js/lib/languages/json'
 import hljsMarkdown from 'highlight.js/lib/languages/markdown'
 import hljsPlaintext from 'highlight.js/lib/languages/plaintext'
+import { parseBulb } from '../../../src/render.js'
 import type { Msg } from './types.js'
 
 // `html: true` lets the agent's natural semantic HTML through the parser — today only <details>/<summary>
@@ -468,18 +469,29 @@ export const userMarkdown = (msg: Msg) => {
 // that renders the prose, so nested ``` fences and fence-length rules are handled for free. A
 // `fence` token tagged `bulb` carries its body in `token.content`; `token.map` gives its line span
 // so the surrounding prose slices out cleanly. The caller turns each bulb source into a BulbEmbed.
+//
+// Mislabel tolerance: the info string is *not* the authoritative test — the structural parse is. Some
+// models (GLM, consistently) tag the fence ````markdown instead of ````bulb, or double the opener as
+// ````markdown\n````bulb with a single closer (so markdown-it sees one `markdown` fence whose body
+// begins with a stray ````bulb opener line). The frontmatter gate in parseBulb (`---\nformat: bulb…`)
+// is a near-zero-false-positive signal, so we promote any fence whose body parses as a real bulb,
+// after stripping a stray leading bulb-opener. A genuinely-mislabeled bulb renders; a real markdown
+// snippet (no bulb frontmatter) stays prose. Don't revert this to an info-string-only check.
 export type BulbSegment = { kind: 'md'; text: string } | { kind: 'bulb'; source: string }
+const STRAY_BULB_OPENER = /^`{3,}\s*bulb\s*\n/
 export function splitBulbSegments(text: string): BulbSegment[] {
   const lines = text.split('\n')
   const segs: BulbSegment[] = []
   let cursor = 0
   for (const t of md.parse(text, {})) {
-    if (t.type === 'fence' && (t.info ?? '').trim().toLowerCase() === 'bulb' && t.map) {
-      const [start, end] = t.map
-      if (start > cursor) segs.push({ kind: 'md', text: lines.slice(cursor, start).join('\n') })
-      segs.push({ kind: 'bulb', source: t.content })
-      cursor = end
-    }
+    if (t.type !== 'fence' || !t.map) continue
+    const source = t.content.replace(STRAY_BULB_OPENER, '')
+    const isBulb = (t.info ?? '').trim().toLowerCase() === 'bulb' || parseBulb(source) != null
+    if (!isBulb) continue
+    const [start, end] = t.map
+    if (start > cursor) segs.push({ kind: 'md', text: lines.slice(cursor, start).join('\n') })
+    segs.push({ kind: 'bulb', source })
+    cursor = end
   }
   if (cursor < lines.length) segs.push({ kind: 'md', text: lines.slice(cursor).join('\n') })
   return segs
