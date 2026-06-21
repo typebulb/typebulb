@@ -1182,6 +1182,20 @@ a.server-port:hover { text-decoration: underline; }
 .turn-summary-text { font-style: italic; }
 .turn-summary:hover .turn-summary-text { color: var(--fg); }
 
+/* An expanded abandoned-branch (fork) stub renders its orphan messages here — set apart from the live
+   transcript with a left rule and slight fade, signalling "this is not the active conversation"
+   (TB-LostMessage.md). The stub header itself is a .turn-summary row above. */
+.fork-body {
+  margin-top: .4rem;
+  padding-left: .6rem;
+  border-left: 2px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  opacity: .82;
+  /* --turn-color is a custom property and INHERITS — the stub's own .bubble.turn-N sets it, so without
+     this reset every nested orphan bubble inherits the parent turn's color and redraws the stripe
+     (the recursive-line bug). Reset to transparent so .bubble::before falls back to no stripe here. */
+  --turn-color: transparent;
+}
+
 /* A superseded embed (an earlier same-name version) folds to this "💡 <Name> — Version N" stub — it
    reclaims the bulb's full height. Marker-green text (--fold-marker: lime in dark, deep green in light)
    on a neutral gray fill (--panel) that hugs the text (width:max-content), no border: text-hugging and

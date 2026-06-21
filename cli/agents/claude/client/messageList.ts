@@ -47,6 +47,12 @@ function summarizeSteps(msgs: Msg[]): string {
   return `${n} step${n === 1 ? '' : 's'}${tally ? ` · ${tally}` : ''}`
 }
 
+// Flip membership of a key in an expand/open Set. The mirror's collapsibles (tools, turns, embeds,
+// forks) all toggle this way; callers add their own follow-up (update / recomputeChains).
+function toggleInSet<T>(set: Set<T>, key: T): void {
+  if (set.has(key)) set.delete(key); else set.add(key)
+}
+
 // Messages panel: scrolling area, bubbles, expanded-tool set, sticky-bottom.
 // No optimistic render — the bulb drives nothing; turns appear only once CC
 // writes them to the JSONL.
@@ -54,6 +60,7 @@ export class MessageList extends Component {
   messages: Msg[] = []
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedTurns = new Set<number>()                // turn indices the user expanded past the collapsed summary
+  expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedEmbeds = new Set<string>()               // embed keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
   bulbEmbeds: BulbEmbed[] = []                      // ditto — one per ````bulb```` embed across the transcript
@@ -72,6 +79,7 @@ export class MessageList extends Component {
     for (const e of this.bulbEmbeds) e.dispose()
     this.messages = []
     this.expandedTurns.clear()
+    this.expandedForks.clear()
     this.expandedEmbeds.clear()
     this.#superseded = new Set()
     this.copyButtons = []
@@ -113,14 +121,18 @@ export class MessageList extends Component {
 
   // ===== apply() dispatch =====
 
+  // Consecutive user sends (no assistant turn between) are one intent split across messages — fold into a
+  // single bubble (segments, divided by a rule in userMarkdown), not a stack of turns. Shared by applyUser
+  // and the orphan-branch builder so both fold the same way.
+  #mergeUserText(prev: Msg, text: string) {
+    prev.segments = [...(prev.segments ?? [prev.text]), text]
+    prev.text = prev.segments.join('\n\n')
+  }
+
   applyUser(e: Extract<ServerEvent, { type: 'user' }>) {
-    // Consecutive user sends (no assistant turn between) are one intent split
-    // across messages — fold into a single bubble (segments, divided by a rule in
-    // userMarkdown), not a stack of turns. An assistant message between resets it.
     const prev = this.messages[this.messages.length - 1]
-    if (prev && prev.role === 'user') {
-      prev.segments = [...(prev.segments ?? [prev.text]), e.text]
-      prev.text = prev.segments.join('\n\n')
+    if (prev && prev.role === 'user') {                       // an assistant message between resets the run
+      this.#mergeUserText(prev, e.text)
       if (prev.copy) prev.copy.setText(prev.text)
       else if (prev.text) prev.copy = this.#makeCopy(prev.text)
       return
@@ -186,8 +198,7 @@ export class MessageList extends Component {
   }
 
   #toggleEmbed(key: string) {
-    if (this.expandedEmbeds.has(key)) this.expandedEmbeds.delete(key)
-    else this.expandedEmbeds.add(key)
+    toggleInSet(this.expandedEmbeds, key)
     this.#recomputeChains()
     this.update()
   }
@@ -195,6 +206,35 @@ export class MessageList extends Component {
   applyToolResult(e: Extract<ServerEvent, { type: 'tool_result' }>) {
     const t = this.#findTool(e.id)
     if (t) { t.result = e.content; t.isError = e.isError }
+  }
+
+  // An abandoned branch the server surfaced at this point in the stream (TB-LostMessage.md). It rides in
+  // as a `fork`-role pseudo-message whose position in `messages` IS the fork parent's slot (the event
+  // arrives right after the parent's own events). Its orphan content is pre-built into `sub` Msgs now,
+  // rendered read-only only when the stub is expanded — no live embeds, no copy pills.
+  applyFork(e: Extract<ServerEvent, { type: 'fork' }>) {
+    const sub = this.#buildSubMessages(e.events)
+    this.#addMessage({ id: ++this.#idSeq, role: 'fork', text: '', thinking: '', tools: [], fork: { count: e.count, sub } })
+  }
+
+  // Turn an orphan branch's server events into renderable Msgs — a trimmed twin of applyUser/
+  // applyAssistant/applyToolResult (no embeds, no copy buttons, no chain bookkeeping): orphan content
+  // is historical and read-only, so it needs only text, thinking, and tool rows.
+  #buildSubMessages(events: ServerEvent[]): Msg[] {
+    const out: Msg[] = []
+    for (const ev of events) {
+      if (ev.type === 'user') {
+        const prev = out[out.length - 1]
+        if (prev && prev.role === 'user') this.#mergeUserText(prev, ev.text)
+        else out.push({ id: ++this.#idSeq, role: 'user', text: ev.text, thinking: '', tools: [] })
+      } else if (ev.type === 'assistant') {
+        out.push({ id: ++this.#idSeq, role: 'assistant', text: ev.text, thinking: ev.thinking, tools: ev.tools.map(t => ({ ...t, isError: false })) })
+      } else if (ev.type === 'tool_result') {
+        const t = out.flatMap(m => m.tools).find(t => t.id === ev.id)
+        if (t) { t.result = ev.content; t.isError = ev.isError }
+      }
+    }
+    return out
   }
 
   #findTool(id: string): Tool | undefined {
@@ -260,52 +300,73 @@ export class MessageList extends Component {
     // turn (the per-message split is tool timing, not authorship): the shared turnCopy renders on the
     // last assistant prose bubble; user bubbles keep their own (a deliberate merged-send is one copy too).
     if (this.parent.prose) {
-      const visible = msgs.filter(m => m.role === 'user' || m.text || m.body)
+      // Fork stubs are said content too — keep them visible in prose mode.
+      const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
       const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && !!m.text)
       return visible.map(m => {
+        if (m.role === 'fork') return this.forkStub(m, turnIdx)
         // User bubbles keep their own pill; the turn's assistant prose gets one, on its last prose bubble.
         const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
         return this.bubble(m, turnIdx, copy ?? null)
       })
     }
     const assistants = msgs.filter(m => m.role === 'assistant')
-    if (isLast || assistants.length < 2) return msgs.map(m => this.bubble(m, turnIdx))
+    if (isLast || assistants.length < 2) return msgs.map(m => m.role === 'fork' ? this.forkStub(m, turnIdx) : this.bubble(m, turnIdx))
 
+    // Collapsed turn: user prompt(s) and any fork stub(s) stay shown (a fork is its own collapsed
+    // marker); only the intermediate assistant bubbles fold under the summary.
     const expanded = this.expandedTurns.has(turnIdx)
     const hidden = assistants.slice(0, -1)
     const last = assistants[assistants.length - 1]!
     const out = msgs.filter(m => m.role === 'user').map(m => this.bubble(m, turnIdx))
-    out.push(this.turnSummary(hidden, turnIdx, expanded))
+    for (const m of msgs) if (m.role === 'fork') out.push(this.forkStub(m, turnIdx))
+    out.push(this.turnSummary(hidden, turnIdx))
     if (expanded) for (const m of hidden) out.push(this.bubble(m, turnIdx))
     out.push(this.bubble(last, turnIdx))
     return out
   }
 
-  // Collapsed-turn header: caret + data-derived step tally, click to toggle.
-  // It's a .bubble so it inherits the turn stripe and keeps the color continuous.
-  turnSummary(hidden: Msg[], turnIdx: number, expanded: boolean) {
-    return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key: `summary-${turnIdx}` },
-      div({
-        class: 'turn-summary',
-        onClick: () => {
-          if (expanded) this.expandedTurns.delete(turnIdx); else this.expandedTurns.add(turnIdx)
-          this.update()
-        },
-      },
+  // Shared shell for the mirror's two collapsed-row stubs — the turn-collapse summary and the
+  // abandoned-branch fork. Both are a .bubble carrying the turn stripe (color continuous with the turn)
+  // and a clickable .turn-summary header (caret + label) that toggles `set`/`key`; the fork additionally
+  // shows `body` beneath when open. They differ only in those four inputs.
+  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: string, body?: ReturnType<typeof div>) {
+    const expanded = set.has(id)
+    return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key },
+      div({ class: 'turn-summary', onClick: () => { toggleInSet(set, id); this.update() } },
         span({ class: 'tool-caret' }, expanded ? '▾' : '▸'),
-        span({ class: 'turn-summary-text' }, summarizeSteps(hidden)),
+        span({ class: 'turn-summary-text' }, label),
       ),
+      body ?? null,
     )
+  }
+
+  // Collapsed stub for an abandoned branch (TB-LostMessage.md): a count label, expanding to the orphan's
+  // read-only messages beneath. Additive, never replacing the live transcript.
+  forkStub(msg: Msg, turnIdx: number) {
+    const f = msg.fork!
+    const body = this.expandedForks.has(msg.id)
+      ? div({ class: 'fork-body' }, f.sub.map(sub => this.bubble(sub, turnIdx, undefined, false)))
+      : undefined
+    const label = `⑂ ${f.count} message${f.count === 1 ? '' : 's'} on an abandoned branch`
+    return this.#collapsibleRow(`fork-${msg.id}`, turnIdx, this.expandedForks, msg.id, label, body)
+  }
+
+  // Collapsed-turn header: caret + data-derived step tally, click to toggle.
+  turnSummary(hidden: Msg[], turnIdx: number) {
+    return this.#collapsibleRow(`summary-${turnIdx}`, turnIdx, this.expandedTurns, turnIdx, summarizeSteps(hidden))
   }
 
   // `copy` is the pill to render (defaults to the message's own). Prose mode passes the shared
   // turn-level copy on the last prose bubble and `null` on the rest, so a turn shows a single pill.
-  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy) {
+  // `stripe` is the left turn-color bar; orphan-branch sub-bubbles pass false — they're already grouped
+  // by .fork-body's own rule, so repeating the parent turn's stripe inside it reads as recursive nesting.
+  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true) {
     const prose = this.parent.prose
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
-    return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', turnClassFor(turnIdx)], key: msg.id },
+    return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
       !prose && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
       prose ? null : msg.tools.map(t => this.tool(t)),
@@ -357,7 +418,7 @@ export class MessageList extends Component {
       div({
         class: 'tool-head',
         onClick: () => {
-          if (open) this.openTools.delete(t.id); else this.openTools.add(t.id)
+          toggleInSet(this.openTools, t.id)
           this.update()
         },
       },

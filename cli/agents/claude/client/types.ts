@@ -36,6 +36,9 @@ export type ServerEvent =
   | { type: 'tool_result'; id: string; content: string; isError: boolean }
   | { type: 'cleared' }
   | { type: 'usage'; in: number; out: number; cached: number; cacheCreate: number }
+  // An abandoned branch off a fork point (TB-LostMessage.md): `events` are the orphan's own messages,
+  // `count` the user/assistant tally for the stub label. Surfaced collapsed at the fork parent's position.
+  | { type: 'fork'; atUuid: string; count: number; events: ServerEvent[] }
 
 export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean }
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set
@@ -43,7 +46,9 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // chunks (string) and BulbEmbed components, rendered in order in place of the single markdown div.
 // `turnCopy` is the prose-mode copy shared across a turn's assistant messages — one pill over the
 // joined turn prose, rendered on the turn's last prose bubble (see MessageList.renderTurn).
-export interface Msg { id: number; role: 'user' | 'assistant'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[] }
+// `fork` is set only on a `role: 'fork'` pseudo-message — a collapsed stub for an abandoned branch
+// (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[]; fork?: { count: number; sub: Msg[] } }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }

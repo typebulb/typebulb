@@ -104,6 +104,7 @@ export class Root extends Component implements IRoot {
       case 'user': this.messageList.applyUser(e); break
       case 'assistant': this.messageList.applyAssistant(e); break
       case 'tool_result': this.messageList.applyToolResult(e); break
+      case 'fork': this.messageList.applyFork(e); break
       case 'usage': this.tokens = { in: e.in, out: e.out, cached: e.cached, cacheCreate: e.cacheCreate }; break
     }
   }

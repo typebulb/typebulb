@@ -17,6 +17,10 @@ interface JsonlEntry {
   // CC's flag for an injected, non-human-authored turn: a launched skill's body, a
   // slash-command caveat, a /loop resume nudge. Hidden from the chat (see isHiddenTurn).
   isMeta?: boolean
+  // CC's typed flag for an assistant message that IS an API error notice (retry/backoff),
+  // not a real turn — CC itself skips these on resume (conversationRecovery.ts). We use it to
+  // tell an abandoned *content* branch from one that's only error-recovery noise (TB-LostMessage.md).
+  isApiErrorMessage?: boolean
   parentUuid?: string
   timestamp?: string
   sessionId?: string
@@ -61,6 +65,10 @@ type Event =
   | { type: 'tool_result'; id: string; content: string; isError: boolean }
   | { type: 'cleared' }
   | { type: 'usage'; in: number; out: number; cached: number; cacheCreate: number }
+  // An abandoned (orphaned) branch off a fork point — CC drops these; the mirror surfaces them as a
+  // collapsed stub at the fork parent's position. `events` are the orphan's own rendered messages
+  // (user/assistant/tool_result), `count` the user/assistant tally for the stub label (TB-LostMessage.md).
+  | { type: 'fork'; atUuid: string; count: number; events: Event[] }
 
 // Mirror sessionStoragePortable.sanitizePath: non-alphanumeric → '-'.
 // (CC also appends a hash for very long paths; short cwds don't need it.)
@@ -361,9 +369,12 @@ function drainFile() {
     if (!entry) continue
     if (entry.uuid) {
       s.entries.set(entry.uuid, entry)
-      // Sidechains (sub-agent threads) are their own chains — only main-thread
-      // entries can be the latest leaf.
-      if (!entry.isSidechain) latestUuid = entry.uuid
+      // The live chain's leaf is the newest main-thread USER/ASSISTANT entry — never a
+      // sidechain (sub-agent thread) and never a trailing `system` line (an api_error
+      // retry record can be the literal last line and would root the walk in error noise).
+      // Matches CC's own resume: findLatestMessage over user/assistant leaves only
+      // (sessionStorage.ts). Keeps latestUuid consistent with chainWorking's leaf scan. (TB-LostMessage.md)
+      if (!entry.isSidechain && (entry.type === 'user' || entry.type === 'assistant')) latestUuid = entry.uuid
     }
   }
   if (!latestUuid) return
@@ -389,9 +400,79 @@ function drainFile() {
       s.buffer.push({ type: 'session', sessionId: s.sessionId })
       s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
     }
-    for (let i = walked.length - 1; i >= 0; i--) processEntry(walked[i])
+    // Full emit (initial attach OR a rewind/error-fork divergence) is the ONLY path where an
+    // orphaned branch can appear, so it's the only one that pays for fork detection — pure
+    // extension (foundPrev) is a leaf-ward append that can't strand a sibling. As each chain
+    // entry is emitted, surface any of its non-sidechain children that aren't on the live chain.
+    // The cleared+re-emit above recomputes forks from scratch every divergence, so no dedup is
+    // needed across drains. (TB-LostMessage.md)
+    const liveSet = new Set(walked.map(e => e.uuid))
+    const childrenByParent = indexChildren(s.entries)
+    for (let i = walked.length - 1; i >= 0; i--) {
+      processEntry(walked[i])
+      surfaceForks(walked[i].uuid, childrenByParent, liveSet)
+    }
   }
   s.chainLastUuid = latestUuid
+}
+
+// parentUuid → its child entries, over the whole accumulated tree. Built once per full emit
+// (not per poll), since fork detection only runs on the full-emit paths.
+function indexChildren(entries: Map<string, JsonlEntry>): Map<string, JsonlEntry[]> {
+  const byParent = new Map<string, JsonlEntry[]>()
+  for (const e of entries.values()) {
+    if (!e.parentUuid) continue
+    const arr = byParent.get(e.parentUuid)
+    if (arr) arr.push(e)
+    else byParent.set(e.parentUuid, [e])
+  }
+  return byParent
+}
+
+// A fork = a chain entry with >1 non-sidechain child. The child(ren) not on the live chain are
+// orphaned branches CC abandoned (a /rewind, or an api_error sibling — see the spec's proof case).
+// Render each orphan subtree and, if it holds real content, emit one collapsed stub at the parent's
+// position. A branch that's only error-recovery noise renders to nothing and is dropped. (TB-LostMessage.md)
+function surfaceForks(parentUuid: string, childrenByParent: Map<string, JsonlEntry[]>, liveSet: Set<string>) {
+  const kids = childrenByParent.get(parentUuid)
+  if (!kids) return
+  const nonSide = kids.filter(k => !k.isSidechain)
+  if (nonSide.length < 2) return                            // single child ⇒ no fork
+  const orphanRoots = nonSide.filter(k => !liveSet.has(k.uuid))
+  if (!orphanRoots.length) return
+  const events: Event[] = []
+  let count = 0
+  for (const root of orphanRoots) {
+    const b = renderOrphanBranch(root, childrenByParent)
+    events.push(...b.events)
+    count += b.count
+  }
+  if (count > 0) state.buffer.push({ type: 'fork', atUuid: parentUuid, count, events })
+}
+
+// Render one orphaned subtree (the orphan root + all its non-sidechain descendants, chronological)
+// through the SAME display path the live chain uses (applyEntry), into a private sink so it never
+// touches latest/latestModel/usage. Recovery noise is skipped first — CC's isApiErrorMessage flag on
+// an assistant, and any non-user/assistant/attachment entry (system/api_error). `count` is the
+// user/assistant tally; 0 ⇒ the caller treats the branch as noise and drops it. (TB-LostMessage.md)
+function renderOrphanBranch(root: JsonlEntry, childrenByParent: Map<string, JsonlEntry[]>): { count: number; events: Event[] } {
+  const collected: JsonlEntry[] = []
+  const stack: JsonlEntry[] = [root]
+  while (stack.length) {
+    const e = stack.pop()!
+    if (e.isSidechain) continue
+    collected.push(e)
+    const kids = childrenByParent.get(e.uuid)
+    if (kids) for (const k of kids) stack.push(k)
+  }
+  collected.sort((a, b) => (Date.parse(a.timestamp ?? '') || 0) - (Date.parse(b.timestamp ?? '') || 0))
+  const events: Event[] = []
+  for (const e of collected) {
+    if (e.isApiErrorMessage) continue                      // typed error-recovery noise, not a turn
+    applyEntry(e, events, false)                           // sink + no state tracking
+  }
+  const count = events.reduce((n, ev) => n + (ev.type === 'user' || ev.type === 'assistant' ? 1 : 0), 0)
+  return { count, events }
 }
 
 // Harness noise to hide from the chat. Status-line markers stay unanchored — they
@@ -412,6 +493,19 @@ const INTERNAL_PATTERNS = [
 function isInternal(text: string): boolean {
   const t = text.trim()
   return !!t && INTERNAL_PATTERNS.some(p => p.test(t))
+}
+
+// For an assistant TEXT block specifically: drop it only when the block *is* a synthetic envelope —
+// i.e. it BEGINS with one of the markers — never when real prose merely quotes a marker mid-text.
+// isInternal's unanchored patterns (interrupt/tool-interrupt/"Claude Code returned an error"/ede) exist
+// to catch wrapped *user* status lines via cleanUserText; applied per-block to assistant prose they ate
+// whole messages — e.g. a turn explaining the shimmer fix that quoted `[Request interrupted by user]`
+// lost its entire text. Requiring the match at index 0 keeps the synthetic-block intent without the
+// false positives. ('' counts as synthetic — an empty block contributes nothing anyway.) (TB-LostMessage.md)
+function isSyntheticAssistantText(text: string): boolean {
+  const t = text.trim()
+  if (!t) return true
+  return INTERNAL_PATTERNS.some(p => { const m = p.exec(t); return !!m && m.index === 0 })
 }
 
 // IDE-injected context (opened-file, selection, …) the editor integration splices into the user's
@@ -467,21 +561,24 @@ function processEntry(entry: JsonlEntry) {
   catch (err) { console.error('[mirror] skipped malformed entry:', errorMessage(err)) }
 }
 
-function applyEntry(entry: JsonlEntry) {
+// Render one entry into `sink` (the live buffer by default). `trackState` is true for the live chain
+// and false for an orphaned branch — an orphan must render through the identical display path but must
+// NOT mutate latest/latestModel/usage (those describe the live conversation only). (TB-LostMessage.md)
+function applyEntry(entry: JsonlEntry, sink: Event[] = state.buffer, trackState = true) {
   if (isHiddenTurn(entry)) return                 // sub-agent threads + CC's isMeta injections (skill bodies, …)
   const s = state
   if (entry.type === 'user') {
     const content = entry.message?.content
     if (typeof content === 'string') {
       const text = cleanUserText(content)
-      if (text) s.buffer.push({ type: 'user', text })
+      if (text) sink.push({ type: 'user', text })
     } else if (Array.isArray(content)) {
       for (const b of content) {
         if (b?.type === 'tool_result') {
-          s.buffer.push({ type: 'tool_result', id: b.tool_use_id ?? '', content: toText(b.content), isError: !!b.is_error })
+          sink.push({ type: 'tool_result', id: b.tool_use_id ?? '', content: toText(b.content), isError: !!b.is_error })
         } else {
           const text = userTextBlock(b) || blockToMarkdown(b)
-          if (text) s.buffer.push({ type: 'user', text })
+          if (text) sink.push({ type: 'user', text })
         }
       }
     }
@@ -490,14 +587,14 @@ function applyEntry(entry: JsonlEntry) {
     // a user turn, and never re-emits it — so without this branch it's lost from
     // the view. (Other attachment subtypes, e.g. 'selection', stay hidden.)
     const text = cleanUserText(toText(entry.attachment.prompt))   // string in current CC; toText also tolerates older array shapes
-    if (text) s.buffer.push({ type: 'user', text })
+    if (text) sink.push({ type: 'user', text })
   } else if (entry.type === 'assistant') {
     const content = entry.message?.content
     const blocks: ContentBlock[] = Array.isArray(content) ? content : []
     const text = blocks
       .filter(b => b.type === 'text')
       .map(b => b.text ?? '')
-      .filter(t => !isInternal(t))                               // drop synthetic / internal blocks
+      .filter(t => !isSyntheticAssistantText(t))                  // drop synthetic envelope blocks, keep prose that quotes a marker
       .join('')
     const thinking = blocks.filter(b => b.type === 'thinking').map(b => b.thinking ?? '').join('\n')
     const tools = blocks
@@ -507,8 +604,9 @@ function applyEntry(entry: JsonlEntry) {
       // live = newer than bulb start; drives auto-expand of fresh edits.
       const ts = Date.parse(entry.timestamp ?? '')
       const live = !isNaN(ts) && ts >= s.sessionStartMs
-      s.buffer.push({ type: 'assistant', text, thinking, tools, live })
+      sink.push({ type: 'assistant', text, thinking, tools, live })
     }
+    if (!trackState) return                                       // an orphan never moves the live watchdog / token chip
     // The model this turn actually resolved to — the watchdog's live anchor (L1). Overwrite, like
     // usage: it's the latest resolution, not a history. A turn with no model field (rare) leaves the
     // prior value rather than blanking the watchdog mid-session.
@@ -525,7 +623,7 @@ function applyEntry(entry: JsonlEntry) {
         cached: usage.cache_read_input_tokens ?? 0,
         cacheCreate: usage.cache_creation_input_tokens ?? 0,
       }
-      s.buffer.push({ type: 'usage', ...s.latest })
+      sink.push({ type: 'usage', ...s.latest })
     }
   }
   // Ignore: mode, permission-mode, file-history-snapshot, system metadata, summary, etc.
@@ -568,11 +666,32 @@ export async function logEmbedStatus(tag: string, line: string) {
 // the spec's flush note), and an assistant entry stays "working" while a tool_use has
 // no matching tool_result. It goes idle only once an assistant entry has every tool
 // resolved — the final answer landed.
+//
+// The one user-leaf that does NOT mean "pending" is a synthetic interrupt marker: when
+// you hit stop, CC writes "[Request interrupted by user]" as a user entry, which would
+// otherwise read as a fresh prompt and shimmer forever (the model's a no-op now). It
+// bites hardest on the switcher's reasoning models — their pre-text reasoning is stripped
+// at the proxy, so there's no committed assistant block when you stop, leaving the marker
+// as the leaf every time. The mirror already knows that string is internal noise
+// (cleanUserText reduces it to ''), so reuse that: a user leaf whose text cleans to empty
+// (and carries no tool_result) is an ended turn, not a pending one. A real prompt cleans
+// non-empty; a mid-turn tool_result leaf still means CC is about to continue. Fully
+// guarded — this runs inside poll(), so a malformed block must never throw (a poll() throw
+// stalls the cursor and freezes the whole transcript).
 function chainWorking(s: State): boolean {
   let leaf: JsonlEntry | undefined           // entries is insertion- (= file-) ordered
   for (const e of s.entries.values()) if (e.type === 'user' || e.type === 'assistant') leaf = e
   if (!leaf) return false
-  if (leaf.type === 'user') return true
+  if (leaf.type === 'user') {
+    try {
+      const c = leaf.message?.content
+      const text = typeof c === 'string' ? c
+        : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text ?? '').join('') : ''
+      const hasToolResult = Array.isArray(c) && c.some(b => b && b.type === 'tool_result')
+      if (!hasToolResult && text.trim() && cleanUserText(text) === '') return false
+    } catch { /* malformed leaf — fall through to the safe default (working) */ }
+    return true
+  }
   const blocks = Array.isArray(leaf.message?.content) ? leaf.message!.content as ContentBlock[] : []
   const toolUseIds = blocks.filter(b => b.type === 'tool_use').map(b => b.id)
   if (toolUseIds.length === 0) return false
