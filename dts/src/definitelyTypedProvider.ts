@@ -1,5 +1,6 @@
 import { PackageRef, semverService, type CdnClient } from 'typebulb/resolver'
 import { TypeProvider } from './typeProvider.js'
+import { makeDeclarationCandidates } from './dtsConfig.js'
 import { TarballFetcher } from './tarballFetcher.js'
 import type { DtsCache } from './cache.js'
 import type { FetchDtsWithCache } from './fetchDts.js'
@@ -35,6 +36,25 @@ export class DefinitelyTypedProvider extends TypeProvider {
     }
   }
 
+  /**
+   * Declaration-file candidates for a subpath, keyed as the tarball stores them
+   * (package-relative, no leading `./`). A runtime extension is stripped first —
+   * `examples/jsm/controls/OrbitControls.js` lives at `OrbitControls.d.ts`, not
+   * `OrbitControls.js.d.ts` — mirroring TypescriptProvider.declarationCandidatesFor.
+   * The raw-subpath forms are kept as a fallback for paths whose dot isn't a JS
+   * extension (e.g. a literal `foo.bar` directory).
+   */
+  private subpathCandidates(subpath: string): string[] {
+    const base = subpath.replace(/\.(mjs|cjs|js|mts|cts|ts)$/i, '')
+    const out = [
+      ...makeDeclarationCandidates(base),
+      `${base}/index.d.ts`,
+      `${base}/index.d.mts`,
+    ]
+    if (base !== subpath) out.push(`${subpath}.d.ts`, `${subpath}/index.d.ts`)
+    return out
+  }
+
   private async fetchFromVersionedRoot(versionedRoot: string, parsed: ReturnType<typeof PackageRef.parse>) {
     const ref = new PackageRef(versionedRoot)
     const version = ref.version
@@ -50,7 +70,7 @@ export class DefinitelyTypedProvider extends TypeProvider {
     }
 
     const candidates = parsed.subpath
-      ? [parsed.subpath + '.d.ts', parsed.subpath + '/index.d.ts']
+      ? this.subpathCandidates(parsed.subpath)
       : ['index.d.ts']
 
     for (const p of candidates) {
