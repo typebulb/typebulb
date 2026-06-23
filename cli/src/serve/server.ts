@@ -13,7 +13,7 @@ import type { ProviderProtocol, ResolvedAIProvider } from 'typebulb/ai'
 import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, streamAiChunks, ProviderStreamError } from 'typebulb/ai'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
-import { PROVIDER_ENV_KEYS, getFilteredModels } from './modelCatalog.js'
+import { PROVIDER_ENV_KEYS, getFilteredModels, normalizeOllamaHost } from './modelCatalog.js'
 import { streamNdjson } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
@@ -426,7 +426,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // Re-proxy absolute imports an esm.sh module body emits — they resolve against localhost (the
   // page origin) and 404 without this. Which shapes count lives in isEsmAbsoluteImportPath
-  // (esmProxyPaths.ts, specs/Proxy.md Invariant 3); non-esm paths (/favicon.ico, .map, SPA routes)
+  // (esmProxyPaths.ts, runtime-specs/TB-Proxy.md Invariant 3); non-esm paths (/favicon.ico, .map, SPA routes)
   // fall through to a real 404 rather than a silent upstream relay.
   app.notFound(async (c) => {
     if (c.req.method !== 'GET') return c.text('Not Found', 404)
@@ -466,11 +466,21 @@ function resolveLocalProvider(reqProvider?: string, reqModel?: string): Resolved
   let spec
   try { spec = getProvider(protocol) } catch { return `Unknown provider '${protocol}'.` }
 
-  // Ollama (and other local servers) run on the machine with no API key. Resolve with an empty
-  // key and a base URL from OLLAMA_HOST, defaulting to the provider's localhost default.
+  // OpenAI-compatible local / self-hosted endpoints. Both append `/chat/completions` onto a base
+  // that ends in `/v1` (see OllamaProvider). `ollama` is the zero-config preset: keyless, origin
+  // from OLLAMA_HOST (Ollama's own env var, scheme optional) defaulting to localhost:11434; the
+  // `/v1` is supplied here so the provider path stays the bare operation.
   if (protocol === 'ollama') {
-    const baseUrl = process.env.OLLAMA_HOST ?? spec.defaultBaseUrl
+    const baseUrl = `${normalizeOllamaHost(process.env.OLLAMA_HOST ?? spec.defaultBaseUrl)}/v1`
     return { apiKey: '', baseUrl, protocol, model, isFreeModel: false }
+  }
+  // `openai-compat` is the generic form for any OpenAI-compatible endpoint (LM Studio, vLLM, a
+  // self-hosted box, a keyed proxy): TB_AI_BASE_URL is the OpenAI-style base ending in `/v1`
+  // (paste-compatible with what these vendors document), used verbatim; the key is optional.
+  if (protocol === 'openai-compat') {
+    const baseUrl = process.env.TB_AI_BASE_URL
+    if (!baseUrl) return 'No base URL for openai-compat. Set TB_AI_BASE_URL (the OpenAI-style base ending in /v1, e.g. http://localhost:1234/v1) in your .env file.'
+    return { apiKey: process.env.TB_AI_API_KEY ?? '', baseUrl, protocol, model, isFreeModel: false }
   }
 
   const envKey = PROVIDER_ENV_KEYS[protocol]

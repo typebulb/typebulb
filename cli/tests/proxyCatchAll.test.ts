@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { isEsmAbsoluteImportPath } from '../src/serve/esmProxyPaths.js'
 
 /**
- * specs/Proxy.md Invariant 3: the CLI serves esm.sh module bytes from localhost, so EVERY
+ * runtime-specs/TB-Proxy.md Invariant 3: the CLI serves esm.sh module bytes from localhost, so EVERY
  * absolute import shape esm.sh emits in those bytes must be re-proxyable — versioned or not.
  * A shape the catch-all misses 404s the whole module graph against localhost with no thrown
  * exception (the globe.gl → d3-array failure). typebulb.com never hits this because it loads

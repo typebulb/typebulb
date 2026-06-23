@@ -1,5 +1,5 @@
 /**
- * The shared chunk transport for streaming server responses (specs/Streaming.md): an
+ * The shared chunk transport for streaming server responses (runtime-specs/TB-Streaming.md): an
  * `AsyncIterable` tunneled to the browser as newline-delimited JSON over the existing bridge
  * `POST` response. Used by both `tb.server.<gen>()` (async-generator exports) and
  * `tb.ai.stream()`. One line per item, each an envelope so a mid-stream error is distinguishable

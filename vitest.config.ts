@@ -6,6 +6,7 @@ export default defineConfig({
     // Override logic is pure Node (fs / path / es-module-lexer); no DOM needed.
     environment: 'node',
     include: [
+      'ai/tests/**/*.test.ts',
       'cli/tests/**/*.test.ts',
       'format/tests/**/*.test.ts',
       'dts/tests/**/*.test.ts',

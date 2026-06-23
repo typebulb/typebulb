@@ -78,7 +78,13 @@ export type OpenRouterRequestPayload = {
 
 export class OpenRouterProvider extends AIProvider {
   protected readonly providerName = 'OpenRouter'
-  readonly defaultBaseUrl = 'https://openrouter.ai/api'
+  // First-party convention (like anthropic/openai/gemini): the base is the bare origin and the
+  // full versioned mount lives in `path`. OpenRouter mounts its OpenAI-compatible API at `/api/v1`
+  // (not `/v1`), so the path carries `/api/v1/…` — the vendor's real mount, the way gemini's path
+  // carries `/v1beta`. Keeping `/api` in the path (not the base) also matches the web-side stored
+  // `apiUrl` of `https://openrouter.ai`, so the prefix-preserving join yields the identical URL on
+  // both web and CLI. (Do NOT put `/api` in the base too — the join would then double it to `/api/api`.)
+  readonly defaultBaseUrl = 'https://openrouter.ai'
   readonly path: string = '/api/v1/chat/completions'
 
   private readonly effortMap: Record<ReasoningDepth, 'low' | 'medium' | 'high'> = {

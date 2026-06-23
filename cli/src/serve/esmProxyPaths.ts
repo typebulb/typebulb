@@ -1,5 +1,5 @@
 // Which request paths are absolute imports an esm.sh module body emits — the ones the CLI must
-// re-proxy to esm.sh rather than 404 (specs/Proxy.md Invariant 3). Because the CLI serves module
+// re-proxy to esm.sh rather than 404 (runtime-specs/TB-Proxy.md Invariant 3). Because the CLI serves module
 // BYTES from localhost, an absolute import inside one resolves against localhost, not the CDN, so
 // the catch-all (serve/server.ts) re-routes anything matching here. Single source of truth so the
 // server route and its tests agree.

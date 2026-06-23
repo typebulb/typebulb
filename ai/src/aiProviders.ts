@@ -6,12 +6,16 @@ import { AnthropicProvider } from './providers/anthropic.js'
 import { GeminiProvider } from './providers/gemini.js'
 import { OllamaProvider } from './providers/ollama.js'
 
+// One OpenAI-compatible client backs both the `ollama` zero-config preset and the generic
+// `openai-compat` protocol; they differ only in how the resolver sources base URL + key.
+const openAICompat = new OllamaProvider()
 const providers = new Map<ProviderProtocol, AIProvider>([
   ['openai', new OpenAIProvider()],
   ['openrouter', new OpenRouterProvider()],
   ['anthropic', new AnthropicProvider()],
   ['gemini', new GeminiProvider()],
-  ['ollama', new OllamaProvider()]
+  ['ollama', openAICompat],
+  ['openai-compat', openAICompat]
 ])
 
 /** Get the provider implementation for a given protocol. */
@@ -44,6 +48,20 @@ export interface SendAIRequestOpts {
   modifyPayload?: (payload: Record<string, unknown>) => void
 }
 
+/**
+ * Join an operation path onto a base URL, **preserving the base's path prefix**.
+ *
+ * `new URL(absolutePath, base)` resolves the absolute path against the base's *origin*, so any
+ * path in the base is silently dropped — a prefixed/gateway/proxy base (Azure, a corporate proxy,
+ * an `openai-compat` endpoint) loses its prefix. This keeps the base intact and appends the path
+ * with exactly one `/` between. The OpenAI-SDK model: `baseUrl` is the true API root, the
+ * operation path (from `getPath`) is joined onto it. Trailing slashes on the base are collapsed so
+ * a user-supplied `…/v1/` and `…/v1` behave identically.
+ */
+export function joinUrl(base: string, path: string): string {
+  return base.replace(/\/+$/, '') + (path.startsWith('/') ? path : `/${path}`)
+}
+
 /** Send a request to an AI provider */
 export async function sendAIRequest(
   provider: ResolvedAIProvider,
@@ -51,7 +69,7 @@ export async function sendAIRequest(
 ): Promise<Response> {
   const spec = getProvider(provider.protocol)
   const path = spec.getPath(opts.model, opts.stream)
-  const url = new URL(path, provider.baseUrl).toString()
+  const url = joinUrl(provider.baseUrl, path)
 
   const headers = spec.buildHeaders(provider.apiKey, opts.origin)
   const payload = spec.buildPayload(

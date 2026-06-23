@@ -47,7 +47,10 @@ export async function breakout(source: string) {
   // so a repeated breakout re-attaches instead of double-spawning), and registration so
   // listBreakouts/stopBreakout can find and stop it — is the typebulb capability. The host
   // owns only the file policy above. cwd = project root so the bulb resolves its rel path.
-  const server = await launchBulbServer(rel, { cwd, open: true })
+  // `open: false` for the same reason as launchBulb: a mirror-spawned bulb is windowless by virtue
+  // of the mirror being its surface (the launcher row carries the `:port` link), never dependent on
+  // an inherited TERM_PROGRAM=vscode that's absent outside a VS Code integrated terminal.
+  const server = await launchBulbServer(rel, { cwd, open: false })
   return { ok: true, file: rel, pid: server.pid, url: server.url }
 }
 
@@ -114,7 +117,15 @@ export async function launchBulb(file: string, trust?: boolean) {
   // Only a real boolean is an explicit decision. `undefined` (no decision) crosses the tb.server
   // JSON boundary as `null`, so guard on `!= null` — a bare launch must NOT clobber the store.
   if (trust != null) setBulbTrusted(file, trust)
-  const server = await launchBulbServer(file, { cwd, open: true, trust })
+  // `open: false` (→ `--no-open`): the mirror IS the surface — its launcher row already exposes the
+  // running bulb's `:port` link (and Enter opens it), so a launcher click must never auto-pop an
+  // external browser. Crucially this can't rely on the spawned bulb's own VS-Code auto-open default
+  // (`open: !inVsCode` in parseArgs): that only suppresses when the bulb inherits TERM_PROGRAM=vscode,
+  // which holds only if the whole spawn chain traces back to a VS Code *integrated terminal*. Spawn
+  // the mirror from anywhere else (an agent/tool-runner shell, a plain terminal) and TERM_PROGRAM is
+  // unset, so the inherited default flips to open and a window pops. Forcing it here makes windowless
+  // a property of *being launched by the mirror*, not of the mirror's accidental environment.
+  const server = await launchBulbServer(file, { cwd, open: false, trust })
   return { ok: true, file: server.file, pid: server.pid, url: server.url, trust: !!server.trust }
 }
 

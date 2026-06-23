@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { startServer, findAvailablePort } from '../src/serve/server.js'
 
 /**
- * specs/Proxy.md Invariant 1/3, end-to-end. The CLI serves esm.sh module bytes from localhost, so
+ * runtime-specs/TB-Proxy.md Invariant 1/3, end-to-end. The CLI serves esm.sh module bytes from localhost, so
  * an absolute sub-import esm.sh emits (globe.gl → `/d3-array/src/ascending?target=es2022`) hits
  * THIS server and must be re-proxied to esm.sh, not 404'd. Today the catch-all rejects the
  * unversioned shape and returns a local "Not Found" 404, which silently kills the module graph.

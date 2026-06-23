@@ -30,7 +30,7 @@
 html[data-theme="dark"] {
   /* Neutral ramp, same tint as the main app: page 18 → surface 32 → border 52. */
   --bg: rgb(18, 19, 20);
-  --fg: rgb(232, 232, 232);
+  --fg: rgb(190, 190, 190);
   --muted: rgb(150, 150, 150);
   --panel: rgb(32, 32, 32);
   --border: rgb(52, 52, 52);

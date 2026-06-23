@@ -1,15 +1,16 @@
 /**
- * Ollama via its OpenAI-compatible endpoint (`/v1/chat/completions`, Chat Completions style
- * with choices[]) — wire types and provider implementation.
+ * A generic OpenAI-compatible Chat Completions client (`/v1/chat/completions`, choices[]) — wire
+ * types and provider implementation. Backs two CLI-only protocols (see
+ * runtime/cli/src/serve/server.ts `resolveLocalProvider`):
+ *   - `ollama`        — zero-config preset: keyless, base URL OLLAMA_HOST / http://localhost:11434.
+ *   - `openai-compat` — generic: base URL TB_AI_BASE_URL, optional key TB_AI_API_KEY (LM Studio,
+ *                       vLLM, a self-hosted endpoint, a keyed proxy, a cloud OpenAI-compat vendor).
+ * Auth is optional — `buildHeaders` sends `Bearer <key>` only when a key is present.
  *
- * CLI-only. Ollama runs locally and needs no API key, so `buildHeaders` sends no auth and the
- * resolver supplies an empty key (see runtime/cli/src/serve/server.ts `resolveLocalProvider`).
- * The base URL defaults to http://localhost:11434 and is overridable via OLLAMA_HOST.
- *
- * Ollama does NOT implement the OpenAI Responses API the `openai` protocol targets, which is why
- * this is its own provider rather than a reuse of OpenAIProvider. The native `/api/chat` endpoint
- * (NDJSON, first-class `message.thinking`) is the richer path for reasoning streaming and Ollama
- * options — a deliberate follow-up; see specs/TB-AI-Local-Models.md.
+ * It's its own class (not OpenAIProvider) because the `openai` protocol targets the Responses API
+ * (`/v1/responses`), which these endpoints don't implement. Ollama's native `/api/chat` (NDJSON,
+ * first-class `message.thinking`, `num_ctx`/`think` options) is out of scope for tb.ai — reach it
+ * via a server.ts export. See runtime-specs/TB-Custom-Providers.md.
  */
 import type {
   ChatMessageDto,
@@ -66,23 +67,32 @@ export type OllamaRequestPayload = {
 
 export class OllamaProvider extends AIProvider {
   protected readonly providerName = 'Ollama'
+  // Bring-your-own-endpoint convention: the base is the OpenAI-style root ending in `/v1` and the
+  // operation path is just `/chat/completions` — paste-compatible with every OpenAI-compat vendor
+  // (OpenAI `…/v1`, Groq `…/openai/v1`, vLLM/LM Studio `…/v1`). The `/v1` is supplied by the base,
+  // not the path: the CLI resolver hands `openai-compat` the user's TB_AI_BASE_URL (a `/v1` base)
+  // and `ollama` a `${OLLAMA_HOST}/v1` base (resolveLocalProvider in runtime/cli/src/serve/server.ts).
+  // `defaultBaseUrl` stays the bare origin because it's only the fallback for OLLAMA_HOST (Ollama's
+  // own env var, an origin); the resolver appends `/v1` to it.
   readonly defaultBaseUrl = 'http://localhost:11434'
-  readonly path = '/v1/chat/completions'
+  readonly path = '/chat/completions'
 
   // ── Request building ─────────────────────────────────────────────
 
-  // Ollama is keyless: send no Authorization header. The `apiKey` arg (empty from the
-  // resolver) is ignored.
-  buildHeaders(_apiKey: string): Record<string, string> {
-    return {
+  // Auth-optional: keyless for local Ollama (empty key from the resolver), or `Bearer <key>` when
+  // the OpenAI-compatible endpoint requires one (vLLM --api-key, a self-hosted/proxy, etc.).
+  buildHeaders(apiKey: string): Record<string, string> {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     }
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+    return headers
   }
 
   // Web search and the reasoning-effort knob have no equivalent on the OpenAI-compat endpoint,
   // so the payload stays minimal. Ollama-specific options (num_ctx, think, …) are intentionally
-  // out of scope for tb.ai — use a server.ts export for those (specs/TB-Server-Streaming.md).
+  // out of scope for tb.ai — use a server.ts export for those (runtime-specs/TB-Server-Streaming.md).
   buildPayload(
     messages: ChatMessageDto[],
     model: string,

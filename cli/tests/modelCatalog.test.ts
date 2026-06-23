@@ -3,7 +3,7 @@ import { formatModelsList } from '../src/serve/modelCatalog.js'
 import type { TbModelDto } from 'typebulb/ai'
 
 /**
- * `typebulb models`' pure renderer (Specs/Typebulb-CLI.md, Specs/TB-AI.md). The command's network
+ * `typebulb models`' pure renderer (Specs/Typebulb-CLI.md, runtime-specs/TB-AI.md). The command's network
  * fetch + key filter is the same `getFilteredModels` the `/__models` route uses (covered live);
  * here we pin the terminal formatting: ids are present and first on the line (greppable), and the
  * configured default is shown only when both halves of the coupled pair are set.

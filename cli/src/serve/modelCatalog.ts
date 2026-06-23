@@ -1,7 +1,7 @@
 /**
  * The public model catalog and its key-based filter — the single source of truth shared by the
  * server's `/__models` route (which backs `tb.models()` in a running bulb) and the `typebulb models`
- * CLI command (authoring-time discovery, Specs/TB-AI.md §"tb.models() Runtime Contexts"). Both
+ * CLI command (authoring-time discovery, runtime-specs/TB-AI.md §"tb.models() Runtime Contexts"). Both
  * fetch the same admin-curated catalog and keep only the models whose provider has an API key in
  * the environment, so an agent's terminal list and a bulb's runtime list never diverge.
  */
@@ -14,6 +14,15 @@ export const PROVIDER_ENV_KEYS: Partial<Record<ProviderProtocol, string>> = {
   openai: 'OPENAI_API_KEY',
   gemini: 'GOOGLE_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+}
+
+/** Normalize an OLLAMA_HOST value into a clean origin: Ollama accepts a scheme-less
+ *  `localhost:11434`, so prepend `http://` when there's no `://`, and strip any trailing slash so a
+ *  caller appending a path (e.g. `/v1`) can't produce a `//`. Shared by the chat-URL resolver
+ *  (`resolveLocalProvider`) and the `/api/tags` discovery probe below. */
+export function normalizeOllamaHost(host: string): string {
+  const withScheme = host.includes('://') ? host : `http://${host}`
+  return withScheme.replace(/\/+$/, '')
 }
 
 const CATALOG_URL = 'https://api.typebulb.com/api/models'
@@ -47,7 +56,7 @@ async function getCatalogModels(): Promise<TbModelDto[]> {
  *  OLLAMA_HOST so local setups just work; a connection-refused on loopback is fast. */
 async function getOllamaModels(): Promise<TbModelDto[]> {
   if (ollamaCache && Date.now() - ollamaCache.fetchedAt <= OLLAMA_TTL) return ollamaCache.models
-  const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434'
+  const host = normalizeOllamaHost(process.env.OLLAMA_HOST ?? 'http://localhost:11434')
   let models: TbModelDto[] = []
   try {
     const resp = await fetch(new URL('/api/tags', host).toString())

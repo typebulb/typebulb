@@ -5,7 +5,7 @@ import { getFilteredModels, hasAnyProviderKey, formatModelsList, PROVIDER_ENV_KE
  * `typebulb models` — list the AI models reachable from `tb.ai`, filtered by the API keys in the
  * cwd `.env` cascade: the same catalog + filter `tb.models()` uses in a running bulb, exposed at
  * authoring time so an agent lists known model ids instead of guessing one from memory, which only
- * errors as an upstream provider failure at runtime (Specs/Typebulb-CLI.md, Specs/TB-AI.md).
+ * errors as an upstream provider failure at runtime (Specs/Typebulb-CLI.md, runtime-specs/TB-AI.md).
  * Needs no running bulb. Discovery, not restriction — `tb.ai` accepts any id your keys cover.
  */
 export async function runModels(mode: string | undefined): Promise<void> {

@@ -72,7 +72,7 @@ export async function runCall(
   // An async-generator export streams: print one compact JSON line per yield (NDJSON), so an agent
   // consumes a stream the same way it consumes a single return — `typebulb call … | jq -c` works on
   // either. Mirrors the browser bridge, which tunnels the same yields as chunks
-  // (specs/TB-Server-Streaming.md §"Headless parity").
+  // (runtime-specs/TB-Server-Streaming.md §"Headless parity").
   if (isAsyncGenerator(fn)) {
     try {
       for await (const chunk of fn(...callArgs) as AsyncIterable<unknown>) {

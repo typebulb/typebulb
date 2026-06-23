@@ -342,6 +342,7 @@ Add API keys to your `.env` file:
 | `gemini` | `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
 | `ollama` | *(none — local server)* |
+| `openai-compat` | `TB_AI_API_KEY` *(optional)* + `TB_AI_BASE_URL` |
 
 Optionally, set your default provider and model:
 
@@ -391,9 +392,11 @@ for await (const c of tb.ai.stream({ messages })) {
 
 Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `reasoning: 1-3` and a thinking-capable model**.
 
-### Local Models
+### Ollama & OpenAI-compatible endpoints
 
-`provider: "ollama"` talks to a local [Ollama](https://ollama.com) server over its OpenAI-compatible endpoint — no API key, defaults to `http://localhost:11434` (override with `OLLAMA_HOST`). CLI-only (typebulb.com can't reach your localhost). `typebulb models` lists your installed Ollama models alongside cloud ones.
+`provider: "ollama"` is the zero-config local preset: it talks to a local [Ollama](https://ollama.com) server over its OpenAI-compatible endpoint — no API key, defaults to `http://localhost:11434` (override with `OLLAMA_HOST`). `typebulb models` lists your installed Ollama models alongside cloud ones.
+
+`provider: "openai-compat"` is the generic escape hatch to *any* OpenAI-compatible endpoint — local or remote (LM Studio, vLLM, a self-hosted box, a keyed proxy, a cloud OpenAI-compat vendor). Set `TB_AI_BASE_URL` (the OpenAI-style base URL ending in `/v1`, e.g. `http://localhost:1234/v1` — `/chat/completions` is appended) and an optional `TB_AI_API_KEY`. Set `TB_AI_MODEL` explicitly (no auto-discovery).
 
 ### Proxying Claude
 

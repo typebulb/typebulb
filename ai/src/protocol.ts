@@ -1,11 +1,11 @@
 export * from './chat.js'
 export * from './stream.js'
 
-/** AI provider wire protocol identifier.
- *  `ollama` is CLI-only (talks to a local server over its OpenAI-compatible endpoint); it
- *  resolves with no API key and is never reachable from the web runtime. See
- *  specs/TB-AI-Local-Models.md. */
-export type ProviderProtocol = 'openai' | 'anthropic' | 'openrouter' | 'gemini' | 'ollama'
+/** AI provider wire protocol identifier. `ollama` and `openai-compat` are CLI-only: both talk to an
+ *  OpenAI-compatible endpoint (local, self-hosted, or remote) and are never reachable from the web
+ *  runtime. `ollama` is the zero-config preset; `openai-compat` is the generic form. See
+ *  runtime-specs/TB-Custom-Providers.md. */
+export type ProviderProtocol = 'openai' | 'anthropic' | 'openrouter' | 'gemini' | 'ollama' | 'openai-compat'
 
 /** Extended-thinking hint, 0 (off) – 3 (max) */
 export type ReasoningDepth = 0 | 1 | 2 | 3
