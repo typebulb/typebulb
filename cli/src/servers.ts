@@ -17,3 +17,6 @@ export { openInEditor } from './serve/editor.js'
 // Per-bulb trust memory (TB-Security.md) — the CLI owns the policy store; a GUI host
 // (claude.bulb) delegates to it so the launcher toggle and the `typebulb trust` CLI share one source.
 export { isBulbTrusted, setBulbTrusted, listTrustedBulbs } from './serve/trustStore.js'
+// Model discovery (the same key-filtered catalog + local Ollama probe tb.models() uses), so a mirror
+// host can populate a model switcher through this public entry rather than a deep serve/ internal.
+export { getFilteredModels } from './serve/modelCatalog.js'

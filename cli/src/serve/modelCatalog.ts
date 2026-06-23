@@ -7,8 +7,9 @@
  */
 import type { ProviderProtocol, TbModelDto } from 'typebulb/ai'
 
-/** Maps provider protocols to their env var key names. */
-export const PROVIDER_ENV_KEYS: Record<ProviderProtocol, string> = {
+/** Maps provider protocols to their env var key names. Partial: keyless providers (ollama,
+ *  which runs locally) are absent, so they never appear in key-filtered catalog discovery. */
+export const PROVIDER_ENV_KEYS: Partial<Record<ProviderProtocol, string>> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
   gemini: 'GOOGLE_API_KEY',
@@ -17,20 +18,49 @@ export const PROVIDER_ENV_KEYS: Record<ProviderProtocol, string> = {
 
 const CATALOG_URL = 'https://api.typebulb.com/api/models'
 const CATALOG_TTL = 24 * 60 * 60 * 1000 // 24 hours
+const OLLAMA_TTL = 60 * 1000 // local models change rarely; cache so repeated menu opens don't re-probe
 let catalogCache: { models: TbModelDto[]; fetchedAt: number } | null = null
+let ollamaCache: { models: TbModelDto[]; fetchedAt: number } | null = null
 
-/** Fetch the catalog (in-memory cached, TTL) and keep only models whose provider has a key in
- *  env. Degrades gracefully: stale cache on a failed refresh, or `[]` on a cold fetch failure. */
+/** The key-filtered cloud catalog plus locally-discovered Ollama models. The two are independent
+ *  I/O (remote catalog vs local probe), so they run concurrently. Degrades gracefully: a stale
+ *  cache (or `[]`) on a failed catalog refresh; Ollama probing never throws. */
 export async function getFilteredModels(): Promise<TbModelDto[]> {
-  if (!catalogCache || Date.now() - catalogCache.fetchedAt > CATALOG_TTL) {
-    const resp = await fetch(CATALOG_URL)
-    if (!resp.ok) {
-      if (catalogCache) return filterByLocalKeys(catalogCache.models) // stale cache fallback
-      return []
+  const [ollama, catalog] = await Promise.all([getOllamaModels(), getCatalogModels()])
+  return [...filterByLocalKeys(catalog), ...ollama]
+}
+
+/** The admin catalog, in-memory cached with a TTL. Returns the stale cache (or `[]`) on a failed
+ *  refresh so a transient network blip doesn't empty the list. */
+async function getCatalogModels(): Promise<TbModelDto[]> {
+  if (catalogCache && Date.now() - catalogCache.fetchedAt <= CATALOG_TTL) return catalogCache.models
+  const resp = await fetch(CATALOG_URL).catch(() => null)
+  if (!resp || !resp.ok) return catalogCache?.models ?? []
+  catalogCache = { models: await resp.json(), fetchedAt: Date.now() }
+  return catalogCache.models
+}
+
+/** Probe a local Ollama server for its installed models (CLI-only, best-effort), cached with a
+ *  short TTL so the frequently-hit model list (e.g. a switcher menu reopening, which doesn't even
+ *  use Ollama) doesn't re-probe every call. Returns `[]` if Ollama isn't running or the host is
+ *  unreachable — never throws, never blocks discovery. The default host is probed even without
+ *  OLLAMA_HOST so local setups just work; a connection-refused on loopback is fast. */
+async function getOllamaModels(): Promise<TbModelDto[]> {
+  if (ollamaCache && Date.now() - ollamaCache.fetchedAt <= OLLAMA_TTL) return ollamaCache.models
+  const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434'
+  let models: TbModelDto[] = []
+  try {
+    const resp = await fetch(new URL('/api/tags', host).toString())
+    if (resp.ok) {
+      const data = await resp.json() as { models?: Array<{ name?: string }> }
+      models = (data.models ?? [])
+        .map(m => m.name)
+        .filter((name): name is string => !!name)
+        .map(name => ({ provider: 'ollama', name, friendlyName: name, providerName: 'Ollama' }))
     }
-    catalogCache = { models: await resp.json(), fetchedAt: Date.now() }
-  }
-  return filterByLocalKeys(catalogCache.models)
+  } catch { /* Ollama not running / unreachable — leave the list empty */ }
+  ollamaCache = { models, fetchedAt: Date.now() }
+  return models
 }
 
 function filterByLocalKeys(models: TbModelDto[]): TbModelDto[] {

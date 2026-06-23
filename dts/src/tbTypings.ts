@@ -33,15 +33,8 @@ const insight = `
    */
   insight<T = unknown>(): T | undefined;`
 
-const ai = `
-  /**
-   * General-purpose AI call.
-   *
-   * @param options - Messages, system prompt, optional provider/model override
-   * @returns Promise resolving to { text: string }
-   * @throws On rate limit, network error, or provider error
-   */
-  ai(options: {
+// One options shape, reused by tb.ai() and tb.ai.stream().
+const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
     /** Reasoning depth hint (0=min, 1=low, 2=med, 3=high). Mapped to provider-specific parameters (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Default: 0. */
@@ -50,7 +43,43 @@ const ai = `
     model?: string;
     /** Enable/disable web search. Default: on for BYOK, always off for free model. */
     webSearch?: boolean;
-  }): Promise<{ text: string }>;`
+    /** Abort the request. On abort the promise rejects / the stream ends. */
+    signal?: AbortSignal;
+  }`
+
+/** A streamed delta from \`tb.ai.stream()\` — a discriminated union, exactly one kind per chunk. */
+const aiChunkType = `
+/** A single streamed delta from \`tb.ai.stream()\`. Discriminated by \`kind\`. */
+type AiChunk =
+  | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string };
+`
+
+const ai = `
+  /**
+   * General-purpose AI call. \`tb.ai(opts)\` resolves with the full text; \`tb.ai.stream(opts)\`
+   * returns an async iterable of {@link AiChunk} deltas you consume with \`for await\`.
+   *
+   * @returns Promise resolving to { text: string }
+   * @throws On rate limit, network error, or provider error
+   */
+  ai: {
+    (${aiOptions}): Promise<{ text: string }>;
+    /**
+     * Streaming counterpart of \`tb.ai()\`. Yields \`{ kind: "text" | "reasoning", text }\` deltas
+     * as they arrive; break the loop (or abort \`signal\`) to cancel and stop the upstream.
+     *
+     * \`kind: "reasoning"\` deltas only arrive when you pass \`reasoning: 1-3\` AND use a
+     * thinking-capable model; otherwise the stream is \`text\`-only.
+     *
+     * @example
+     * let answer = "";
+     * for await (const c of tb.ai.stream({ messages })) {
+     *   if (c.kind === "text") answer += c.text;
+     * }
+     */
+    stream(${aiOptions}): AsyncIterable<AiChunk>;
+  };`
 
 const models = `
   /**
@@ -215,11 +244,15 @@ const clientServerProxy = `
    * In the CLI, calls exported functions from the \`**server.ts**\` section.
    * \`tb.server.log(...)\` is a built-in that prints to CLI stdout (falls back to console.log on web).
    * User exports override built-ins of the same name.
+   *
+   * A normal export is awaited for its result (\`await tb.server.fn()\`). An \`async function*\`
+   * export streams: \`for await (const chunk of tb.server.gen())\`. The call object supports both;
+   * break the \`for await\` to cancel and tear down the server generator.
    */
-  server: Record<string, (...args: any[]) => Promise<any>>;`
+  server: Record<string, (...args: any[]) => Promise<any> & AsyncIterable<any>>;`
 
 /** Typebulb globals available in browser-side code (code.tsx). */
-export const clientTbTypings = `
+export const clientTbTypings = `${aiChunkType}
 /**
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
@@ -229,7 +262,7 @@ declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerPro
 `
 
 /** Typebulb globals available in Node-side code (server.ts). */
-export const serverTbTypings = `
+export const serverTbTypings = `${aiChunkType}
 /**
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.

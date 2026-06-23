@@ -9,12 +9,13 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
-import type { ProviderProtocol } from 'typebulb/ai'
-import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, ProviderStreamError, type ResolvedAIProvider } from 'typebulb/ai'
+import type { ProviderProtocol, ResolvedAIProvider } from 'typebulb/ai'
+import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, streamAiChunks, ProviderStreamError } from 'typebulb/ai'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
 import { PROVIDER_ENV_KEYS, getFilteredModels } from './modelCatalog.js'
-import { resolveServerFn } from './builtins.js'
+import { streamNdjson } from './ndjsonStream.js'
+import { resolveServerFn, isAsyncGenerator } from './builtins.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 
 // The CLI is a local tool: the server binds loopback only and is never reachable
@@ -246,6 +247,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         return c.json({ error: `API function '${name}' not found` }, 404)
       }
       const { args } = await c.req.json<{ args: unknown[] }>()
+      // Async-generator exports stream: each `yield` is tunneled as a chunk over NDJSON, and the
+      // client call becomes an async iterable.
+      if (isAsyncGenerator(fn)) {
+        return streamNdjson(c, fn(...(args || [])) as AsyncIterable<unknown>)
+      }
       const result = await fn(...(args || []))
       return c.json({ result })
     } catch (e) {
@@ -257,13 +263,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // AI endpoint - tb.ai() calls AI providers directly using env API keys
   app.post('/__ai', async (c) => {
     try {
-      const { messages, system, reasoning, provider: reqProvider, model: reqModel, webSearch } = await c.req.json<{
+      const { messages, system, reasoning, provider: reqProvider, model: reqModel, webSearch, stream: wantStream } = await c.req.json<{
         messages: Array<{ role: string; content: string }>
         system?: string
         reasoning?: number
         provider?: string
         model?: string
         webSearch?: boolean
+        stream?: boolean
       }>()
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -292,6 +299,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       if (!response.ok) {
         const error = await normalizeUpstreamError(response, resolved.protocol)
         return c.json(error, response.status as any)
+      }
+
+      // tb.ai.stream(): tunnel each provider delta to the bulb as an AiChunk over the shared NDJSON
+      // transport. Non-streaming tb.ai() keeps buffering to a single { text } (reasoning discarded).
+      if (wantStream) {
+        return streamNdjson(c, streamAiChunks(response, resolved.protocol))
       }
 
       const text = await consumeStreamText(response, resolved.protocol)
@@ -452,7 +465,16 @@ function resolveLocalProvider(reqProvider?: string, reqModel?: string): Resolved
 
   let spec
   try { spec = getProvider(protocol) } catch { return `Unknown provider '${protocol}'.` }
+
+  // Ollama (and other local servers) run on the machine with no API key. Resolve with an empty
+  // key and a base URL from OLLAMA_HOST, defaulting to the provider's localhost default.
+  if (protocol === 'ollama') {
+    const baseUrl = process.env.OLLAMA_HOST ?? spec.defaultBaseUrl
+    return { apiKey: '', baseUrl, protocol, model, isFreeModel: false }
+  }
+
   const envKey = PROVIDER_ENV_KEYS[protocol]
+  if (!envKey) return `Unknown provider '${protocol}'.`
   const apiKey = process.env[envKey]
   if (!apiKey) return `No API key for '${protocol}'. Set ${envKey} in your .env file.`
 

@@ -18,3 +18,11 @@ export function resolveServerFn(exports: Record<string, Function> | null | undef
   const fn = exports?.[name] ?? BUILTINS[name]
   return typeof fn === 'function' ? fn : undefined
 }
+
+/** True if `fn` is an `async function*` export — the kind both dispatch paths stream (NDJSON over
+ *  the bridge / one JSON line per yield from `typebulb call`) rather than await. Keyed on the
+ *  function's kind, not on sniffing its return value, so a normal export that returns an iterable is
+ *  unaffected. */
+export function isAsyncGenerator(fn: Function): boolean {
+  return fn.constructor?.name === 'AsyncGeneratorFunction'
+}

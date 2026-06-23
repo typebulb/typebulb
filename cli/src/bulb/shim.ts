@@ -106,6 +106,128 @@ export const typebulbShim = `
     } catch { console.log(...args); }
   };
 
+  // Streaming. The server tunnels an async iterable as enveloped NDJSON over
+  // the bridge POST; isStreamResp flags it via a response header so a normal single-return call is
+  // untouched. readStream yields each {type:'chunk'} value; a {type:'error'} line rejects the
+  // iterator (so try/catch around for-await fires); breaking the loop cancels the body (finally),
+  // which disconnects the server and tears down the source generator — that's how Stop/unmount
+  // actually aborts the upstream rather than just hiding it.
+  const isStreamResp = (resp) => resp.headers.get('X-TB-Stream') === '1';
+  async function* readStream(resp) {
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const decodeLine = (line) => {
+      if (!line.trim()) return undefined;
+      const env = JSON.parse(line);
+      if (env.type === 'error') {
+        const e = new Error((env.error && env.error.message) || 'stream error');
+        e.code = env.error && env.error.code;
+        e.retryable = !!(env.error && env.error.retryable);
+        throw e;
+      }
+      return env.type === 'chunk' ? { value: env.value } : undefined;
+    };
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\\n')) !== -1) {
+          const r = decodeLine(buf.slice(0, nl));
+          buf = buf.slice(nl + 1);
+          if (r) yield r.value;
+        }
+      }
+      const r = decodeLine(buf);
+      if (r) yield r.value;
+    } finally {
+      try { await reader.cancel(); } catch {}
+    }
+  }
+
+  // tb.ai(): non-streaming, resolves with the full { text } (unchanged 90% path).
+  const aiCall = async ({ messages, system, reasoning, provider, model, webSearch, signal } = {}) => {
+    if (isEmbedded) throw embedErr('tb.ai()');
+    const resp = await fetch('/__ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, system, reasoning, provider, model, webSearch }),
+      signal
+    });
+    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
+    const data = await resp.json();
+    if (!resp.ok) {
+      const err = new Error(data.message || 'tb.ai() call failed');
+      err.code = data.code || 'unknown';
+      err.retryable = !!data.retryable;
+      throw err;
+    }
+    return data;
+  };
+  // tb.ai.stream(): async iterable of AiChunk ({ kind:'text'|'reasoning', text }). Same idiom as a
+  // streaming tb.server.<gen>(). Break the loop (or abort the signal) to cancel.
+  const aiStream = (opts = {}) => (async function* () {
+    if (isEmbedded) throw embedErr('tb.ai.stream()');
+    const { messages, system, reasoning, provider, model, webSearch, signal } = opts;
+    const resp = await fetch('/__ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, system, reasoning, provider, model, webSearch, stream: true }),
+      signal
+    });
+    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
+    if (!resp.ok && !isStreamResp(resp)) {
+      const data = await resp.json().catch(() => ({}));
+      const err = new Error(data.message || 'tb.ai() call failed');
+      err.code = data.code || 'unknown';
+      err.retryable = !!data.retryable;
+      throw err;
+    }
+    yield* readStream(resp);
+  })();
+  const ai = Object.assign(aiCall, { stream: aiStream });
+
+  // tb.server.<fn>(...) — one call object that is both awaitable (single result) and async-iterable
+  // (a streamed async-generator export). The server picks by export kind; this stays graceful if
+  // they're mismatched (await a stream → array of chunks; for-await a normal result → one value).
+  const serverCall = (name, args) => {
+    const ensureOk403 = async (resp) => {
+      if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || ('tb.server.' + name + '() is blocked — re-run with --trust'));
+    };
+    let respP = null;
+    const start = () => respP || (respP = fetch('/__api/' + name, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ args })
+    }));
+    const single = async () => {
+      if (isEmbedded) throw embedErr('tb.server.' + name + '()');
+      const resp = await start();
+      await ensureOk403(resp);
+      if (isStreamResp(resp)) { const out = []; for await (const v of readStream(resp)) out.push(v); return out; }
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'API call failed');
+      return data.result;
+    };
+    const iterate = async function* () {
+      if (isEmbedded) throw embedErr('tb.server.' + name + '()');
+      const resp = await start();
+      await ensureOk403(resp);
+      if (isStreamResp(resp)) { yield* readStream(resp); return; }
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'API call failed');
+      yield data.result;
+    };
+    return {
+      then: (f, r) => single().then(f, r),
+      catch: (r) => single().catch(r),
+      finally: (f) => single().finally(f),
+      [Symbol.asyncIterator]: iterate
+    };
+  };
+
   // tb namespace
   globalThis.tb = Object.freeze({
     data: (index) => getData()[index],
@@ -122,24 +244,8 @@ export const typebulbShim = `
     setData: () => {},
     resetInferenceState: () => {},
 
-    // AI - calls local server which proxies to LLM provider
-    ai: async ({ messages, system, reasoning, provider, model, webSearch }) => {
-      if (isEmbedded) throw embedErr('tb.ai()');
-      const resp = await fetch('/__ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, system, reasoning, provider, model, webSearch })
-      });
-      if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
-      const data = await resp.json();
-      if (!resp.ok) {
-        const err = new Error(data.message || 'tb.ai() call failed');
-        err.code = data.code || 'unknown';
-        err.retryable = !!data.retryable;
-        throw err;
-      }
-      return data;
-    },
+    // AI - tb.ai() proxies to the provider via the local server; tb.ai.stream() streams AiChunks.
+    ai,
 
     // Model discovery - fetches catalog from typebulb.com, filtered by local API keys
     models: async () => {
@@ -169,27 +275,17 @@ export const typebulbShim = `
       return '/proxy/' + clean;
     },
 
-    // Server API - call functions from **server.ts**
-    api: async (name, ...args) => {
-      if (isEmbedded) throw embedErr('tb.server.' + name + '()');
-      const resp = await fetch('/__api/' + name, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ args })
-      });
-      if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || ('tb.server.' + name + '() is blocked — re-run with --trust'));
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'API call failed');
-      return data.result;
-    },
+    // Server API - call functions from **server.ts**. Returns the hybrid call object: await it for
+    // a normal export's result, or for-await it for an async-generator export's stream.
+    api: (name, ...args) => serverCall(name, args),
 
-    // Server proxy - tb.server.fn(...) delegates to tb.api('fn', ...). 'log' is special: it's the
-    // ungated diagnostic (serverLog -> /__log, built-in only), so it prints untrusted; everything
-    // else is a gated /__api call into the bulb's own server.ts.
+    // Server proxy - tb.server.fn(...) delegates to serverCall. 'log' is special: it's the ungated
+    // diagnostic (serverLog -> /__log, built-in only), so it prints untrusted; everything else is a
+    // gated /__api call into the bulb's own server.ts.
     server: new Proxy({}, {
       get: (_, name) => name === 'log'
         ? (...args) => serverLog(...args)
-        : (...args) => globalThis.tb.api(name, ...args)
+        : (...args) => serverCall(name, args)
     }),
 
     // Filesystem - local CLI extension

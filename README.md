@@ -14,7 +14,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 
 ## Features
 
-- **Server-side code** — Add a `**server.ts**` section; exported functions become callable from the browser via `tb.server.<name>()` (e.g., `export async function query(...)` → `await tb.server.query(...)`). Requires `--trust`.
+- **Server-side code** — Add a `**server.ts**` section; exported functions become callable from the browser via `tb.server.<name>()` (e.g., `export async function query(...)` → `await tb.server.query(...)`). An `export async function*` **streams**: consume it with `for await (const chunk of tb.server.gen())`. Requires `--trust`.
 - **CLI logging** — `tb.server.log(...)` prints to the CLI's stdout
 - **Wake-on-event** — `typebulb wait <file|agent>` blocks until the target server logs a new line, prints it, and exits. Run in the background, that exit *is* an agent's wake-up: a user action a bulb logs, or an embed's render outcome — no polling.
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
@@ -29,6 +29,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **Restricted by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces a Restricted run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
 - **Agent mirror** — a browser view of your project's Claude Code sessions that renders embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs (see [Claude](#claude)). `typebulb agent:claude` opens it. `typebulb agent` (no target) is the first command an agent runs: it brings up the mirror without opening a browser, prints its link, and points at the authoring skill. `typebulb skill` prints this whole README as an Agent Skill the agent can read and save.
+- **Proxying Claude** — the agent mirror lets you proxy Claude with a model from [OpenRouter](https://openrouter.ai). This will apply to your project only.
 
 ## Usage
 
@@ -180,6 +181,7 @@ npm install -g typebulb
 | `tb.fs.read/readBytes/write` | Read and write local files | ✅ `--trust` | ❌ |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | ✅ `--trust` | ❌ |
 | `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | ✅ `--trust` | ❌ |
+| `tb.ai.stream({ … })` | Streaming AI — `for await` an `AsyncIterable<{ kind, text }>` of deltas | ✅ `--trust` | ❌ |
 | `tb.infer()` | One-shot LLM call driven by the `infer.md` block | ❌ | ❌ |
 
 - **❌ (embedded):** the call throws `"not available in an embedded bulb"` — an embed is a client-only sandboxed iframe with **no persistent storage** either (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
@@ -260,7 +262,7 @@ Run a bulb **once** and let hot reload drive the loop.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`.** Bare imports (`react`, `d3`, `three`, …) auto-resolve from a CDN — no install step. Declare them in `config.json` `dependencies` anyway: that's what lets `npx typebulb check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`) and pins versions.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
-- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, reasoning?, provider?, model?, webSearch? })` → `Promise<{ text }>` (non-streaming). `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off.
+- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, reasoning?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off. For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
 - **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
@@ -322,9 +324,16 @@ Which must be declared in the dependencies section:
 
 Typebulb has a package resolver that will load and cache these packages from `esm.sh` when the bulb runs.
 
-## `tb.ai()`
+## Custom AI Models
 
-Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys. Don't confuse this with the agent loop ([Wake-on-event](#wake-on-event)): there Claude drives a bulb from the chat session and *is* the intelligence — no provider, no key, and the bulb stays plain. `tb.ai()` is for bulbs that are themselves AI apps (chatbots, agents, experiments). Add API keys to your `.env` file:
+Two ways to use non-default models in typebulb:
+
+* **`tb.ai()`** — a bulb's own code calling AI providers with your keys
+* **proxy claude** — backs your `claude` sessions with an alternate (OpenRouter) model
+
+### .env setup
+
+Add API keys to your `.env` file:
 
 | Provider name | API key env var |
 |---------------|-----------------|
@@ -332,17 +341,24 @@ Trusted bulbs can call AI providers **from their own code** at runtime, billed t
 | `openai` | `OPENAI_API_KEY` |
 | `gemini` | `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
+| `ollama` | *(none — local server)* |
 
-Set your default provider and model:
+Optionally, set your default provider and model:
 
 ```
 TB_AI_PROVIDER=anthropic
 TB_AI_MODEL=claude-haiku-4-5-20251001
 ```
 
-Both can be overridden per-call: `tb.ai({ provider: "gemini", model: "gemini-3.1-flash-lite", ... })`.
+Run `typebulb models` to list the models available for the providers specified.
 
-Run `typebulb models` to list the available model ids instead of guessing one.
+### `tb.ai()`
+
+Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys.
+
+You can call the provider and model explicitly like this: `tb.ai({ provider: "gemini", model: "gemini-3.1-flash-lite", ... })`.
+
+Or you can rely on the default provider and model if you set them in `.env`.
 
 ### Reasoning
 
@@ -362,7 +378,26 @@ const { text } = await tb.ai({
 });
 ```
 
-Provider support varies — the level is mapped to provider-specific parameters (e.g. Anthropic's adaptive thinking, OpenAI's reasoning effort).
+### Streaming
+
+`tb.ai.stream({ … })` is the streaming counterpart of `tb.ai()` — an async iterable of `{ kind: "text" | "reasoning", text }` deltas. `tb.ai()` (await the full text) is unchanged; reach for `.stream` only when a response is long enough to be worth showing as it arrives.
+
+```ts
+let answer = "";
+for await (const c of tb.ai.stream({ messages })) {
+  if (c.kind === "text") { answer += c.text; render(answer); }   // c.kind === "reasoning" for thinking deltas
+}
+```
+
+Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `reasoning: 1-3` and a thinking-capable model**.
+
+### Local Models
+
+`provider: "ollama"` talks to a local [Ollama](https://ollama.com) server over its OpenAI-compatible endpoint — no API key, defaults to `http://localhost:11434` (override with `OLLAMA_HOST`). CLI-only (typebulb.com can't reach your localhost). `typebulb models` lists your installed Ollama models alongside cloud ones.
+
+### Proxying Claude
+
+The user can proxy claude with the agent mirror's model switcher, to any model on [OpenRouter](https://openrouter.ai) model instead of Anthropic. This lets the user use OpenRouter models with Claude Code's harness.
 
 ## Charts
 

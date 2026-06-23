@@ -4,12 +4,14 @@ import { OpenAIProvider } from './providers/openAI.js'
 import { OpenRouterProvider } from './providers/openRouter.js'
 import { AnthropicProvider } from './providers/anthropic.js'
 import { GeminiProvider } from './providers/gemini.js'
+import { OllamaProvider } from './providers/ollama.js'
 
 const providers = new Map<ProviderProtocol, AIProvider>([
   ['openai', new OpenAIProvider()],
   ['openrouter', new OpenRouterProvider()],
   ['anthropic', new AnthropicProvider()],
-  ['gemini', new GeminiProvider()]
+  ['gemini', new GeminiProvider()],
+  ['ollama', new OllamaProvider()]
 ])
 
 /** Get the provider implementation for a given protocol. */

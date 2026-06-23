@@ -18,6 +18,8 @@ export type GeminiRole = 'user' | 'model' | 'system'
 
 export interface GeminiTextPart {
   text: string
+  /** When true, this part is a thought summary (reasoning), not answer text. */
+  thought?: boolean
 }
 
 export interface GeminiContent {
@@ -32,6 +34,14 @@ export interface GeminiGoogleSearchTool {
 
 export type GeminiTool = GeminiGoogleSearchTool
 
+// Thinking config — asks Gemini to run (and return) reasoning.
+export interface GeminiThinkingConfig {
+  /** Surface thought summaries as `thought` parts in the response. */
+  includeThoughts?: boolean
+  /** Token budget for thinking; -1 = dynamic (model self-regulates depth). */
+  thinkingBudget?: number
+}
+
 // Generation config
 export interface GeminiGenerationConfig {
   temperature?: number
@@ -40,6 +50,7 @@ export interface GeminiGenerationConfig {
   maxOutputTokens?: number
   stopSequences?: string[]
   candidateCount?: number
+  thinkingConfig?: GeminiThinkingConfig
 }
 
 // Response types
@@ -127,9 +138,13 @@ export class GeminiProvider extends AIProvider {
       }
     }
 
+    // Request thought summaries when reasoning is on. `thinkingBudget: -1` = dynamic, so the model
+    // self-regulates depth — the robust analog of a 1-3 dial across Gemini models (avoids per-model
+    // budget maxes); `includeThoughts` makes those thoughts stream as `thought` parts, which the
+    // parser maps to AiChunk `{ kind: "reasoning" }`.
     if (this.isReasoningEnabled(opts)) {
       payload.generationConfig = {
-        temperature: 0.7 + (opts!.reasoning! * 0.1)
+        thinkingConfig: { includeThoughts: true, thinkingBudget: -1 }
       }
     }
 
@@ -177,7 +192,7 @@ export class GeminiProvider extends AIProvider {
       return { text: '', status: 'failed', error: 'Invalid response format' }
     }
 
-    const text = this.extractText(json) || ''
+    const text = this.extractParts(json).text || ''
     const finishReason = json.candidates?.[0]?.finishReason
 
     let status: ChatResponseDto['status'] = 'complete'
@@ -195,10 +210,8 @@ export class GeminiProvider extends AIProvider {
 
     if (!this.isGeminiResponse(json)) return null
 
-    const text = this.extractText(json)
-    if (!text) return null
-
-    return { text }
+    const piece = this.extractParts(json)
+    return (piece.text || piece.reasoning) ? piece : null
   }
 
   // ── Private helpers ──────────────────────────────────────────────
@@ -212,14 +225,18 @@ export class GeminiProvider extends AIProvider {
     )
   }
 
-  private extractText(response: GeminiResponseDto): string | undefined {
-    const candidate = response.candidates?.[0]
-    if (!candidate?.content?.parts) return undefined
-
-    return candidate.content.parts
-      .map(part => part.text)
-      .filter(Boolean)
-      .join('')
+  /** Split a candidate's parts into answer text and thought (reasoning) summaries — Gemini marks
+   *  thought parts with `thought: true`. Returns the `{ text?, reasoning? }` stream-piece shape. */
+  private extractParts(response: GeminiResponseDto): ChatStreamPieceDto {
+    const parts = response.candidates?.[0]?.content?.parts
+    if (!parts) return {}
+    let text = '', reasoning = ''
+    for (const part of parts) {
+      if (!part.text) continue
+      if (part.thought) reasoning += part.text
+      else text += part.text
+    }
+    return { text: text || undefined, reasoning: reasoning || undefined }
   }
 
   private checkGeminiError(json: unknown): void {

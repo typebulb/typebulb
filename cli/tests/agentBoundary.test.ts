@@ -29,6 +29,12 @@ function clientImports(): string[] {
   const dir = fileURLToPath(new URL('../agents/claude/client/', import.meta.url))
   return readdirSync(dir).filter(f => f.endsWith('.ts')).flatMap(f => importsOf(`client/${f}`))
 }
+// The node half is likewise a folder now (server.ts barrel + server/*.ts), so scan all of it.
+function serverImports(): string[] {
+  const dir = fileURLToPath(new URL('../agents/claude/server/', import.meta.url))
+  const sub = readdirSync(dir).filter(f => f.endsWith('.ts')).flatMap(f => importsOf(`server/${f}`))
+  return [...importsOf('server.ts'), ...sub]
+}
 /** Specifiers that reach into the CLI's own source tree. */
 const srcImports = (specs: string[]) => specs.filter(s => /(?:^|\/)src\//.test(s))
 
@@ -46,7 +52,9 @@ describe('agent mirror boundary (replaces the bulb format’s hard client/server
     expect(specs.filter(s => s === './server.js' || s.endsWith('/server.js'))).toEqual([])
   })
 
-  it('server.ts crosses into the CLI only via the public servers entry — never render', () => {
-    expect(srcImports(importsOf('server.ts'))).toEqual(['../../src/servers.js'])
+  it('the node half crosses into the CLI only via the public servers entry — never render', () => {
+    const specs = serverImports()
+    expect([...new Set(srcImports(specs))]).toEqual(['../../../src/servers.js'])
+    expect(specs.filter(s => s === './render.js' || s.endsWith('/render.js'))).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 import { Console } from 'node:console'
 import { loadEnv, reportEnv } from '../env.js'
 import { readBulb, importServerModule } from '../pipeline.js'
-import { BUILTINS, resolveServerFn } from '../serve/builtins.js'
+import { BUILTINS, resolveServerFn, isAsyncGenerator } from '../serve/builtins.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 import { listBulbServers, readServerLog, writeWaitCursor } from '../serve/serverRegistry.js'
 import { normalizeBulbPath } from '../serve/paths.js'
@@ -68,6 +68,21 @@ export async function runCall(
   }
 
   const callArgs = await resolveArgs(spec)
+
+  // An async-generator export streams: print one compact JSON line per yield (NDJSON), so an agent
+  // consumes a stream the same way it consumes a single return — `typebulb call … | jq -c` works on
+  // either. Mirrors the browser bridge, which tunnels the same yields as chunks
+  // (specs/TB-Server-Streaming.md §"Headless parity").
+  if (isAsyncGenerator(fn)) {
+    try {
+      for await (const chunk of fn(...callArgs) as AsyncIterable<unknown>) {
+        await writeStdout(JSON.stringify(chunk, bigintReplacer) + '\n')
+      }
+    } catch (e) {
+      fail(e instanceof Error ? (e.stack ?? e.message) : String(e))
+    }
+    process.exit(0)
+  }
 
   let result: unknown
   try {

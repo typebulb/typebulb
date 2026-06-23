@@ -3,7 +3,7 @@
  * Shared between client, CLI, and any other consumer of provider SSE streams.
  */
 
-import type { ProviderProtocol } from './protocol.js'
+import type { ProviderProtocol, AiChunk, ChatStreamPieceDto } from './protocol.js'
 import { getProvider } from './aiProviders.js'
 
 /** Find next SSE block separator (\n\n or \r\n\r\n), returning position and length */
@@ -107,6 +107,44 @@ export async function consumeSseStream<T = any>(
 }
 
 /**
+ * Pull-based twin of {@link consumeSseStream}: yields each parsed SSE block as it arrives so a
+ * caller can `for await` the stream (and tear it down by breaking the loop). Same framing and
+ * `[DONE]` handling; single-sources the SSE parsing. Cancels the reader on early exit.
+ */
+export async function* consumeSseStreamGen<T = any>(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal
+): AsyncGenerator<T> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      if (signal?.aborted) return
+      const { done, value } = await reader.read()
+      if (done) {
+        if (buffer.trim()) {
+          const parsed = parseSseBlock<T>(buffer)
+          if (parsed !== null && parsed !== 'done') yield parsed
+        }
+        return
+      }
+      buffer += decoder.decode(value, { stream: true })
+      let { pos: sep, len: sepLen } = findSeparator(buffer)
+      while (sep !== -1) {
+        const block = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + sepLen)
+        const parsed = parseSseBlock<T>(block)
+        if (parsed === 'done') return
+        if (parsed !== null) yield parsed
+        ;({ pos: sep, len: sepLen } = findSeparator(buffer))
+      }
+    }
+  } finally {
+    try { await reader.cancel() } catch { /* already closed */ }
+  }
+}
+
+/**
  * Consume a provider SSE stream into a single text string.
  * Handles protocol detection, chunk parsing, and reasoning token filtering.
  *
@@ -118,19 +156,39 @@ export async function consumeStreamText(
   response: Response,
   protocol?: ProviderProtocol
 ): Promise<string> {
+  if (!response.body) throw new Error('Response body is missing')
+  // The text projection of streamAiChunks: accumulate `text` deltas, drop reasoning. Protocol
+  // resolution, SSE framing, and error-event handling all live there, single-sourced.
+  let fullText = ''
+  for await (const chunk of streamAiChunks(response, protocol)) {
+    if (chunk.kind === 'text') fullText += chunk.text
+  }
+  return fullText
+}
+
+/**
+ * Adapt a provider's SSE Response into a pull stream of public {@link AiChunk}s — the shared
+ * SSE→AiChunk conversion behind `tb.ai.stream()`, used by both the CLI bridge and the web sandbox
+ * bridge (each then wraps it in its own transport: NDJSON over HTTP / postMessage frames). Pure and
+ * browser-safe: only a `Response` reader plus the already-shared parsing. Each internal
+ * `{ text?, reasoning? }` piece becomes one or two discriminated chunks (reasoning before text).
+ * A provider error event throws `ProviderStreamError` out of `parseStreamChunk`, which the caller's
+ * transport turns into a terminal error so the client iterator rejects.
+ */
+export async function* streamAiChunks(
+  response: Response,
+  protocol?: ProviderProtocol
+): AsyncGenerator<AiChunk> {
+  // Like consumeStreamText: if no protocol is passed, read it from the server-set header (the web
+  // bridge doesn't track the resolved protocol; the CLI passes it explicitly).
   const p = protocol
-    // Header set by server on success. Missing = server-generated error SSE;
-    // any provider parser handles it via checkAndThrowError's unified format.
     ?? (response.headers.get('X-Provider-Protocol') || 'openai') as ProviderProtocol
   const spec = getProvider(p)
-  if (!response.body) throw new Error('Response body is missing')
+  if (!response.body) return
   const reader = response.body.getReader()
-  let fullText = ''
-
-  await consumeSseStream(reader, (json: any) => {
-    const piece = spec.parseStreamChunk(json)
-    if (piece?.text) fullText += piece.text
-  })
-
-  return fullText
+  for await (const json of consumeSseStreamGen(reader)) {
+    const piece = spec.parseStreamChunk(json) as ChatStreamPieceDto | null
+    if (piece?.reasoning) yield { kind: 'reasoning', text: piece.reasoning }
+    if (piece?.text) yield { kind: 'text', text: piece.text }
+  }
 }
