@@ -44,6 +44,8 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // The bulb whose console is being tailed, if any (one at a time).
   openLog?: { pid: number; name: string; text: string; offset: number }
   #logTimer?: ReturnType<typeof setInterval>
+  // The just-broken-out server's pid — its launcher row stays bright while the rest dim (see spotlight()).
+  spotlightPid?: number
 
   protected search(query: string) { return tb.server.searchBulbs(query) as Promise<BulbHit[]> }
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
@@ -60,10 +62,14 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // lazy. Splitting them keeps the modal near-instant without re-walking the tree every tick.
     setInterval(() => this.refreshServers(), 800)
     setInterval(() => this.refreshFiles(), 3000)
-    // breakout resolves only after the new server has self-registered, so this nudge
-    // refreshes immediately rather than waiting for the next backstop tick.
-    window.addEventListener('tb-breakout', () => this.refreshServers())
+    // breakout self-registers its new server, then fires this with its pid.
+    window.addEventListener('tb-breakout', (e) => this.spotlight((e as CustomEvent<{ pid?: number }>).detail?.pid))
   }
+
+  // Open the launcher with the new bulb's row bright and the rest dimmed — mirror-launched bulbs are
+  // windowless (TB-Agent-Mirror.md), so its green :port link is the user's next click. show() is the
+  // pill-click path (refresh, pin newest into view, arm the closer); the dim lifts on close or row-hover.
+  spotlight(pid?: number) { this.spotlightPid = pid; this.show() }
 
   refresh() { return Promise.all([this.refreshServers(), this.refreshFiles()]) }
 
@@ -155,6 +161,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   protected override onClosed() {
     super.onClosed()
     this.closeLog()
+    this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
   }
 
   // Launch a stopped bulb — but PROBE TRUST FIRST so the offer precedes the tab. A
@@ -380,10 +387,14 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // so they take turns in the popover rather than the console hiding below a scrolling list.
     if (this.openLog) return this.consoleView(this.openLog)
     const rows = this.rows()
+    // Dim every row but the spotlit one — only once it's present, so the list never flashes all-dimmed.
+    const spot = this.spotlightPid
+    const dimOthers = spot !== undefined && rows.some(r => r.running?.pid === spot)
     return div({ class: 'servers-pop' },
       rows.length === 0
         ? this.emptyState('No bulbs in this project yet.')
-        : div({ class: 'bulb-list', onScroll: () => this.onListScroll() }, rows.map((r, i) => this.row(r, i))),
+        : div({ class: 'bulb-list', onScroll: () => this.onListScroll() },
+            rows.map((r, i) => this.row(r, i, dimOthers && r.running?.pid !== spot))),
       this.filterBox(this.merged().length, 'bulb'),
     )
   }
@@ -405,7 +416,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     )
   }
 
-  row(r: BulbRow, i: number) {
+  row(r: BulbRow, i: number, dimmed = false) {
     const s = r.running
     const showing = s && this.openLog?.pid === s.pid
     // Running tier is authoritative; otherwise the remembered decision the next launch uses.
@@ -414,8 +425,12 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // form a right-aligned cluster of fixed-width columns (trust · logs · time/port) that line up
     // row-to-row. Right-anchored, so the rightmost column (time/port) always aligns; the others
     // stack inward from it.
-    return div({ class: ['server-row', i === this.highlighted ? 'active' : ''],
-        onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } } },
+    return div({ class: ['server-row', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
+        onMouseEnter: () => {
+          const lift = s !== undefined && s.pid === this.spotlightPid   // hovering the new bulb's row lifts its spotlight
+          if (lift) this.spotlightPid = undefined
+          if (this.highlighted !== i || lift) { this.highlighted = i; this.update() }
+        } },
       s
         ? button({ class: 'server-stop', title: 'Stop this server', ariaLabel: 'Stop', onClick: (e: MouseEvent) => { e.stopPropagation(); this.stop(s.pid) } }, iconStop())
         : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); this.launch(r.path) } }, iconPlay()),

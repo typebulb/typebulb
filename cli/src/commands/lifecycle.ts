@@ -129,13 +129,21 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
-  // the bare-wait / `call` baseline (the empty key), then to a snapshot. Per-pattern offsets mean one
-  // waiter's exit can't advance past a line another pattern hasn't matched (TB-Agent-Mirror-Embed-Iterate.md).
-  // A cursor past the end (log restarted/trimmed) also degrades to the snapshot.
+  // the bare-wait / `call` baseline (the empty key). Per-pattern offsets mean one waiter's exit can't
+  // advance past a line another pattern hasn't matched (TB-Agent-Mirror-Embed-Iterate.md). A cursor past
+  // the end (log restarted/trimmed) degrades to the no-cursor default.
+  //
+  // No-cursor default: a *filtered* first run scans from log start (0), not the attach-time EOF. The
+  // EOF snapshot loses the embed wake race — an embed's `--match` is unique per name, so every embed
+  // wait is first-run, and its `[embed …] ok` line can land before the npx-booted `wait` reads EOF
+  // (render beats attach; flush ordering only guarantees armed-mid-turn, not attached-before-render).
+  // The match filter bounds the cost: a genuinely-new name has no prior matching line, so scanning from
+  // 0 fires exactly its line; a *reused* name re-fires its old lines once — a spurious wake the protocol
+  // absorbs (missed wakes fatal, spurious cheap). A bare wait keeps EOF: unfiltered-from-0 dumps history.
   const match = opts.match ?? ''
   const end = readServerLog(server.pid).offset
   const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
-  let cursor = stored !== undefined && stored <= end ? stored : end
+  let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
   const deadline = Date.now() + opts.timeoutSec * 1000
   // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
   // several embeds from one turn — lands in one wake instead of one wake per line.

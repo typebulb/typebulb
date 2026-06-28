@@ -508,6 +508,10 @@ body {
 .server-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* Keyboard-highlighted row (arrow-key cursor) — a touch stronger than hover so it stands out. */
 .server-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+/* Breakout spotlight (bulbsPill.ts): the new bulb's row stays bright while the rest dim, until the
+   menu closes or that row is hovered. The transition eases the dim in and back out. */
+.server-row { transition: opacity .3s ease; }
+.server-row.dimmed { opacity: .3; }
 .server-name {
   flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

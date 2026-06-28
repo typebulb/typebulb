@@ -180,10 +180,11 @@ export class BulbEmbed extends Component {
     this.#breakoutState = 'busy'
     this.update()
     try {
-      const { file } = await tb.server.breakout(this.#source)
+      const { file, pid } = await tb.server.breakout(this.#source)
       this.#breakoutResult = `launched ${file}`
-      // breakout resolves only once the new server has registered — nudge the status-bar pill now.
-      window.dispatchEvent(new CustomEvent('tb-breakout'))
+      // breakout resolves only once the new server has registered — nudge the launcher now to open with
+      // the new bulb's row spotlit (its green :port link is the user's next click).
+      window.dispatchEvent(new CustomEvent('tb-breakout', { detail: { pid } }))
     } catch (err) {
       this.#breakoutResult = 'breakout failed'
       console.error('[mirror] breakout failed', err)

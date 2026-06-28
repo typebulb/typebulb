@@ -74,7 +74,8 @@ describe('serverRegistry', () => {
   })
 
   // The wait cursor (TB-Agent-Mirror-Embed-Iterate.md): the wake channel's consumer
-  // offset. Round-trips per pid; anything unreadable degrades to undefined (⇒ snapshot), never throws.
+  // offset. Round-trips per pid; anything unreadable degrades to undefined (⇒ the caller's no-cursor
+  // default: log-start for a filtered wait, EOF snapshot for a bare one), never throws.
   it('wait cursor round-trips per pid and degrades to undefined when absent or invalid', async () => {
     expect(readWaitCursor(process.pid)).toBeUndefined()        // never written
     writeWaitCursor(process.pid, 1234)
