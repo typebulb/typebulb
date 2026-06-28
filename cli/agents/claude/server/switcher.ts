@@ -119,6 +119,12 @@ const providerPin = (p: string) => ({ order: [p], allow_fallbacks: false })
 // Read the streamed/buffered response usage to set the live caching cue. cache_read > 0 means a cache
 // hit; cache_creation > 0 means it wrote the cache this turn (caching works, reads next turn) — both
 // count as "live". A substantial turn with neither was served uncached (the route ignored cache_control).
+//
+// CAVEAT (don't re-investigate — caching IS working when this can't see it): some providers behind
+// OpenRouter (e.g. GLM/Alibaba) stream `usage` with the cache fields null, so this stays at 'unknown' even
+// while real turns cache ~90%+. The true per-turn numbers live only in OpenRouter's post-hoc generation
+// record — verify caching THERE (a single generation's `native_tokens_cached`), never from the dashboard's
+// per-row input/cost summaries (an already-discounted turn reads as full-rate and looks uncached).
 function noteUsage(text: string) {
   const matchInt = (re: RegExp) => { const m = re.exec(text); return m ? Number(m[1]) : 0 }
   const read = matchInt(/"cache_read_input_tokens":\s*(\d+)/)

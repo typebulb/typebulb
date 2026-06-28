@@ -35,7 +35,9 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   // Lint first — shared with typebulb.com via `typebulb/lint`, cheap, and catches the import-map /
   // Sucrase-unsupported patterns `tsc` can't see. `code.tsx` gets the browser ruleset, `server.ts`
   // the Node subset.
-  if (bulb.code) anyFailed = reportLint(lint(bulb.code, { target: 'client' }), 'client') || anyFailed
+  // Pass `dependencies` to the client lint so the UNDECLARED_IMPORT rule fires (config-less / under-
+  // declared bulbs fail) — `check` is the comprehensive gate, so it runs the full client ruleset.
+  if (bulb.code) anyFailed = reportLint(lint(bulb.code, { target: 'client', dependencies: config.dependencies ?? {} }), 'client') || anyFailed
   if (bulb.server) anyFailed = reportLint(lint(bulb.server, { target: 'server' }), 'server') || anyFailed
 
   // Type-check needs a real, installed TypeScript — never `npx tsc`, which grabs the prank package

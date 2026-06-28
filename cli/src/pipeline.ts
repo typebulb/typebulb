@@ -3,6 +3,7 @@ import * as path from 'path'
 import { pathToFileURL } from 'url'
 import { parseBulb, toLocalBulb, parseDataChunks, parseConfig, validateBulbStructure, type LocalBulb } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
+import { assertDeclaredImports } from './bulb/lintGate.js'
 import { packageService } from './deps/resolver.js'
 import { renderHtml } from './bulb/template.js'
 import { ensureBulbServerPackages, extractServerImports } from './serve/serverDeps.js'
@@ -62,6 +63,11 @@ export async function importServerModule(serverSource: string, basePath: string,
 export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, serverCacheDir: string) {
   const { bulb, config } = await readBulb(bulbPath)
   const dataChunks = parseDataChunks(bulb.data)
+
+  // Enforce the CLI's authored-config contract before compiling — every bare client import declared in
+  // config.json `dependencies`, else the import-driven resolver silently CDN-resolves "latest" and the
+  // bulb runs config-less (the GLM incident). See assertDeclaredImports for why only that one rule fires.
+  assertDeclaredImports(bulb.code, config.dependencies ?? {})
 
   // Compile TypeScript
   const compileResult = transpile(bulb.code, {

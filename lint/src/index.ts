@@ -17,7 +17,7 @@ export type LintIssueType =
   | 'DYNAMIC_IMPORT' | 'COMMONJS_REQUIRE' | 'JS_EXTENSION_IMPORT' | 'URL_IMPORT'
   | 'VERSION_SPECIFIER_IMPORT' | 'REDUNDANT_TB_DECLARATION' | 'CONST_ENUM'
   | 'NAMESPACE_DECLARATION' | 'COMMONJS_EXPORT_EQUALS' | 'COMMONJS_IMPORT_EQUALS'
-  | 'MODULE_DECLARATION' | 'CSS_FILE_IMPORT' | 'NAVIGATION'
+  | 'MODULE_DECLARATION' | 'CSS_FILE_IMPORT' | 'NAVIGATION' | 'UNDECLARED_IMPORT'
 
 export type LintIssue = {
   type: LintIssueType
@@ -53,13 +53,43 @@ const RULES: Rule[] = [
   { type: 'NAVIGATION', pattern: /window\.location(\.href)?\s*=[^=]/, targets: CLIENT },
 ]
 
+// Bare-import detection for the UNDECLARED_IMPORT rule — the same import/export-from shapes the
+// resolver extracts from (packageService), kept in step so lint and resolution agree on what counts
+// as a package import.
+const IMPORT_FROM: readonly RegExp[] = [
+  /\bimport\s+(?:[^'";]*?from\s*)?['"]([^'"]+)['"]/g,
+  /\bexport\s+[^'";]*?from\s*['"]([^'"]+)['"]/g,
+]
+
+/**
+ * The root package name of a bare specifier (`react-dom/client` → `react-dom`,
+ * `@scope/pkg/sub` → `@scope/pkg`), or `null` for a non-bare specifier — relative
+ * (`./x`), absolute (`/x`), or a URL/scheme (`https:`, `node:`). Non-bare specifiers
+ * aren't config-declared dependencies, so they're not this rule's concern (URL imports
+ * have their own rule; relative paths aren't packages).
+ */
+function importRoot(spec: string): string | null {
+  if (/^[./]/.test(spec) || /^[a-z][a-z0-9+.-]*:/i.test(spec)) return null
+  const parts = spec.split('/')
+  return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+}
+
 /**
  * Lint a bulb code block. `target` selects the ruleset: `client` (`code.tsx`,
  * the browser superset) or `server` (`server.ts`, the Sucrase / ESM core only).
+ *
+ * `dependencies` opts a caller into the UNDECLARED_IMPORT rule: every bare client
+ * import must appear in this set (config.json's `dependencies`). It is the CLI's
+ * **authored-config** contract — the CLI always asks the model for config.json and
+ * passes the declared set here, so a config-less or under-declared bulb fails the
+ * lint instead of silently CDN-resolving "latest" (the resolver is import-driven and
+ * would otherwise resolve undeclared imports anyway). typebulb.com omits it: the web
+ * *derives* config.json from the imports, so there's nothing to enforce. Pass `{}` to
+ * enforce against an empty/absent dependencies block (every bare import then fails).
  */
-export function lint(source: string, options: { target: LintTarget }): LintIssue[] {
+export function lint(source: string, options: { target: LintTarget; dependencies?: Record<string, string> }): LintIssue[] {
   if (!source) return []
-  const { target } = options
+  const { target, dependencies } = options
   const issues: LintIssue[] = []
   const lines = source.split('\n')
 
@@ -79,7 +109,58 @@ export function lint(source: string, options: { target: LintTarget }): LintIssue
     }
   }
 
+  // Undeclared-import rule — client-only (server.ts deps are npm-installed by name, not declared),
+  // and only when the caller supplied the declared set (typebulb.com omits it; it derives config
+  // from the imports, so the rule stays dormant there).
+  if (target === 'client' && dependencies) issues.push(...undeclaredImportIssues(lines, dependencies))
+
   return issues
+}
+
+/**
+ * Bare client imports absent from the declared `dependencies` set — one issue per missing root
+ * (first line it appears on), so a package imported many times reports once. The root, not the
+ * specifier, is what's declared (`react-dom/client` → `react-dom`).
+ */
+function undeclaredImportIssues(lines: string[], dependencies: Record<string, string>): LintIssue[] {
+  const declared = new Set(Object.keys(dependencies))
+  const seen = new Set<string>()
+  const issues: LintIssue[] = []
+  for (let i = 0; i < lines.length; i++) {
+    for (const pattern of IMPORT_FROM) {
+      for (const m of lines[i].matchAll(pattern)) {
+        const root = importRoot(m[1])
+        if (!root || declared.has(root) || seen.has(root)) continue
+        seen.add(root)
+        issues.push({
+          type: 'UNDECLARED_IMPORT',
+          severity: 'error',
+          message: undeclaredImportMessage(root, i + 1),
+          lineNumber: i + 1,
+          lineContent: lines[i],
+        })
+      }
+    }
+  }
+  return issues
+}
+
+function undeclaredImportMessage(root: string, lineNumber: number): string {
+  return `Import "${root}" is not declared in config.json dependencies! Found on line ${lineNumber}.
+
+**CRITICAL**: Every bare import in code.tsx must be declared in the **config.json** "dependencies" block. A bulb that imports a package it doesn't declare is incomplete — it won't type-check, its versions aren't pinned, and it can't be reliably re-run or ported to typebulb.com.
+
+✅ CORRECT - declare every import:
+\`\`\`json
+{
+  "description": "…",
+  "dependencies": {
+    "${root}": "*"
+  }
+}
+\`\`\`
+
+**Fix:** Add a **config.json** block (or extend the existing one) with a "dependencies" entry for "${root}" — and for every other bare import in code.tsx. Pin a real version where you can (e.g. "react": "^19.2.7").`
 }
 
 function messageFor(type: LintIssueType, lineNumber: number): string {
