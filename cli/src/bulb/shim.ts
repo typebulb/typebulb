@@ -264,15 +264,21 @@ export const typebulbShim = `
     // URL
     url: () => Promise.resolve(location.href),
 
-    // Proxy: rewrite CDN URLs to the local server's /proxy/. Relative on purpose —
-    // it resolves against the served page on the CLI, and against the host page
-    // inside a srcdoc embed, where location.origin is the string "null".
+    // Proxy: rewrite CDN URLs to the local server's /proxy/. Absolute when we have a
+    // real origin (the CLI page, or a broken-out bulb) so the URL also works from a
+    // worker's importScripts, which rejects a root-relative path. Relative in a
+    // null-origin srcdoc embed, where prefixing the "null" origin would yield the
+    // broken string null/proxy/... ; there the relative path resolves against the
+    // host page. Absolute and root-relative are equivalent for every other consumer
+    // (fetch, new Worker, script src) when there is one real origin, so this only
+    // adds the importScripts case and changes nothing else.
     proxy: (url) => {
       if (!url) return url;
       const i = url.lastIndexOf('https://');
       const clean = i !== -1 ? url.slice(i) : url;
       if (!clean.startsWith('https://')) return url;
-      return '/proxy/' + clean;
+      const rel = '/proxy/' + clean;
+      return location.origin && location.origin !== 'null' ? location.origin + rel : rel;
     },
 
     // Server API - call functions from **server.ts**. Returns the hybrid call object: await it for

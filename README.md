@@ -185,6 +185,7 @@ npm install -g typebulb
 | `tb.infer()` | One-shot LLM call driven by the `infer.md` block | ❌ | ❌ |
 
 - **❌ (embedded):** the call throws `"not available in an embedded bulb"` — an embed is a client-only sandboxed iframe with **no persistent storage** either (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
+- **`tb.proxy` only rewrites allow-listed CDNs** — `esm.sh`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`; any other host 403s. Serve a WASM/worker asset (a tesseract or ffmpeg core, a pdf.js worker) from one of these.
 
 ## Portability back to typebulb.com
 
@@ -258,6 +259,7 @@ Run a bulb **once** and let hot reload drive the loop.
 - **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
 - **A bulb's working files belong beside it**, in a folder named for its slug. `tb.fs`/`server.ts` paths are relative to the launch dir (cwd), not the bulb's folder — so run from the project root and prefix the bulb's path: `typebulbs/counter/…`, not a bare `counter/…`.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
+- **Self-testing client code** — to drive the *browser* side, gate the work behind `tb.onMessage(m => { if (m === 'selftest') run() })`, trigger it with `typebulb send <file> selftest --wait`, and read `run()`'s `tb.server.log(...)` back the same way. The client-side counterpart to instrumenting `server.ts`.
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`, and every bare import declared in `config.json` `dependencies`.** Bare imports (`react`, `d3`, `three`, …) resolve from a CDN — no install step — but declaring them is **required, not optional**: an import missing from `dependencies` is a lint error that fails `npx typebulb check` *and* refuses to run. Declaring is also what pins versions and lets `check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`). So a bulb with imports must carry a `config.json` with a matching `dependencies` entry for each.

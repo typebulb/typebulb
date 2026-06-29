@@ -12,8 +12,14 @@ import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
  * the message to its `/__send` (data-in, trust-free — no capability boundary crossed), and reports the
  * connected-page count the endpoint returns. Delivery is best-effort, never buffered: a send that
  * reaches no page (none open, or its SSE hasn't attached yet) is reported, not queued — retry.
+ *
+ * `--wait[=ms]` automates exactly that retry on the client side, for the post-edit self-test loop: a
+ * hot reload aborts the page's SSE before the fresh page re-attaches, so the first POST can land on
+ * zero listeners. We re-POST until a page attaches or the window elapses — never a server-side queue,
+ * so the "never buffered" contract is intact (the no-op POSTs hit zero listeners; only the one that
+ * finds a live page delivers, and we stop there).
  */
-export async function runSend(file: string, message: string | undefined): Promise<void> {
+export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
   const abs = path.resolve(file)
   const server = serversForBulb(await listBulbServers(), abs)[0]
   if (!server) {
@@ -21,8 +27,7 @@ export async function runSend(file: string, message: string | undefined): Promis
     process.exit(1)
   }
 
-  let clients = 0
-  try {
+  const post = async (): Promise<number> => {
     const resp = await fetch(`${server.url}/__send`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -33,12 +38,23 @@ export async function runSend(file: string, message: string | undefined): Promis
       process.exit(1)
     }
     const data = (await resp.json().catch(() => ({}))) as { clients?: number }
-    clients = data.clients ?? 0
+    return data.clients ?? 0
+  }
+
+  let clients = 0
+  try {
+    const deadline = Date.now() + waitMs
+    do {
+      clients = await post()
+      if (clients > 0 || Date.now() >= deadline) break
+      await new Promise(r => setTimeout(r, 150))
+    } while (true)
   } catch (e) {
     console.error(`send failed: ${e instanceof Error ? e.message : String(e)}`)
     process.exit(1)
   }
 
   if (clients > 0) console.log(`Sent to ${clients} page${clients === 1 ? '' : 's'}.`)
+  else if (waitMs > 0) console.log(`No page connected after ${waitMs / 1000}s — is the bulb open?`)
   else console.log('Sent, but no page is connected yet — open the bulb and retry.')
 }

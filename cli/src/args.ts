@@ -1,5 +1,9 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
+/** `send --wait` (no value) waits this long for a page to (re)attach. Sized to cover an
+ *  npx-booted reload's reconnect window without a long hang when nothing is listening. */
+const DEFAULT_SEND_WAIT_MS = 5000
+
 export interface CliArgs {
   subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send'
   file: string
@@ -8,6 +12,11 @@ export interface CliArgs {
   /** `send <file> [message]`: the value to push into the running bulb's page (tb.onMessage).
    *  Optional — a bare `send <file>` delivers `undefined` (a pure trigger). */
   sendMessage?: string
+  /** `send --wait[=ms]`: if no page is connected yet (e.g. the page is mid hot-reload
+   *  reconnect), retry the push for up to this many ms before reporting. Absent ⇒ a single
+   *  best-effort attempt (the default, unchanged). Retry is client-side only — the server never
+   *  queues, so send's "best-effort, never buffered" contract holds. */
+  sendWaitMs?: number
   /** `call`: positional args after `<fn>`, captured verbatim (each JSON-or-string-parsed at call time). */
   callArgs: string[]
   /** `call --args <json>`: the whole argument list as one JSON array (`-` reads it from stdin). */
@@ -160,6 +169,19 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.timeoutSec = t
+    } else if (arg === '--wait' || arg.startsWith('--wait=')) {
+      // `send --wait` (default window) or `send --wait=<ms>`. Attached-value form only, so it
+      // never swallows the message positional.
+      if (arg.startsWith('--wait=')) {
+        const v = parseInt(arg.slice('--wait='.length), 10)
+        if (isNaN(v) || v <= 0) {
+          console.error(`Invalid --wait value: ${arg.slice('--wait='.length)} (milliseconds)`)
+          process.exit(1)
+        }
+        result.sendWaitMs = v
+      } else {
+        result.sendWaitMs = DEFAULT_SEND_WAIT_MS
+      }
     } else if (arg === '--lines' || arg === '-n') {
       const n = parseInt(args[++i], 10)
       if (isNaN(n) || n < 0) {
@@ -262,7 +284,8 @@ Usage:
                                  its tb.onMessage(cb) handlers receive it. The
                                  client-side twin of 'call'; use it to kick off
                                  work on demand (msg is JSON-or-string; omit it
-                                 for a bare trigger). Needs no --trust.
+                                 for a bare trigger). Needs no --trust. Add
+                                 --wait to ride through a hot-reload reconnect.
   typebulb wait [file|pid]       Block until the target server logs a new line,
                                  print it, exit (2: timeout; 3: server died).
                                  For agents: run it in the background — the exit
@@ -290,6 +313,10 @@ Options:
   --match <substring>         Only lines containing this end the wait (wait)
   --timeout <sec>             Give up waiting after this long; exit 2 (wait,
                               default 1800)
+  --wait[=ms]                 For 'send': if no page is connected yet (e.g. the
+                              page is mid hot-reload), retry the push for up to
+                              ms (default 5000) before reporting. Use it right
+                              after an edit so the trigger rides the reload.
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Use a specific port (default: 3000)
   --open                      Force-open the external browser (default off

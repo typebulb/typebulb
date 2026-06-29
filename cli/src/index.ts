@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   if (args.subcommand === 'send') {
     // Resolves the target in the registry by file path (like logs/stop) — no bulb file needs to
     // exist on disk, and the push is trust-free, so dispatch before file/trust resolution.
-    await runSend(args.file, args.sendMessage)
+    await runSend(args.file, args.sendMessage, args.sendWaitMs ?? 0)
     return
   }
   if (args.subcommand === 'skill') {
