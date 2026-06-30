@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
+import { mdRenderToHtml } from '../agents/core/client/markdown.js'
 
 /**
  * Display math `$$…$$` is a markdown-it BLOCK rule, not just the inline one. A `$$…$$` block whose

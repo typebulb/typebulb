@@ -78,12 +78,17 @@ export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark
   // Lint on the raw source before transpile — the same `typebulb/lint` pass `typebulb check` runs, on the
   // browser ruleset (an embed is client-only). It catches the import-map / sandbox patterns that compile
   // fine but break in an embed (dynamic import, URL/version imports, navigation), turning a silent runtime
-  // failure into a precise, fix-named error. Passing `dependencies` also enforces the UNDECLARED_IMPORT
-  // rule, so an embed that imports a package its config.json doesn't declare fails here rather than
-  // CDN-resolving "latest" and rendering — keeping an embed promotable (breakout) and consistent with the
-  // local run. Surfaced as a render error so it rides the embed's existing compile-error →
-  // `typebulb logs claude` readback path (TB-Agent-Mirror-Embed-Iterate.md).
-  const issues = lint(bulb.code, { target: 'client', dependencies: config.dependencies ?? {} })
+  // failure into a precise, fix-named error. Surfaced as a render error so it rides the embed's existing
+  // compile-error → `typebulb logs <agent>` readback path (TB-Agent-Mirror-Embed-Iterate.md).
+  //
+  // We deliberately do NOT pass `dependencies` here, so the UNDECLARED_IMPORT rule stays dormant for an
+  // embed: a model-emitted embed often imports a package its config.json doesn't declare, and the
+  // import-driven resolver CDN-resolves "latest" and renders fine. An embed is throwaway and forgiving
+  // by design (same spirit as the structural fence tolerance) — a render is worth more than enforcing
+  // the authored-config contract on a block no one keeps. The contract is enforced where a real file
+  // exists instead: `breakout` DERIVES the missing `dependencies` into the promoted `.bulb.md`
+  // (launcher.ts), and the local run / `check` enforce it there (TB-Lint-Transpile.md).
+  const issues = lint(bulb.code, { target: 'client' })
   if (issues.length) return { error: `Lint failed:\n${summarizeLint(issues)}` }
 
   const compiled = transpile(bulb.code, { jsxImportSource: config.ts?.jsxImportSource })

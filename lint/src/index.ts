@@ -75,6 +75,27 @@ function importRoot(spec: string): string | null {
 }
 
 /**
+ * The unique root package names of every bare import in a client code block, first-seen order
+ * (`react`, `@scope/pkg`, `react-dom` from `react-dom/client`). Relative / absolute / URL / `node:`
+ * specifiers are excluded (not packages). Shares `IMPORT_FROM` + `importRoot` with the
+ * UNDECLARED_IMPORT rule, so what a caller *derives* into config.json (e.g. the CLI's `breakout`)
+ * matches exactly what that rule would *demand* — the two can't drift.
+ */
+export function bareImportRoots(source: string): string[] {
+  const roots: string[] = []
+  const seen = new Set<string>()
+  for (const line of source.split('\n')) {
+    for (const pattern of IMPORT_FROM) {
+      for (const m of line.matchAll(pattern)) {
+        const root = importRoot(m[1])
+        if (root && !seen.has(root)) { seen.add(root); roots.push(root) }
+      }
+    }
+  }
+  return roots
+}
+
+/**
  * Lint a bulb code block. `target` selects the ruleset: `client` (`code.tsx`,
  * the browser superset) or `server` (`server.ts`, the Sucrase / ESM core only).
  *

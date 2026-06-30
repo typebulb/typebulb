@@ -3,7 +3,7 @@ import { join, dirname } from 'path'
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'http'
 import { type AddressInfo } from 'net'
 import { getFilteredModels } from '../../../src/servers.js'
-import { errorMessage, projectCwd } from './context.js'
+import { errorMessage, projectCwd } from '../../core/server/context.js'
 
 // ---- agent switcher: which model backs each `claude` launch (TB-Agent-Switcher.md) ----
 //

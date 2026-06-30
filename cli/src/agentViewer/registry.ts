@@ -6,7 +6,7 @@
  * (TB-Agent-Mirror.md). `claude` is the canonical — and, for now, only — agent. Adding
  * one is a one-line entry here, plus its `agents/<name>/` code and a dispatch case in `index.ts`.
  */
-const AGENTS = new Set(['claude'])
+const AGENTS = new Set(['claude', 'pi'])
 
 /** Is `name` a reserved agent the CLI can launch (`agent:<name>`)? */
 export function isKnownAgent(name: string): boolean {

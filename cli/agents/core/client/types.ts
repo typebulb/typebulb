@@ -1,7 +1,30 @@
+import type { VElement } from 'domeleon'
 import type { CopyButton } from './copyButton.js'
 import type { BulbEmbed } from './bulbEmbed.js'
+// The poll() event union + token shape are the server↔client wire contract — one canonical definition
+// in core/events.ts (no more "keep in sync" copy). `ServerEvent` is the client's name for `Event`.
+import type { Event as ServerEvent, TokenCounts } from '../events.js'
+export type { ServerEvent, TokenCounts }
 
-export interface TokenCounts { in: number; out: number; cached: number; cacheCreate: number }
+// An agent-specific status-bar pill injected into the neutral Root (e.g. Claude's model switcher).
+// Root renders `view()` in its status bar — which wires the pill's `ctx.parent` to Root (IRoot), the
+// same as a hard-coded field — and calls `close()` when another popup opens. Kept structural so the
+// neutral client never imports a concrete agent pill.
+export interface StatusPillLike {
+  view(): VElement
+  close?(): void
+}
+
+// The harness-specific configuration the agent's client entry passes to the neutral Root. Everything
+// that differs per agent (the tab title, the extra pills, any overlay banners, a per-poll hook) lives
+// here, so Root itself carries no Claude/Pi knowledge. Claude supplies its ModelPill as a pill, the
+// switcher watchdog as an overlay, and `modelPill.tickState` as onPollTick; Pi supplies none of these.
+export interface RootConfig {
+  title: string
+  pills: StatusPillLike[]
+  overlays?: (() => VElement | null)[]
+  onPollTick?: () => void
+}
 
 // The slice of MessageList the status-bar pills reach through IRoot. Declared here so the pills never
 // import the concrete component (which would re-introduce a child→host cycle).
@@ -28,17 +51,6 @@ export interface IRoot {
   updateTitle(): void
 }
 
-// Mirror of the server's Event union (the RPC boundary is untyped). Keep in sync.
-export type ServerEvent =
-  | { type: 'session'; sessionId: string }
-  | { type: 'user'; text: string }
-  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean }
-  | { type: 'tool_result'; id: string; content: string; isError: boolean }
-  | { type: 'cleared' }
-  | { type: 'usage'; in: number; out: number; cached: number; cacheCreate: number }
-  // An abandoned branch off a fork point (TB-LostMessage.md): `events` are the orphan's own messages,
-  // `count` the user/assistant tally for the stub label. Surfaced collapsed at the fork parent's position.
-  | { type: 'fork'; atUuid: string; count: number; events: ServerEvent[] }
 
 export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean }
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set

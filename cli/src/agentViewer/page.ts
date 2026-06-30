@@ -12,8 +12,8 @@
 
 import { escapeHtml, baseResetStyle, themeHeadScript } from '../bulb/pageChrome.js'
 
-/** Where the static route in `startServer` serves the bundled client from. */
-export const CLIENT_BUNDLE_URL = '/agents/claude/client.js'
+/** Where the static route in `startServer` serves an agent's bundled client from (per agent name). */
+export const clientBundleUrl = (agent: string) => `/agents/${agent}/client.js`
 
 /**
  * The mirror's `tb`. Only `tb.server.<name>(...)` (RPC → `POST /__api/<name>`, the exact
@@ -63,9 +63,11 @@ const AGENT_TB_SHIM = `
 export interface AgentHtmlOptions {
   /** Names the <title> and the per-page theme-override localStorage key. */
   name: string
+  /** The agent name (e.g. `claude`) — selects which client bundle the page loads. */
+  agent: string
   /** The mirror's `styles.css`, inlined into <head> (read from the dist asset dir). */
   styles: string
-  /** The mount stub (`agents/claude/index.html`): katex stylesheet link + `#app`. */
+  /** The mount stub (`agents/client/index.html`): katex stylesheet link + `#app`. */
   mountHtml: string
   /** Wire the hot-reload listener (watch mode). */
   watch: boolean
@@ -75,7 +77,8 @@ export interface AgentHtmlOptions {
 
 /** Build the mirror's complete HTML page. Pure string assembly — no I/O. */
 export function buildAgentHtml(opts: AgentHtmlOptions): string {
-  const { name, styles, mountHtml, watch, theme } = opts
+  const { name, agent, styles, mountHtml, watch, theme } = opts
+  const bundleUrl = clientBundleUrl(agent)
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -99,7 +102,7 @@ ${watch ? '<script>window.__TYPEBULB_WATCH__ = true;</script>' : ''}
 ${AGENT_TB_SHIM}
 </script>
 
-<script type="module" src="${CLIENT_BUNDLE_URL}"></script>
+<script type="module" src="${bundleUrl}"></script>
 </body>
 </html>`
 }

@@ -59,34 +59,31 @@ await build({
   banner: { js: nodeRequireBanner },
 })
 
-// Agent mirror client (TB-Agent-Mirror.md): the browser UI, bundled self-contained
-// (NO externals — katex/markdown-it/beautiful-mermaid/dompurify/highlight.js and the internal
-// `../../../src/render.ts` it imports are all inlined). Served as a static asset by runAgentViewer.
-const clientBuildOpts = {
-  entryPoints: ['cli/agents/claude/client/index.ts'],
-  bundle: true,
-  platform: 'browser',
-  format: 'esm',
-  outfile: 'dist/agents/claude/client.js',
-  minify: true,
-}
-
-// The mirror's two non-bundled assets — the inlined stylesheet and the mount stub — copied next to
-// the client bundle so runAgentViewer reads them from `dist/` at runtime and they ship via
-// `files: ["dist"]`. The server half (`agents/claude/server.ts`) needs no copy: it's bundled into
-// `dist/index.js` transitively (runAgentViewer dynamically imports it).
-function copyViewerAssets() {
-  mkdirSync(new URL('./dist/agents/claude/', import.meta.url), { recursive: true })
+// Agent mirror clients (TB-Agent-Mirror.md, TB-Pi.md): each agent's browser UI entry, bundled
+// self-contained (NO externals — katex/markdown-it/beautiful-mermaid/dompurify/highlight.js, the
+// neutral `agents/client/` modules, and the internal `../../src/render.ts` they import are all
+// inlined). Served as a static asset by runAgentViewer. styles.css + index.html are the neutral chrome
+// (`agents/client/`), copied next to each agent's bundle so runAgentViewer reads them from `dist/` at
+// runtime and they ship via `files: ["dist"]`. The server halves (`agents/<name>/server.ts`) need no
+// copy: they're bundled into `dist/index.js` transitively (serve.ts's static import map).
+const MIRROR_AGENTS = ['claude', 'pi']
+for (const agent of MIRROR_AGENTS) {
+  await build({
+    entryPoints: [`cli/agents/${agent}/client/index.ts`],
+    bundle: true,
+    platform: 'browser',
+    format: 'esm',
+    outfile: `dist/agents/${agent}/client.js`,
+    minify: true,
+  })
+  mkdirSync(new URL(`./dist/agents/${agent}/`, import.meta.url), { recursive: true })
   for (const asset of ['styles.css', 'index.html']) {
     copyFileSync(
-      new URL(`./cli/agents/claude/${asset}`, import.meta.url),
-      new URL(`./dist/agents/claude/${asset}`, import.meta.url),
+      new URL(`./cli/agents/core/client/${asset}`, import.meta.url),
+      new URL(`./dist/agents/${agent}/${asset}`, import.meta.url),
     )
   }
 }
-
-await build(clientBuildOpts)
-copyViewerAssets()
 
 // Hand-authored, dependency-free .d.ts so the public surface is a stable, tiny
 // contract (a generated rollup would drag in internal types). Written here so it
@@ -206,6 +203,12 @@ export declare function slugifyBulbName(source: string): string
 
 /** The source with its leading \`---\` frontmatter block stripped. */
 export declare function stripFrontmatter(source: string): string
+
+/** Return \`source\` with every bare client import in code.tsx guaranteed a config.json \`dependencies\`
+ *  entry (deriving the missing ones as "latest" — the version the import-driven resolver already uses
+ *  for an undeclared import). Idempotent: a fully-declared / non-bulb / import-less source is returned
+ *  unchanged. Used by breakout to make a promoted embed a correct, runnable .bulb.md. */
+export declare function ensureDeclaredDependencies(source: string): string
 
 /** Is this bulb remembered as Trusted in the CLI's per-machine trust store? */
 export declare function isBulbTrusted(file: string): boolean

@@ -1,5 +1,5 @@
 import { div, span, button, inputText, inputSelect, svg, path, VElement } from 'domeleon'
-import { ComboboxPill } from './statusPill.js'
+import { ComboboxPill } from '../../core/client/statusPill.js'
 
 // The agent switcher (TB-Agent-Switcher.md): a status-bar menu that switches which model backs every
 // `claude` launch — terminal and VS Code/Cursor extension — by routing CC's API traffic through a local

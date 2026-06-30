@@ -11,6 +11,9 @@ export { listBulbFiles, type BulbFileInfo } from './serve/bulbFiles.js'
 // before launching (TB-Security.md "Proactive prediction"). A hint, never a gate.
 export { predictBulbTrust } from './serve/predictBulbTrust.js'
 export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
+// Derive missing config.json `dependencies` from a bulb's imports (TB-Lint-Transpile.md) — breakout
+// uses it so a promoted embed is a correct, runnable .bulb.md even when the author omitted config.json.
+export { ensureDeclaredDependencies } from './bulb/deriveDeps.js'
 // Cross-platform editor launcher (open a cited file at a line). Agent-agnostic, so any mirror
 // bulb shares one resolved-editor, detached-spawn implementation instead of re-deriving it.
 export { openInEditor } from './serve/editor.js'

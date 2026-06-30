@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
+import { mdRenderToHtml } from '../agents/core/client/markdown.js'
 
 /**
  * Raw HTML is parsed (html:true) but funnelled through a tiny tag allowlist in markdown.ts, so the

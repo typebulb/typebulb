@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/claude/client/markdown.js'
+import { mdRenderToHtml } from '../agents/core/client/markdown.js'
 
 /**
  * A markdown table chops onto its own row like an svg/bulb embed: the `table_open`/`table_close`

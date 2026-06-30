@@ -35,7 +35,7 @@ describe('buildSkill', () => {
     expect(out).toContain('## Usage')
     // Bottom half (the authoring skill proper):
     expect(out).toContain('## Bulb Format')
-    expect(out).toContain('## Claude')
+    expect(out).toContain('## Agent Harness Support')
   })
 
   it('needs no `---` divider — a README without one emits verbatim after the frontmatter + note', () => {

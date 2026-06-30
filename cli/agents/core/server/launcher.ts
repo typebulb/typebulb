@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, isAbsolute } from 'path'
-import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor } from '../../../src/servers.js'
+import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
-import { searchHits, type SearchTurn } from './transcript.js'
+import { searchHits, type SearchTurn } from './search.js'
 
 // The mirror's bulb-side RPCs: open a cited file in the editor, promote an embedded bulb to a file
 // (breakout), and the status-bar launcher (list / launch / stop / trust / tail this project's bulbs).
@@ -29,19 +29,26 @@ export async function openFile(filePath: string, line?: number) {
 // the typebulb capability) — no prompt, no guess. The host owns only *where* the file lands.
 export async function breakout(source: string) {
   const cwd = projectCwd
+  // The embed render path is forgiving of an undeclared import (render.ts), but a real `.bulb.md` must
+  // satisfy the authored-config contract (the local run / `check` enforce UNDECLARED_IMPORT). So at the
+  // moment a throwaway becomes a kept file, derive any missing `config.json` `dependencies` from the
+  // imports — a model that omitted config.json (the GLM case) still breaks out to a correct, runnable
+  // bulb. Idempotent: a fully-declared bulb is returned unchanged (TB-Lint-Transpile.md).
+  const bulb = ensureDeclaredDependencies(source)
   // Bulbs land in a `typebulbs/` folder (created on demand), keeping the project
   // root clean and mirroring the repo's own convention.
   const dir = join(cwd, 'typebulbs')
   mkdirSync(dir, { recursive: true })
-  const slug = slugifyBulbName(source)
-  // Never clobber a file we didn't write: an identical existing file is reused
-  // (idempotent relaunch); a name clash with different content takes the next -N.
+  const slug = slugifyBulbName(bulb)
+  // Never clobber a file we didn't write: an identical existing file is reused (idempotent relaunch; the
+  // comparison is against the derived bulb, so re-breaking-out the same embed re-uses its file); a name
+  // clash with different content takes the next -N.
   let file = `${slug}.bulb.md`
-  for (let n = 2; existsSync(join(dir, file)) && readFileSync(join(dir, file), 'utf8') !== source; n++) {
+  for (let n = 2; existsSync(join(dir, file)) && readFileSync(join(dir, file), 'utf8') !== bulb; n++) {
     file = `${slug}-${n}.bulb.md`
   }
   const path = join(dir, file)
-  if (!existsSync(path)) writeFileSync(path, source)
+  if (!existsSync(path)) writeFileSync(path, bulb)
   const rel = join('typebulbs', file)
   // The launch itself — cross-platform detached spawn, idempotency (one server per file,
   // so a repeated breakout re-attaches instead of double-spawning), and registration so

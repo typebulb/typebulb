@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { EmbedStatusDedup } from '../agents/claude/embedStatusLog.js'
+import { EmbedStatusDedup } from '../agents/core/server/embedStatusLog.js'
 
 /**
  * The mirror's tag-keyed embed-status forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7):

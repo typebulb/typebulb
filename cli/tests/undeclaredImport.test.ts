@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { lint } from '../../lint/src/index.js'
+import { lint, bareImportRoots } from '../../lint/src/index.js'
 
 // The UNDECLARED_IMPORT rule is the CLI's authored-config contract: the resolver is import-driven and
 // would CDN-resolve any bare import whether or not config.json declares it, so without this rule a
@@ -48,5 +48,19 @@ describe('UNDECLARED_IMPORT lint rule', () => {
   it('never fires on the server target (server deps are npm-installed by name)', () => {
     const issues = lint(code, { target: 'server', dependencies: {} })
     expect(issues.some(i => i.type === 'UNDECLARED_IMPORT')).toBe(false)
+  })
+})
+
+// The extraction the breakout config-derivation reuses, so a derived config.json matches exactly what
+// the UNDECLARED_IMPORT rule would demand (same IMPORT_FROM / importRoot).
+describe('bareImportRoots', () => {
+  it('returns unique roots in first-seen order, subpaths reduced to their root', () => {
+    expect(bareImportRoots(code)).toEqual(['react', 'react-dom'])
+  })
+  it('excludes relative / absolute / URL specifiers', () => {
+    expect(bareImportRoots(`import a from "./x"\nimport b from "/y"\nimport c from "https://esm.sh/z"`)).toEqual([])
+  })
+  it('keeps a scoped package whole', () => {
+    expect(bareImportRoots(`import x from "@scope/pkg/sub"`)).toEqual(['@scope/pkg'])
   })
 })
