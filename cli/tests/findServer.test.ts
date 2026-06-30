@@ -42,6 +42,16 @@ describe('findServer — the literal `agent` token', () => {
     expect(findServer(servers, 'agent', here)).toBeUndefined()
   })
 
+  it('refuses to silently target another project\'s mirror — `agent` (no cwd match ⇒ undefined, not mirrors[0])', () => {
+    const servers = [mk({ pid: 60, agent: 'pi', cwd: other })]   // a mirror, but for the WRONG project
+    expect(findServer(servers, 'agent', here)).toBeUndefined()
+  })
+
+  it('refuses to silently target another project\'s mirror — a named harness too', () => {
+    const servers = [mk({ pid: 61, agent: 'claude', cwd: other })]
+    expect(findServer(servers, 'claude', here)).toBeUndefined()
+  })
+
   it('still resolves a specific harness name to its own mirror', () => {
     const servers = [
       mk({ pid: 40, agent: 'claude', cwd: here }),

@@ -48,9 +48,14 @@ export interface CliArgs {
   run?: number | 'latest'
   /** `logs --lines N`: print only the last N lines (default: the whole captured log). */
   lines?: number
-  /** `wait --match <substring>`: only lines containing this wake the wait (default: any new line). */
+  /** `wait --match <substring>`: only lines containing this **literal substring** wake the wait
+   *  (default: any new line). NOT a regex — `[`/`]`/`.` etc. are matched verbatim. This is what lets the
+   *  embed wake match the `[embed <name>` tag prefix and a turn-based bulb wait on its `[chess]` event
+   *  tag; a regex `[chess]` would be a character class, and the unpaired `[embed` an error. */
   match?: string
-  /** `wait --timeout <sec>`: give up (exit 2) after this long with no matching line. Default 1800. */
+  /** `wait --timeout <sec>`: give up (exit 2) after this long with no matching line. Default is
+   *  target-aware (lifecycle.ts runWait): a bulb wait defaults to 1800 and tunes freely; a mirror/embed
+   *  wait defaults to 30 and is hard-capped there (a longer value only lengthens a hang). */
   timeoutSec?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
@@ -158,7 +163,7 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (arg === '--match') {
       const m = args[++i]
       if (m === undefined) {
-        console.error('Missing value for --match (a substring new log lines must contain)')
+        console.error('Missing value for --match (a literal substring new log lines must contain)')
         process.exit(1)
       }
       result.match = m
@@ -311,9 +316,10 @@ Options:
   --clear                     Empty the target server's log instead of
                               printing it, for a clean run (logs)
   -n, --lines <n>             Print only the last n lines (logs)
-  --match <substring>         Only lines containing this end the wait (wait)
-  --timeout <sec>             Give up waiting after this long; exit 2 (wait,
-                              default 1800)
+  --match <substring>         Only lines containing this literal substring end
+                              the wait — not a regex (wait)
+  --timeout <sec>             Give up waiting after this long; exit 2 (wait;
+                              bulb default 1800, mirror/embed capped at 30)
   --wait[=ms]                 For 'send': if no page is connected yet (e.g. the
                               page is mid hot-reload), retry the push for up to
                               ms (default 5000) before reporting. Use it right

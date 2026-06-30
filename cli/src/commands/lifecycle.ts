@@ -13,16 +13,20 @@ import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbSe
  *  via auto-detect never learned whether it's `claude` or `pi`, so `wait agent` / `logs agent` must work
  *  without the harness name — and the `[file|agent]` usage placeholder reads as exactly this literal
  *  (Kimi 2.7 typed `wait agent` verbatim and it used to fail). A specific harness name (`claude`/`pi`)
- *  still resolves its own mirror. Either way, prefer the mirror whose cwd is the current project, so the
- *  read hits *this* project's mirror rather than another's that sits earlier in the cross-project
- *  registry (the embed-error readback in TB-Agent-Mirror-Embed-Iterate.md depends on it). Else a resolved
- *  file path (compared via the registry's canonical key, so either spelling of the path matches). */
+ *  still resolves its own mirror. Either way, resolve a mirror **only** to this project's (cwd match):
+ *  never silently fall back to another project's mirror that merely sits earlier in the cross-project
+ *  registry. A wrong-target `wait`/`logs`/`stop` is worse than a clean miss — the earlier `?? mirrors[0]`
+ *  fallback quietly turned "no mirror here" into either a full-timeout `wait` against another project or a
+ *  read of its log; no cwd match now ⇒ undefined ⇒ requireServer's fast exit(1), recovering that fail.
+ *  The embed-error readback in TB-Agent-Mirror-Embed-Iterate.md depends on hitting *this* project's
+ *  mirror, not whichever one ranks first. (With no cwd context at all — an unusual call — fall back to the
+ *  first mirror, since nothing can be matched.) Else a resolved file path (compared via the registry's
+ *  canonical key, so either spelling of the path matches). */
 export function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServer | undefined {
   if (/^\d+$/.test(arg)) return servers.find(s => s.pid === parseInt(arg, 10))
   const mirrors = arg === 'agent' ? servers.filter(s => s.agent != null) : servers.filter(s => s.agent === arg)
   if (mirrors.length) {
-    const here = cwd ? mirrors.find(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)) : undefined
-    return here ?? mirrors[0]
+    return cwd ? mirrors.find(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)) : mirrors[0]
   }
   return servers.find(s => normalizeBulbPath(s.file) === normalizeBulbPath(arg))
 }
@@ -127,9 +131,21 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  * wakes cost one redundant turn the protocol absorbs (the agent reads authoritative state on wake,
  * `typebulb call`, never the printed line).
  */
-export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec: number }): Promise<void> {
+export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec?: number }): Promise<void> {
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
+
+  // The timeout is target-aware. A *mirror* wait is the embed wake (TB-Agent-Mirror-Embed-Iterate.md):
+  // an embed renders in seconds when a tab is watching, and a timeout just means "nobody's looking" —
+  // benign, the agent moves on and the user can ignore the embed. So it defaults to 30s and is *hard-
+  // capped* there even if a caller asks for more: a longer embed wait only ever buys a longer hang (the
+  // 120s GLM deadlock was a foreground misuse a cap bounds to 30s). A *bulb* (file/pid) wait can ride a
+  // human-in-the-loop loop — a turn-based move, an approval — so it keeps the patient 1800s default,
+  // uncapped. An explicit --timeout tunes a bulb wait freely; for a mirror it can only shorten.
+  const MIRROR_CAP_SEC = 30
+  const timeoutSec = server.agent != null
+    ? Math.min(opts.timeoutSec ?? MIRROR_CAP_SEC, MIRROR_CAP_SEC)
+    : (opts.timeoutSec ?? 1800)
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
   // the bare-wait / `call` baseline (the empty key). Per-pattern offsets mean one waiter's exit can't
@@ -147,7 +163,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const end = readServerLog(server.pid).offset
   const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
   let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
-  const deadline = Date.now() + opts.timeoutSec * 1000
+  const deadline = Date.now() + timeoutSec * 1000
   // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
   // several embeds from one turn — lands in one wake instead of one wake per line.
   const SETTLE_MS = 1000
@@ -171,7 +187,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
     }
     if (settleUntil && Date.now() >= settleUntil) break
     if (!settleUntil && Date.now() >= deadline) {
-      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${opts.timeoutSec}s`)
+      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${timeoutSec}s`)
       exitCode = 2
       break
     }

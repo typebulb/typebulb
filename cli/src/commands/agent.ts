@@ -7,9 +7,10 @@ import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
  * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the embed-vs-local rule
  * (the one decision agents most often get wrong — a weak model that under-reads the skill plans a
- * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix) plus a
- * directive to read the authoring skill before writing a bulb (delivery in the `skill` block below).
- * Both kept to short lines — agents often run in narrow panes, where a long line garbles. It launches
+ * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted embed (a *backgrounded* `wait` — the
+ * render lands only on turn-end, so a foreground or pre-emit wait would deadlock; backgrounding fixes
+ * both halves), and a directive to read the authoring skill before writing a bulb (delivery in `skill`
+ * below). Every line is ≤53 chars — agents often run in narrow panes, where a longer line garbles. It launches
  * rather than instructs because the user's kickoff sentence pre-approves exactly one command: stdout
  * answering "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
  * command that approval never covered. It always exits 0: this is a status report, and even a launch
@@ -62,8 +63,10 @@ export async function runAgent(version: string): Promise<void> {
         `    ${green('●')} ${link(viewer.url)}`,
         `      ${dim('Embedded bulbs render live here.')}`,
         `  Agents:`,
-        `    Show something inline → embed a bulb`,
         `    Reusable app/tool → write a .bulb.md`,
+        `    Show something inline → embed a bulb`,
+        `      ${dim('•')} ${dim('after emitting, background a wait:')}`,
+        `      ${dim('•')} typebulb wait agent --match "[embed <name>"`,
         ...skill,
         `    End your reply with the mirror link above`,
         `      ${dim('•')} ${dim('easy to miss the link mid-message')}`,

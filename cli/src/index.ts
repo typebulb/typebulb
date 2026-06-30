@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'wait') {
-    await runWait(args.file || undefined, { match: args.match, timeoutSec: args.timeoutSec ?? 1800 })
+    await runWait(args.file || undefined, { match: args.match, timeoutSec: args.timeoutSec })
     return
   }
   if (args.subcommand === 'stop') {
