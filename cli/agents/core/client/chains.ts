@@ -7,7 +7,7 @@
 // between two same-named ones breaks the run, so each is its own singleton — exactly what we want when
 // the agent renamed because the bulb changed enough to be a new thing.
 //
-// Pure and DOM-free so it unit-tests in node. See TB-Agent-Mirror-Embed-Iterate.md
+// Pure and DOM-free so it unit-tests in node. See TB-Agent-Mirror-Embed.md, Iteration
 // Invariant 4.
 export function supersededFlags(names: (string | undefined)[]): boolean[] {
   return names.map((name, i) => !!name && names[i + 1] === name)

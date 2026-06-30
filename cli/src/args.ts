@@ -300,8 +300,8 @@ Usage:
                                  'wait <file>': the bulb's own console.log).
                                  Resumes where your last wait/call left off, so
                                  an event that beats the wait still fires it.
-  typebulb stop [file|pid]       Stop a running bulb server (no arg: list this
-                                 project's running servers; a pid/path stops any).
+  typebulb stop [file|pid|agent] Stop a running bulb or mirror (no arg: list this
+                                 project's running servers; a pid/path/agent stops any).
                                  Batch flags: --bulbs (this project's bulbs, the
                                  mirror survives), --agent (this project's mirror),
                                  --global (every bulb + mirror, all projects).

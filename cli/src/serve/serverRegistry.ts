@@ -65,7 +65,7 @@ export function serverLogPath(pid: number): string {
 // ---- wait cursor ----
 // The wake channel is a durable log plus this tool-owned consumer offset, never an attach-time
 // subscription: a `typebulb wait` consumer exists only between agent turns, and a snapshot at attach
-// loses any event that lands in the gap (TB-Agent-Mirror-Embed-Iterate.md). The cursor
+// loses any event that lands in the gap (TB-Wait.md). The cursor
 // records where the agent last touched the server's log — `call` writes it at invocation start,
 // `wait` on exit — and the next `wait` resumes from it, firing immediately on anything missed.
 // Per-server (pid-keyed, so a restart invalidates it for free), shared across sessions, reaped with
@@ -78,7 +78,7 @@ function waitCursorPath(pid: number): string {
 // Consumer offsets for a server's log, one per `wait --match` pattern (the empty key for a bare wait),
 // held as one map in `<pid>.wait.json`. Keying by match is what keeps two subscriptions on one target
 // from burying each other: a single shared offset advanced to EOF by one pattern would strand an
-// earlier line another pattern hadn't matched yet (TB-Agent-Mirror-Embed-Iterate.md).
+// earlier line another pattern hadn't matched yet (TB-Wait.md).
 type WaitCursors = Record<string, number>
 
 function readWaitCursors(pid: number): WaitCursors {

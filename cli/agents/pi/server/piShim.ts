@@ -3,7 +3,7 @@
  *
  * `typebulb wait` is a wake-up primitive: a process that blocks until an event, then exits, so a
  * harness that re-invokes the agent on a background task's exit turns that exit into a wake
- * (TB-Agent-Mirror-Embed-Iterate.md). Claude Code has `run_in_background`; **pi has no background
+ * (TB-Wait.md). Claude Code has `run_in_background`; **pi has no background
  * bash and no way for an external process to re-invoke the agent** (verified against
  * @earendil-works/pi-coding-agent 0.80.2 — usage.md: "intentionally does not include … background
  * bash"). So on pi a foreground `typebulb wait` would block the very turn whose flush the awaited

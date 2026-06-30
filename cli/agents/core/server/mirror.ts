@@ -368,7 +368,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return { cwd: state.cwd, pid: process.pid }
   }
 
-  // The mirror host's embed-status forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7). The client
+  // The mirror host's embed-status forward (TB-Agent-Mirror-Embed.md, Iteration Invariant 7). The client
   // formats the line; we own the idempotency. console.log tees to `<pid>.log` (what `typebulb logs
   // <agent>` reads and `typebulb wait <agent>` wakes on); the dedup lives here, off the shared /__log
   // channel, so a refresh can't pile the line up.

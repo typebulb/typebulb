@@ -4,7 +4,7 @@ import { renderBulb } from '../src/render.js'
 // An embed is client-only, so renderBulb runs the same `typebulb/lint` browser ruleset `typebulb check`
 // uses — patterns that compile but break in the sandboxed iframe (dynamic import, URL/version imports,
 // navigation). A violation becomes a render error, which the mirror surfaces to the user AND forwards to
-// `typebulb logs claude` via the existing compile-error readback (TB-Agent-Mirror-Embed-Iterate.md).
+// `typebulb logs claude` via the existing compile-error readback (TB-Agent-Mirror-Embed.md, Iteration).
 
 const wrap = (code: string) =>
   `---\nformat: typebulb/v1\nname: T\n---\n\n**code.tsx**\n\n\`\`\`tsx\n${code}\n\`\`\`\n`

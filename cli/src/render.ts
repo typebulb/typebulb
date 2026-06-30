@@ -79,7 +79,7 @@ export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark
   // browser ruleset (an embed is client-only). It catches the import-map / sandbox patterns that compile
   // fine but break in an embed (dynamic import, URL/version imports, navigation), turning a silent runtime
   // failure into a precise, fix-named error. Surfaced as a render error so it rides the embed's existing
-  // compile-error → `typebulb logs <agent>` readback path (TB-Agent-Mirror-Embed-Iterate.md).
+  // compile-error → `typebulb logs <agent>` readback path (TB-Agent-Mirror-Embed.md, Iteration).
   //
   // We deliberately do NOT pass `dependencies` here, so the UNDECLARED_IMPORT rule stays dormant for an
   // embed: a model-emitted embed often imports a package its config.json doesn't declare, and the

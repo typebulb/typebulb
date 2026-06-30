@@ -1,5 +1,5 @@
 // Tag-keyed idempotency for the mirror's embed-status forward
-// (TB-Agent-Mirror-Embed-Iterate.md Invariant 7).
+// (TB-Agent-Mirror-Embed.md, Iteration Invariant 7).
 //
 // The forward rides the shared diagnostic *transport* (console → `<pid>.log` → `typebulb logs`/`wait`) but
 // the embed-specific *semantics* — name+version tagging and "don't repeat an unchanged state" — stay with

@@ -38,7 +38,7 @@ export async function runCall(
   // *start* of the invocation, so anything the bulb logs from here on fires the agent's next
   // `typebulb wait` even if it lands before that wait attaches. Start, not end — an event racing
   // the call must wake (spuriously at worst), never be skipped
-  // (TB-Agent-Mirror-Embed-Iterate.md). Best-effort; no server running ⇒ no channel to anchor.
+  // (TB-Wait.md). Best-effort; no server running ⇒ no channel to anchor.
   try {
     const abs = normalizeBulbPath(bulbPath)
     const running = (await listBulbServers()).find(s => normalizeBulbPath(s.file) === abs)

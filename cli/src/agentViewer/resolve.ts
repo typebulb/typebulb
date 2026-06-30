@@ -33,6 +33,18 @@ export function ensureHarnessWaitSupport(): void {
   }
 }
 
+/** The harness the CURRENT process is running under — read from its env marker via each adapter's
+ *  `detectsSelf` (CC `CLAUDECODE`, pi `PI_CODING_AGENT`), or undefined for an unmarked caller (a human
+ *  terminal). This is an agent's OWN identity, so `wait`/`logs agent` can resolve *this* agent's mirror
+ *  deterministically — (caller-harness, cwd) is a unique mirror (Inv. 2) — instead of guessing among the
+ *  mirrors in a cwd when more than one harness runs there (a Claude wait must never watch the pi log). */
+export function detectCallerHarness(): string | undefined {
+  for (const name of Object.keys(AGENT_ADAPTERS)) {
+    try { if (AGENT_ADAPTERS[name]().detectsSelf()) return name } catch {}
+  }
+  return undefined
+}
+
 /** Launch/reuse the `{ name }` mirror, or `{ ambiguous }`: multiple harnesses have sessions and there's
  *  no other signal, so the user must pick (`agent:claude` / `agent:pi`). */
 export type AgentChoice = { name: string } | { ambiguous: string[] }

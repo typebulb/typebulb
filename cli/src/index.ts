@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  // Keep each harness's background-`wait` support in place (TB-Agent-Mirror-Embed-Iterate.md) — for pi,
+  // Keep each harness's background-`wait` support in place (TB-Wait.md) — for pi,
   // a `wait`-intercepting extension written into its config. Through the adapter contract, not a direct
   // agents/ import. Runs on every invocation so the file is present across a session boundary well
   // before any embed/turn wait (closing the activation gap — a just-placed shim isn't active until pi's

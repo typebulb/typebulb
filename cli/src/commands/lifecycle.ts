@@ -1,5 +1,6 @@
 import * as path from 'path'
 import { normalizeBulbPath } from '../serve/paths.js'
+import { detectCallerHarness } from '../agentViewer/resolve.js'
 import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
@@ -18,15 +19,23 @@ import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbSe
  *  registry. A wrong-target `wait`/`logs`/`stop` is worse than a clean miss — the earlier `?? mirrors[0]`
  *  fallback quietly turned "no mirror here" into either a full-timeout `wait` against another project or a
  *  read of its log; no cwd match now ⇒ undefined ⇒ requireServer's fast exit(1), recovering that fail.
- *  The embed-error readback in TB-Agent-Mirror-Embed-Iterate.md depends on hitting *this* project's
+ *  The embed-error readback in TB-Wait.md depends on hitting *this* project's
  *  mirror, not whichever one ranks first. (With no cwd context at all — an unusual call — fall back to the
  *  first mirror, since nothing can be matched.) Else a resolved file path (compared via the registry's
  *  canonical key, so either spelling of the path matches). */
-export function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServer | undefined {
+export function findServer(servers: BulbServer[], arg: string, cwd?: string, callerHarness?: string): BulbServer | undefined {
   if (/^\d+$/.test(arg)) return servers.find(s => s.pid === parseInt(arg, 10))
   const mirrors = arg === 'agent' ? servers.filter(s => s.agent != null) : servers.filter(s => s.agent === arg)
   if (mirrors.length) {
-    return cwd ? mirrors.find(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)) : mirrors[0]
+    if (!cwd) return mirrors[0]
+    const inCwd = mirrors.filter(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd))
+    // The generic `agent` token is disambiguated by the CALLER's OWN harness: a Claude Code process
+    // renders its embeds into the claude mirror, a pi process into the pi mirror, and there is ≤1 mirror
+    // per (harness, cwd) (Inv. 2) — so (caller-harness, cwd) is a unique target and there is nothing to
+    // guess. Without this, two mirrors in one cwd made `agent` resolve to whichever sat first, so a
+    // Claude wait could watch the *pi* log and miss its own render (TB-Wait.md).
+    // Fall back to first-in-cwd only for an unmarked caller (a human) or a harness with no mirror here.
+    return (callerHarness && inCwd.find(s => s.agent === callerHarness)) || inCwd[0]
   }
   return servers.find(s => normalizeBulbPath(s.file) === normalizeBulbPath(arg))
 }
@@ -48,8 +57,8 @@ function listServers(servers: BulbServer[], hint: string): void {
 }
 
 /** Resolve the target server or exit(1) with a helpful list. */
-function requireServer(servers: BulbServer[], arg: string, verb: string, cwd?: string): BulbServer {
-  const server = findServer(servers, arg, cwd)
+function requireServer(servers: BulbServer[], arg: string, verb: string, cwd?: string, callerHarness?: string): BulbServer {
+  const server = findServer(servers, arg, cwd, callerHarness)
   if (server) return server
   console.error(`No running server for '${arg}'.`)
   if (servers.length) { console.error(`Running servers (try \`typebulb ${verb} <file|pid>\`):`); printServerList(servers, l => console.error(l)) }
@@ -72,7 +81,7 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
   }
   // A reserved agent name (`claude`) targets the running mirror by its `agent` field (findServer),
   // preferring this cwd's mirror; a pid or path targets any server globally.
-  const server = requireServer(await listBulbServers(), arg, 'logs', process.cwd())
+  const server = requireServer(await listBulbServers(), arg, 'logs', process.cwd(), detectCallerHarness())
 
   // `--clear`: truncate the log instead of printing it — the agent's "start a clean run" reset, since
   // hot reload never restarts the process to clear it on its own (TB-CLI.md).
@@ -117,7 +126,7 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 /**
  * `typebulb wait <file|pid|agent>` — block until the target server's log grows, print the new line(s),
- * exit. The wake-up half of the agent lifecycle (TB-Agent-Mirror-Embed-Iterate.md): any
+ * exit. The wake-up half of the agent lifecycle (TB-Wait.md): any
  * process that blocks-until-event-then-exits is a signal an agent can subscribe to as a background task,
  * so a bulb's `console.log` on a user action — or the mirror's `[embed …]` status forward — re-invokes the
  * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = timeout (nothing logged —
@@ -133,10 +142,10 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  */
 export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec?: number }): Promise<void> {
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
-  const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
+  const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd(), detectCallerHarness())
 
   // `typebulb wait` is a SUBSCRIBE primitive — block until the next matching line, then exit — not an
-  // await-for-completion, so it carries no domain timeout (TB-Agent-Mirror-Embed-Iterate.md). A wait the
+  // await-for-completion, so it carries no domain timeout (TB-Wait.md). A wait the
   // pi shim backgrounded (TYPEBULB_WAIT_SHIM) can't block a turn, so it's a pure subscription: NO give-up
   // clock at all. It waits for the event however long — an embed's first paint (which only happens once a
   // tab opens on this session, a coffee-break away — a render landing then must NOT be swallowed) or a
@@ -153,7 +162,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
   // the bare-wait / `call` baseline (the empty key). Per-pattern offsets mean one waiter's exit can't
-  // advance past a line another pattern hasn't matched (TB-Agent-Mirror-Embed-Iterate.md). A cursor past
+  // advance past a line another pattern hasn't matched (TB-Wait.md). A cursor past
   // the end (log restarted/trimmed) degrades to the no-cursor default.
   //
   // No-cursor default: a *filtered* first run scans from log start (0), not the attach-time EOF. The
@@ -218,7 +227,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
 export async function runStop(arg: string | undefined): Promise<void> {
   // No arg ⇒ list this project's running servers (cwd-scoped); with an arg, target globally by pid/file.
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb stop <file|pid>` to stop one.'); return }
-  const server = requireServer(await listBulbServers(), arg, 'stop', process.cwd())
+  const server = requireServer(await listBulbServers(), arg, 'stop', process.cwd(), detectCallerHarness())
   await stopBulbServer(server.pid)
   console.log(`Stopped ${serverLabel(server)} (pid ${server.pid}, ${server.url}).`)
 }
@@ -227,8 +236,12 @@ export async function runStop(arg: string | undefined): Promise<void> {
  * `typebulb stop --bulbs|--agent|--global` — batch reaping by category, instead of one file/pid target:
  *  - `bulbs`:  this project's bulbs. The cwd-scoped list already drops mirrors (TB-Agent-Mirror.md Inv. 3),
  *              so the mirror survives — the everyday "clear the scratch, keep watching" reap.
- *  - `agent`:  this project's mirror. It's the entry the cwd-scoped list *hides*, so it's pulled from
- *              the global list and filtered to this cwd's `agent` entry; the bulbs survive.
+ *  - `agent`:  this project's mirror(s). The entry the cwd-scoped list *hides*, so it's pulled from the
+ *              global list and filtered to this cwd. Unlike bulbs — CWD-shared, so `--bulbs` reaps them
+ *              all — mirrors are harness-partitioned (each tails only its own sessions), so this is
+ *              scoped to the CALLER's harness when there is one: an agent never reaps another harness's
+ *              mirror (the isolation `stop agent`/`wait`/`logs` already keep, TB-Wait.md). An unmarked
+ *              human keeps the reap-all housekeeping over every mirror they own here. The bulbs survive.
  *  - `global`: every bulb AND mirror, all projects — the housekeeping verb for the orphan pile detached,
  *              terminal-surviving servers accumulate (Specs/Typebulb-CLI.md "Server lifecycle & the
  *              reap"). Unscoped on purpose: it sees the mirrors and other projects' bulbs the per-
@@ -237,11 +250,16 @@ export async function runStop(arg: string | undefined): Promise<void> {
  */
 export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise<void> {
   const cwd = process.cwd()
+  // For `--agent`, scope to the caller's harness: an agent (env marker) reaps only its own mirror, an
+  // unmarked human reaps all of this project's mirrors. Mirrors are harness-partitioned (see above);
+  // bulbs are not, so `--bulbs`/`--global` need no such scoping.
+  const callerHarness = scope === 'agent' ? detectCallerHarness() : undefined
   const servers =
     scope === 'global' ? await listBulbServers()
     : scope === 'bulbs' ? await listBulbServers(cwd)
     : (await listBulbServers()).filter(s =>
-        s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd))
+        s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd) &&
+        (!callerHarness || s.agent === callerHarness))
   const noun = scope === 'global' ? 'server' : scope === 'agent' ? 'mirror' : 'bulb'
   if (!servers.length) {
     console.log(scope === 'global' ? 'No running bulb servers.' : `No running ${noun}s for this project.`)

@@ -179,7 +179,7 @@ export class MessageList extends Component {
     })
   }
 
-  // Recompute same-name chain state (TB-Agent-Mirror-Embed-Iterate.md): mark superseded
+  // Recompute same-name chain state (TB-Agent-Mirror-Embed.md, Iteration): mark superseded
   // embeds and set each embed's mount state — only a run's live tail (or one the user re-expanded) stays
   // mounted; the rest unmount so they stop taking height and processing. Runs when embeds are added or an
   // expansion toggles, never during render (setMounted has side effects).
@@ -389,7 +389,7 @@ export class MessageList extends Component {
   }
 
   // A live or lone embed renders its app. A superseded one folds to a "<Name> — Version N" stub whose
-  // look never depends on outcome (Specs/…-Embed-Iterate.md): it's always the accent marker, so the title
+  // look never depends on outcome (TB-Agent-Mirror-Embed.md, Iteration): it's always the accent marker, so the title
   // never flips color on expand/collapse. Expanding mounts the old bulb and shows it beneath — its render,
   // or a "could not render" message, with any error in the embed's own red strip; collapsing unmounts it,
   // so re-expanding runs it fresh. Whether that version errored shows only while it's open.

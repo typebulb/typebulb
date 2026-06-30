@@ -80,7 +80,7 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   detectsSelf() { return process.env.PI_CODING_AGENT === 'true' }
 
   // pi has no background bash / external re-invoke, so typebulb ships a `wait`-intercepting extension
-  // into pi's config (TB-Agent-Mirror-Embed-Iterate.md). Placement is gated on pi being present and
+  // into pi's config (TB-Wait.md). Placement is gated on pi being present and
   // never throws. See ./piShim.ts.
   ensureWaitSupport() { ensurePiShim() }
 

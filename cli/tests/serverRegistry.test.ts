@@ -73,7 +73,7 @@ describe('serverRegistry', () => {
     expect(global.map(s => s.agent ?? s.file).sort()).toEqual(['claude', userBulb].sort())
   })
 
-  // The wait cursor (TB-Agent-Mirror-Embed-Iterate.md): the wake channel's consumer
+  // The wait cursor (TB-Wait.md): the wake channel's consumer
   // offset. Round-trips per pid; anything unreadable degrades to undefined (⇒ the caller's no-cursor
   // default: log-start for a filtered wait, EOF snapshot for a bare one), never throws.
   it('wait cursor round-trips per pid and degrades to undefined when absent or invalid', async () => {
@@ -86,7 +86,7 @@ describe('serverRegistry', () => {
     expect(readWaitCursor(DEAD_PID)).toBeUndefined()
   })
 
-  // Per-`--match` keying (TB-Agent-Mirror-Embed-Iterate.md): each pattern is its own consumer group,
+  // Per-`--match` keying (TB-Wait.md): each pattern is its own consumer group,
   // so one waiter's exit can't move another pattern's offset. The empty key is the bare-wait baseline.
   it('wait cursors are keyed per --match and isolated from each other', async () => {
     writeWaitCursor(process.pid, 100, '[embed A')

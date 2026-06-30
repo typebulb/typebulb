@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EmbedStatusDedup } from '../agents/core/server/embedStatusLog.js'
 
 /**
- * The mirror's tag-keyed embed-status forward (TB-Agent-Mirror-Embed-Iterate.md Invariant 7):
+ * The mirror's tag-keyed embed-status forward (TB-Agent-Mirror-Embed.md, Iteration Invariant 7):
  * a refresh re-forwards every embed's identical outcome, so repeats collapse per tag while distinct states
  * still log — including a re-emit's, whose chain version makes its line differ even when the text repeats.
  */

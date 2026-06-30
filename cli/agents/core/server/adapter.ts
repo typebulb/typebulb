@@ -37,7 +37,7 @@ export abstract class AgentAdapter<E = unknown> {
   //    same src→adapter direction detectsSelf uses) ──
   /**
    * Install whatever this harness needs for typebulb's background-`wait` wake loop to work
-   * (TB-Agent-Mirror-Embed-Iterate.md). The default is a no-op — Claude Code's case, since
+   * (TB-Wait.md). The default is a no-op — Claude Code's case, since
    * `run_in_background` is native. Pi overrides it: it has no background bash, so typebulb ships a
    * `wait`-intercepting extension into pi's config. Runs on the CLI hot path, so an override MUST be
    * idempotent, gated (write nothing if the harness isn't present), and never throw.

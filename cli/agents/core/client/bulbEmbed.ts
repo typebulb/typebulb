@@ -10,7 +10,7 @@ import { mdPlain } from './markdown.js'
 //
 // Mounting is host-driven: the embed is a state object holding "do I have a compiled frame", and the
 // host (MessageList) calls setMounted() from the same-name chain so only a run's live tail compiles —
-// superseded versions fold to a stub and unmount (TB-Agent-Mirror-Embed-Iterate.md).
+// superseded versions fold to a stub and unmount (TB-Agent-Mirror-Embed.md, Iteration).
 export class BulbEmbed extends Component {
   spread = false
   showingCode = false
@@ -45,7 +45,7 @@ export class BulbEmbed extends Component {
   // back for its "Version N" label. It's in the forwarded status tag because the dedup compares whole
   // lines: a *re-emit* takes the next version, so its line logs even when the text is identical (same
   // `ok`, same error), while a replay reconstructs the same version and still dedups
-  // (TB-Agent-Mirror-Embed-Iterate.md Invariant 7).
+  // (TB-Agent-Mirror-Embed.md, Iteration Invariant 7).
   setChainPosition(n: number) { this.#chainPos = n }
   get chainPosition() { return this.#chainPos }
 
@@ -102,7 +102,7 @@ export class BulbEmbed extends Component {
   }
 
   // Forward an embed outcome — ok, or an error — to the mirror's own server log, name+version-tagged, so
-  // `typebulb logs agent` reads back exactly what the user sees (Embed-Iterate Invariant 1) and a
+  // `typebulb logs agent` reads back exactly what the user sees (Embed Iteration Invariant 1) and a
   // `typebulb wait agent` watcher wakes on it. Routed through the mirror host's own `logEmbedStatus`
   // (not the shared `tb.server.log`) so the host owns the tag-keyed idempotency that keeps a refresh from
   // piling up the same line (Invariant 7). Diagnostics only — fire-and-forget, drives nothing (Invariant 2).

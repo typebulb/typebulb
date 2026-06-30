@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { supersededFlags, chainPositions } from '../agents/core/client/chains.js'
 
 /**
- * The same-name chain rule (TB-Agent-Mirror-Embed-Iterate.md Invariant 4): a consecutive
+ * The same-name chain rule (TB-Agent-Mirror-Embed.md, Iteration Invariant 4): a consecutive
  * run of same-named embeds folds all but its last; a differently-named or unnamed embed breaks the run.
  */
 describe('supersededFlags', () => {

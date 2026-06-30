@@ -46,7 +46,7 @@ typebulb models                List AI models for tb.ai, filtered by your .env A
 typebulb logs [file|agent]     Print a running bulb's (or `agent` mirror's) captured console (no arg: list running servers; -f follow, -n N tail, --run latest|N for one reload's output, --clear to empty it)
 typebulb wait [file|agent]     Block until the target logs a matching line, print it, exit — an agent's wake-up
                                (run it backgrounded; --match <substr> filters; no timeout to set; exit 2 = gave up)
-typebulb stop [file|pid]       Stop a running bulb (no arg: list this project's running servers)
+typebulb stop [file|pid|agent] Stop a running bulb or mirror (no arg: list this project's running servers)
 typebulb stop --bulbs          Stop this project's bulbs; the agent mirror keeps running
 typebulb stop --agent          Stop this project's agent mirror; its bulbs keep running
 typebulb stop --global         Stop every running bulb and mirror, all projects (housekeeping)

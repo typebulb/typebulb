@@ -70,3 +70,35 @@ describe('findServer — the literal `agent` token', () => {
     expect(findServer(servers, '/proj/app/a.bulb.md', here)?.pid).toBe(51)  // file path
   })
 })
+
+/**
+ * When BOTH a pi and a claude mirror run for the same project (the moment pi support let a cwd have two
+ * mirrors), `agent` must resolve to the CALLER's own harness — a Claude Code wait renders into and must
+ * watch the claude mirror, never the pi one. The pre-fix "first cwd match" picked whichever started
+ * first (the pi mirror), so a Claude `wait agent` watched the pi log and missed its own embed render —
+ * timing out against the wrong target (TB-Wait.md). This is the real-world
+ * `C:\Code\chat` shape: a pi mirror started before a claude one.
+ */
+describe('findServer — `agent` disambiguated by the caller\'s harness', () => {
+  const twoMirrors = [
+    mk({ pid: 32672, agent: 'pi', cwd: here }),       // started first (earlier in the registry)
+    mk({ pid: 38784, agent: 'claude', cwd: here }),   // started later
+  ]
+
+  it('a Claude caller gets the claude mirror, not the older pi one', () => {
+    expect(findServer(twoMirrors, 'agent', here, 'claude')?.pid).toBe(38784)
+  })
+
+  it('a pi caller gets the pi mirror', () => {
+    expect(findServer(twoMirrors, 'agent', here, 'pi')?.pid).toBe(32672)
+  })
+
+  it('an unmarked caller (a human) falls back to first-in-cwd', () => {
+    expect(findServer(twoMirrors, 'agent', here)?.pid).toBe(32672)
+  })
+
+  it('a caller whose harness has no mirror here falls back to the cwd mirror', () => {
+    const onlyPi = [mk({ pid: 70, agent: 'pi', cwd: here })]
+    expect(findServer(onlyPi, 'agent', here, 'claude')?.pid).toBe(70)
+  })
+})

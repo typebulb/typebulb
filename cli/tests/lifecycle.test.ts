@@ -34,6 +34,7 @@ function spawnSleeper(): ChildProcess {
 
 describe('runStopScope — the batch reaps', () => {
   let dir: string
+  let savedClaude: string | undefined, savedPi: string | undefined
   const kids: ChildProcess[] = []
   const here = process.cwd()
   const other = path.resolve(here, '..', 'tb-other-project')
@@ -52,13 +53,27 @@ describe('runStopScope — the batch reaps', () => {
     return { hereView: hereView.pid!, hereBulb: hereBulb.pid!, otherView: otherView.pid!, otherBulb: otherBulb.pid! }
   }
 
+  // A second mirror for THIS project under the OTHER harness (pi) — registerFour's hereView is claude,
+  // so this is the sibling that `--agent` scoping must spare for an agent caller but reap for a human.
+  async function registerPiHere(): Promise<number> {
+    const c = spawnSleeper(); kids.push(c)
+    await registerServer({ pid: c.pid!, port: 0, url: `http://localhost/${c.pid}`, file: 'agent:pi', startedAt: c.pid!, agent: 'pi', cwd: here })
+    return c.pid!
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'tb-reap-'))
     process.env.TYPEBULB_SERVERS_DIR = dir
+    // `--agent` scopes to the caller's harness via env markers; clear both so the base state is an
+    // unmarked human (reap-all), and a test that wants an agent caller sets its marker explicitly.
+    savedClaude = process.env.CLAUDECODE; savedPi = process.env.PI_CODING_AGENT
+    delete process.env.CLAUDECODE; delete process.env.PI_CODING_AGENT
   })
 
   afterEach(async () => {
     delete process.env.TYPEBULB_SERVERS_DIR
+    if (savedClaude === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = savedClaude
+    if (savedPi === undefined) delete process.env.PI_CODING_AGENT; else process.env.PI_CODING_AGENT = savedPi
     for (const k of kids) { try { if (k.pid) process.kill(k.pid) } catch { /* already gone */ } }
     kids.length = 0
     await rm(dir, { recursive: true, force: true })
@@ -80,6 +95,28 @@ describe('runStopScope — the batch reaps', () => {
     log.mockRestore()
     expect(await until(() => !isAlive(p.hereView))).toBe(true)            // this project's mirror died
     expect(isAlive(p.hereBulb) && isAlive(p.otherView) && isAlive(p.otherBulb)).toBe(true) // the rest live
+  })
+
+  it('--agent from an agent caller reaps only its own harness mirror — the sibling harness survives', async () => {
+    const p = await registerFour()
+    const piHere = await registerPiHere()
+    process.env.CLAUDECODE = '1'                                          // the caller is Claude Code
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await runStopScope('agent')
+    log.mockRestore()
+    expect(await until(() => !isAlive(p.hereView))).toBe(true)            // the caller's (claude) mirror died
+    expect(isAlive(piHere)).toBe(true)                                    // the sibling (pi) mirror survives
+    expect(isAlive(p.hereBulb) && isAlive(p.otherView) && isAlive(p.otherBulb)).toBe(true) // bulbs + other project live
+  })
+
+  it('--agent from an unmarked human reaps every mirror in the project', async () => {
+    const p = await registerFour()
+    const piHere = await registerPiHere()                                // beforeEach cleared the markers ⇒ human
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await runStopScope('agent')
+    log.mockRestore()
+    expect(await until(() => !isAlive(p.hereView) && !isAlive(piHere))).toBe(true) // both mirrors died
+    expect(isAlive(p.hereBulb) && isAlive(p.otherView) && isAlive(p.otherBulb)).toBe(true) // bulbs + other project live
   })
 
   it('--global reaps every bulb and mirror across all projects, and empties the registry', async () => {

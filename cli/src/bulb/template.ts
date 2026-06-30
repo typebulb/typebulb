@@ -90,7 +90,7 @@ globalThis.__tbEntryRan = true; /* load-failure backstop — see embedProtocol *
 // listener). A standalone top-level page skips the height machinery but still forwards
 // uncaught errors — to its own ungated /__log, so the one failure a local bulb can't
 // report itself (the error that killed it) lands in the log `typebulb logs`/`wait` read
-// (TB-Agent-Mirror-Embed-Iterate.md, "The local tier"). Never /__log from a
+// (TB-Wait.md, "The local tier"). Never /__log from a
 // frame: an embed's relative URL would resolve against the HOST page's origin — the
 // mirror's log, untagged, bypassing its dedup. Registered as a classic script BEFORE the
 // deferred module so its error listeners catch errors from first eval. Sends content
