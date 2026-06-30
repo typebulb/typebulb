@@ -257,11 +257,12 @@ typebulb - Local bulb runner for Typebulb
 
 Usage:
   typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
-  typebulb agent                 An agent's first command — brings up the agent mirror
-                                 without opening a browser, prints its URL and the
-                                 authoring-skill paths. Always exits 0 (a status report).
-  typebulb agent:claude          Open the agent mirror (a browser view of your project's
-                                 Claude Code sessions; 'agent:<name>' selects which agent).
+  typebulb agent                 An agent's first command — auto-detects the calling
+                                 harness, brings up the agent mirror without opening a
+                                 browser, prints its URL and the authoring-skill paths.
+                                 Always exits 0 (a status report).
+  typebulb agent:{claude|pi}     Open a named harness's mirror in the foreground (a browser
+                                 view of your coding agent's sessions) — explicit / override.
   typebulb skill                 Print this README as an Agent Skill (stdout), for the
                                  agent to read and copy into its own skills folder.
   typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints
@@ -274,7 +275,7 @@ Usage:
                                  (fs / AI / server.ts) without running it.
   typebulb models                List AI models for tb.ai, filtered by the API
                                  keys in your .env (the exact ids to pass).
-  typebulb logs [file|pid]       Print a running bulb server's captured console
+  typebulb logs [file|agent]     Print a running bulb server's (or the 'agent' mirror's) console
                                  (no arg: list this project's running servers;
                                  --run latest|N shows just one hot-reload run;
                                  --clear empties it). For agents: fetch
@@ -286,10 +287,10 @@ Usage:
                                  work on demand (msg is JSON-or-string; omit it
                                  for a bare trigger). Needs no --trust. Add
                                  --wait to ride through a hot-reload reconnect.
-  typebulb wait [file|pid]       Block until the target server logs a new line,
+  typebulb wait [file|agent]     Block until the target server logs a new line,
                                  print it, exit (2: timeout; 3: server died).
                                  For agents: run it in the background — the exit
-                                 is your wake-up ('wait claude': embed outcomes;
+                                 is your wake-up ('wait agent': embed outcomes;
                                  'wait <file>': the bulb's own console.log).
                                  Resumes where your last wait/call left off, so
                                  an event that beats the wait still fires it.

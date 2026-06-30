@@ -102,8 +102,8 @@ export class BulbEmbed extends Component {
   }
 
   // Forward an embed outcome — ok, or an error — to the mirror's own server log, name+version-tagged, so
-  // `typebulb logs claude` reads back exactly what the user sees (Embed-Iterate Invariant 1) and a
-  // `typebulb wait claude` watcher wakes on it. Routed through the mirror host's own `logEmbedStatus`
+  // `typebulb logs agent` reads back exactly what the user sees (Embed-Iterate Invariant 1) and a
+  // `typebulb wait agent` watcher wakes on it. Routed through the mirror host's own `logEmbedStatus`
   // (not the shared `tb.server.log`) so the host owns the tag-keyed idempotency that keeps a refresh from
   // piling up the same line (Invariant 7). Diagnostics only — fire-and-forget, drives nothing (Invariant 2).
   // `ok` fires from createBulbFrame's onReady (first paint, never after an error); the host-side guards

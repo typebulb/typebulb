@@ -7,19 +7,22 @@ import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbSe
 // (`typebulb <file>`), read its console (`logs`), and `stop` it — no registry-spelunking, the user
 // just watching alongside.
 
-/** Resolve a `[file|pid]` arg to a running server: all-digits ⇒ pid; a reserved agent name
- *  (`claude`) ⇒ that mirror, preferring the one whose cwd is the current project, so `logs claude`
- *  reads the mirror for the project you're in rather than another project's mirror that happens to sit
- *  earlier in the cross-project registry (the embed-error readback in
- *  TB-Agent-Mirror-Embed-Iterate.md depends on hitting *this* project's mirror). `stop`
- *  addresses the mirror with `--agent` instead (one mirror per project, so no name is needed); else a
- *  resolved file path (compared via the registry's canonical key, so either spelling of the path matches). */
-function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServer | undefined {
+/** Resolve a `[file|pid|agent]` arg to a running server: all-digits ⇒ pid; the literal token `agent`
+ *  ⇒ this project's mirror, whichever harness — harness-agnostic, the same token bare `typebulb agent`
+ *  and `stop --agent` use (one mirror per project, TB-Agent-Mirror.md Inv. 2). An agent that launched
+ *  via auto-detect never learned whether it's `claude` or `pi`, so `wait agent` / `logs agent` must work
+ *  without the harness name — and the `[file|agent]` usage placeholder reads as exactly this literal
+ *  (Kimi 2.7 typed `wait agent` verbatim and it used to fail). A specific harness name (`claude`/`pi`)
+ *  still resolves its own mirror. Either way, prefer the mirror whose cwd is the current project, so the
+ *  read hits *this* project's mirror rather than another's that sits earlier in the cross-project
+ *  registry (the embed-error readback in TB-Agent-Mirror-Embed-Iterate.md depends on it). Else a resolved
+ *  file path (compared via the registry's canonical key, so either spelling of the path matches). */
+export function findServer(servers: BulbServer[], arg: string, cwd?: string): BulbServer | undefined {
   if (/^\d+$/.test(arg)) return servers.find(s => s.pid === parseInt(arg, 10))
-  const byAgent = servers.filter(s => s.agent === arg)
-  if (byAgent.length) {
-    const here = cwd ? byAgent.find(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)) : undefined
-    return here ?? byAgent[0]
+  const mirrors = arg === 'agent' ? servers.filter(s => s.agent != null) : servers.filter(s => s.agent === arg)
+  if (mirrors.length) {
+    const here = cwd ? mirrors.find(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)) : undefined
+    return here ?? mirrors[0]
   }
   return servers.find(s => normalizeBulbPath(s.file) === normalizeBulbPath(arg))
 }

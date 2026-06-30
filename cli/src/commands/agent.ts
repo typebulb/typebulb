@@ -5,10 +5,13 @@ import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
 /**
  * `typebulb agent` (no `:target`) — the first command an agent runs. It prints (TB-Skill.md) a status
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
- * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged directive to read the authoring
- * skill before writing a bulb (delivery details in the `skill` block below). It launches rather than
- * instructs because the user's kickoff sentence pre-approves exactly one command: stdout answering
- * "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
+ * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the embed-vs-local rule
+ * (the one decision agents most often get wrong — a weak model that under-reads the skill plans a
+ * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix) plus a
+ * directive to read the authoring skill before writing a bulb (delivery in the `skill` block below).
+ * Both kept to short lines — agents often run in narrow panes, where a long line garbles. It launches
+ * rather than instructs because the user's kickoff sentence pre-approves exactly one command: stdout
+ * answering "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
  * command that approval never covered. It always exits 0: this is a status report, and even a launch
  * that failed is reported (with the manual command), never signalled as an error exit.
  *
@@ -57,8 +60,10 @@ export async function runAgent(version: string): Promise<void> {
     ? [
         `  Agent mirror is live`,
         `    ${green('●')} ${link(viewer.url)}`,
-        `      ${dim('Embedded bulbs in CC sessions render live here.')}`,
+        `      ${dim('Embedded bulbs render live here.')}`,
         `  Agents:`,
+        `    Show something inline → embed a bulb`,
+        `    Reusable app/tool → write a .bulb.md`,
         ...skill,
         `    End your reply with the mirror link above`,
         `      ${dim('•')} ${dim('easy to miss the link mid-message')}`,
