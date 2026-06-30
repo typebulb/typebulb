@@ -319,8 +319,8 @@ Options:
   -n, --lines <n>             Print only the last n lines (logs)
   --match <substring>         Only lines containing this literal substring end
                               the wait — not a regex (wait)
-  --timeout <sec>             Give up waiting after this long; exit 2 (wait;
-                              bulb default 1800, mirror/embed capped at 30)
+  --timeout <sec>             Give up after this long; exit 2 — bounds only a
+                              manual (foreground) bulb wait, default 1800 (wait)
   --wait[=ms]                 For 'send': if no page is connected yet (e.g. the
                               page is mid hot-reload), retry the push for up to
                               ms (default 5000) before reporting. Use it right

@@ -177,11 +177,14 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
   let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
   const deadline = Date.now() + timeoutSec * 1000
-  // After the first match, linger so a burst lands in one wake. An embed's `ok` can be chased by a
-  // runtime error trailing first paint, so a mirror wait lingers 10s (the window that error can land in);
-  // a bulb event (a move, an approval) is a single line, so 1s.
+  // After the first match, linger so a burst lands in one wake. An embed's `ok`/`malformed` can be chased
+  // by a runtime error trailing first paint, so a mirror wait lingers 10s (the window that error can land
+  // in) — unless the matched line is itself an error, which short-circuits the linger (below): an error is
+  // the decisive verdict with nothing better behind it, and the slow load the 10s protects is only worth
+  // waiting out for a still-working bulb. A bulb event (a move, an approval) is a single line, so 1s.
   const SETTLE_MS = isMirror ? 10_000 : 1000
   let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
+  let definiteFailure = false                          // a mirror error line is decisive — skip the trailing-error settle
   let pending = ''                                     // trailing partial line, completed by a later poll
 
   let exitCode = 0
@@ -197,9 +200,18 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
         if (opts.match && !line.includes(opts.match)) continue
         console.log(line)
         settleUntil ??= Date.now() + SETTLE_MS
+        // Failure is decisive; success never is (we learn when a bulb is broken, never that it's done —
+        // an embed runs an open-ended event loop). The settle exists to catch a runtime error trailing
+        // `ok`/`malformed`, both of which fire at first paint — but a matched `compile error`/`runtime
+        // error` IS that error, with nothing better behind it (an embed's `ok` only forwards when no error
+        // was captured, and an error is the log's last word). So wake on it now: the urgency case is the
+        // broken bulb. Anchored on the `]`-delimited verdict so a name/message can't false-positive; a
+        // false hit only wakes a working bulb ~10s early, which is harmless. Mirror-only — a turn-based
+        // bulb's event log has no such verdict grammar.
+        if (isMirror && (line.includes('] compile error') || line.includes('] runtime error'))) definiteFailure = true
       }
     }
-    if (settleUntil && Date.now() >= settleUntil) break
+    if (definiteFailure || (settleUntil && Date.now() >= settleUntil)) break
     if (!noDeadline && !settleUntil && Date.now() >= deadline) {
       console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${timeoutSec}s`)
       exitCode = 2
