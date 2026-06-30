@@ -5,6 +5,7 @@ import { capText, dataUriImage } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
+import { ensurePiShim } from './piShim.js'
 
 // The pi realization of the AgentAdapter contract (TB-Harness.md). pi stores a conversation as the same
 // kind of parent-linked JSONL tree Claude Code does — so the neutral engine (../../server/mirror.ts)
@@ -77,6 +78,11 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   // pi sets PI_CODING_AGENT="true" unconditionally at its CLI entrypoint (dist/cli.js), so every
   // subprocess it spawns inherits it. pi does NOT set the cross-tool AI_AGENT var — this marker only.
   detectsSelf() { return process.env.PI_CODING_AGENT === 'true' }
+
+  // pi has no background bash / external re-invoke, so typebulb ships a `wait`-intercepting extension
+  // into pi's config (TB-Agent-Mirror-Embed-Iterate.md). Placement is gated on pi being present and
+  // never throws. See ./piShim.ts.
+  ensureWaitSupport() { ensurePiShim() }
 
   sessionsDir(cwd: string) { return join(PI_SESSIONS, piDirName(cwd)) }
 

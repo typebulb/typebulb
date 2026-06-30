@@ -34,6 +34,7 @@ import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
 import { findProjectViewer } from './serve/serverRegistry.js'
+import { ensureHarnessWaitSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
 import { runConsole } from './run/console.js'
@@ -69,6 +70,14 @@ async function main(): Promise<void> {
     printHelp()
     process.exit(0)
   }
+
+  // Keep each harness's background-`wait` support in place (TB-Agent-Mirror-Embed-Iterate.md) — for pi,
+  // a `wait`-intercepting extension written into its config. Through the adapter contract, not a direct
+  // agents/ import. Runs on every invocation so the file is present across a session boundary well
+  // before any embed/turn wait (closing the activation gap — a just-placed shim isn't active until pi's
+  // next session start). Gated on the harness being present (Claude-Code-only users get nothing
+  // written) and never throws — at worst two stats on the hot path.
+  ensureHarnessWaitSupport()
 
   // Lifecycle / policy commands don't need a resolved (existing) bulb file — dispatch before file
   // resolution. (`trust` can pre-trust a path that doesn't exist yet; `logs`/`stop` query the registry.)

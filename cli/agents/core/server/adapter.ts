@@ -33,6 +33,17 @@ export abstract class AgentAdapter<E = unknown> {
    */
   abstract detectsSelf(): boolean
 
+  // ── CLI-side harness integration (called from agentViewer/resolve.ts, not the mirror engine — the
+  //    same src→adapter direction detectsSelf uses) ──
+  /**
+   * Install whatever this harness needs for typebulb's background-`wait` wake loop to work
+   * (TB-Agent-Mirror-Embed-Iterate.md). The default is a no-op — Claude Code's case, since
+   * `run_in_background` is native. Pi overrides it: it has no background bash, so typebulb ships a
+   * `wait`-intercepting extension into pi's config. Runs on the CLI hot path, so an override MUST be
+   * idempotent, gated (write nothing if the harness isn't present), and never throw.
+   */
+  ensureWaitSupport(): void {}
+
   // ── discovery: where this agent stores the mirrored project's transcripts ──
   /** The directory holding `cwd`'s session files (e.g. `~/.claude/projects/<sanitized>/`). */
   abstract sessionsDir(cwd: string): string

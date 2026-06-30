@@ -10,7 +10,7 @@ import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
  * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted embed (a *backgrounded* `wait` — the
  * render lands only on turn-end, so a foreground or pre-emit wait would deadlock; backgrounding fixes
  * both halves), and a directive to read the authoring skill before writing a bulb (delivery in `skill`
- * below). Every line is ≤53 chars — agents often run in narrow panes, where a longer line garbles. It launches
+ * below). Every line is ≤57 chars — agents often run in narrow panes, where a longer line garbles. It launches
  * rather than instructs because the user's kickoff sentence pre-approves exactly one command: stdout
  * answering "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
  * command that approval never covered. It always exits 0: this is a status report, and even a launch
@@ -33,53 +33,51 @@ export async function runAgent(version: string): Promise<void> {
     failed = e instanceof Error ? e.message : String(e)
   }
 
-  // Minimal ANSI, applied only when stdout is a real terminal. When the agent harness captures stdout
-  // (piped, not a TTY) the text stays clean for the model to read — so color is purely the human's
-  // terminal nicety, never noise in the tool result.
+  // ANSI only when stdout is a real terminal — piped output (what the agent reads) stays clean. `lit`
+  // (a bright "bulb-on" green) marks the actionable artifacts — what you *do*: the URL to click, the
+  // commands to run, the file paths to open. Prose, headings, and decoration stay plain, so the eye
+  // lands on the do-able tokens. No `dim` tier: lighting what's actionable is enough; dimming the rest
+  // only bought per-line guesswork. Only the URL adds underline — it's the one genuine link/click.
   const tty = process.stdout.isTTY === true
   const sgr = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s)
-  // One emphasis per screen: bold marks the actionable target — the URL to click (live) or the command
-  // to run (failed). The headline is just orientation, so it stays regular. `link` is the URL: bold on
-  // top of underlined cyan, so the click target is the one thing the eye lands on.
-  const bold = sgr('1'), dim = sgr('2'), green = sgr('32'), yellow = sgr('33'), link = sgr('1;4;36')
+  const lit = sgr('1;92'), litLink = sgr('1;4;92')   // bold bright green; the link adds underline
+  const brand = sgr('38;5;135')                      // brand-color tint (purple) for the version banner
 
-  // Read-the-skill directive, shared by both the live and failed cases (an agent can author a bulb
-  // either way; only the mirror link is conditional on a live mirror). The direct file paths are
-  // ESSENTIAL, not a nicety: the agent reads them with its (ungated) Read tool, whereas `npx typebulb
-  // skill` is a Bash command the host's permission classifier can gate or prompt on. Do NOT drop the
-  // paths to avoid their deployed npm-cache length — the wrap is cosmetic only (the agent gets each
-  // path as one clean line over non-TTY stdout); losing the no-prompt read route is a real regression.
+  // Read-the-skill directive, shared by both cases. The direct file paths are ESSENTIAL: the agent reads
+  // them with its (ungated) Read tool, whereas `npx typebulb skill` is a Bash command the host's
+  // permission classifier can gate. They're read by the agent, not clicked by a human, so they stay
+  // plain — but don't drop them to save their npm-cache length; losing the no-prompt read route regresses.
   const skill = [
     `    Read the authoring skill before writing a bulb:`,
-    `      ${dim('•')} npx typebulb skill ${dim('— assembles one SKILL.md')}`,
-    `      ${dim('•')} or, open its parts:`,
-    `          ${dim(bundledDescriptionPath())}`,
-    `          ${dim(bundledReadmePath())}`,
+    `      • ${lit('npx typebulb skill')} — assembles one SKILL.md`,
+    `      • or, open its parts:`,
+    `          ${lit(bundledDescriptionPath())}`,
+    `          ${lit(bundledReadmePath())}`,
   ]
 
   const body = viewer
     ? [
         `  Agent mirror is live`,
-        `    ${green('●')} ${link(viewer.url)}`,
-        `      ${dim('Embedded bulbs render live here.')}`,
+        `    ${lit('●')} ${litLink(viewer.url)}`,
+        `      Embedded bulbs render live here.`,
         `  Agents:`,
-        `    Reusable app/tool → write a .bulb.md`,
+        `    Reusable app/tool → write a ${lit('.bulb.md')}`,
         `    Show something inline → embed a bulb`,
-        `      ${dim('•')} ${dim('after emitting, background a wait:')}`,
-        `      ${dim('•')} typebulb wait agent --match "[embed <name>"`,
+        `      after emitting the bulb, background a wait:`,
+        `      • ${lit('typebulb wait agent --match "[embed <name>"')}`,
         ...skill,
         `    End your reply with the mirror link above`,
-        `      ${dim('•')} ${dim('easy to miss the link mid-message')}`,
+        `      • easy to miss the link mid-message`,
       ]
     : [
-        `  The mirror did not start ${dim(`(${failed})`)}`,
-        `    ${yellow('●')} Start it manually: ${bold(`npx typebulb agent:${name}`)}`,
+        `  The mirror did not start (${failed})`,
+        `    ● Start it manually: ${lit(`npx typebulb agent:${name}`)}`,
         `  Agents:`,
         ...skill,
       ]
-  // A quiet version banner heads the agent's entry-point command: `npx` may serve a cached build, so
-  // it disambiguates which typebulb is actually running (TB-CLI build hygiene).
-  const lines = [`  ${dim(`typebulb v${version}`)}`, ...body, '']
+  // A quiet version banner heads the entry-point command: npx may serve a cached build, so it
+  // disambiguates which typebulb is actually running (TB-CLI build hygiene).
+  const lines = [`  ${brand(`typebulb v${version}`)}`, ...body, '']
   process.stdout.write(lines.join('\n') + '\n')
 }
 
@@ -92,12 +90,12 @@ export async function runAgent(version: string): Promise<void> {
 function printAmbiguous(version: string, names: string[]): void {
   const tty = process.stdout.isTTY === true
   const sgr = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s)
-  const dim = sgr('2'), bold = sgr('1')
+  const lit = sgr('1;92'), brand = sgr('38;5;135')
   const lines = [
-    `  ${dim(`typebulb v${version}`)}`,
+    `  ${brand(`typebulb v${version}`)}`,
     `  This project has sessions for more than one agent harness.`,
     `    Open the mirror for the one you want:`,
-    ...names.map(n => `      ${dim('•')} ${bold(`npx typebulb agent:${n}`)}`),
+    ...names.map(n => `      • ${lit(`npx typebulb agent:${n}`)}`),
     '',
   ]
   process.stdout.write(lines.join('\n') + '\n')

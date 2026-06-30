@@ -20,6 +20,19 @@ const AGENT_ADAPTERS: Record<string, () => AgentAdapter> = {
   pi: () => new PiAdapter(),
 }
 
+/**
+ * Install every harness's CLI-side `wait`-support through the adapter contract (pi's background-wait
+ * shim; harnesses that need none inherit the no-op default). Called on every CLI invocation — the
+ * adapter guarantees each call is idempotent, gated, and non-throwing; the extra try/catch guards
+ * construction. This is the ONLY way the CLI reaches harness `wait` behaviour — through `AgentAdapter`,
+ * never a direct `agents/<name>` import (the boundary the adapter exists to manage, like `detectsSelf`).
+ */
+export function ensureHarnessWaitSupport(): void {
+  for (const make of Object.values(AGENT_ADAPTERS)) {
+    try { make().ensureWaitSupport() } catch {}
+  }
+}
+
 /** Launch/reuse the `{ name }` mirror, or `{ ambiguous }`: multiple harnesses have sessions and there's
  *  no other signal, so the user must pick (`agent:claude` / `agent:pi`). */
 export type AgentChoice = { name: string } | { ambiguous: string[] }

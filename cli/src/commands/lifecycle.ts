@@ -135,17 +135,21 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd())
 
-  // The timeout is target-aware. A *mirror* wait is the embed wake (TB-Agent-Mirror-Embed-Iterate.md):
-  // an embed renders in seconds when a tab is watching, and a timeout just means "nobody's looking" —
-  // benign, the agent moves on and the user can ignore the embed. So it defaults to 30s and is *hard-
-  // capped* there even if a caller asks for more: a longer embed wait only ever buys a longer hang (the
-  // 120s GLM deadlock was a foreground misuse a cap bounds to 30s). A *bulb* (file/pid) wait can ride a
-  // human-in-the-loop loop — a turn-based move, an approval — so it keeps the patient 1800s default,
-  // uncapped. An explicit --timeout tunes a bulb wait freely; for a mirror it can only shorten.
-  const MIRROR_CAP_SEC = 30
-  const timeoutSec = server.agent != null
-    ? Math.min(opts.timeoutSec ?? MIRROR_CAP_SEC, MIRROR_CAP_SEC)
-    : (opts.timeoutSec ?? 1800)
+  // `typebulb wait` is a SUBSCRIBE primitive — block until the next matching line, then exit — not an
+  // await-for-completion, so it carries no domain timeout (TB-Agent-Mirror-Embed-Iterate.md). A wait the
+  // pi shim backgrounded (TYPEBULB_WAIT_SHIM) can't block a turn, so it's a pure subscription: NO give-up
+  // clock at all. It waits for the event however long — an embed's first paint (which only happens once a
+  // tab opens on this session, a coffee-break away — a render landing then must NOT be swallowed) or a
+  // running bulb's next `[chess]`-style line — bounded only by the shim's session reap and the mirror-
+  // died exit below. Embed and turn-based bulb loop are the same shape here: both subscriptions, neither
+  // "completes". The lone surviving timeout is the give-up cap on a *non-backgrounded* wait — purely the
+  // foreground-deadlock guard for a harness that can't background (CC, indistinguishable from a misuse
+  // here): a foreground wait blocks the turn whose flush the line depends on, and the cap breaks it. The
+  // caller never sets it (model `--timeout` is moot under the shim, and a fixed default otherwise).
+  const isMirror = server.agent != null
+  const shimBackgrounded = process.env.TYPEBULB_WAIT_SHIM === '1'
+  const noDeadline = shimBackgrounded            // a shim-backgrounded wait is a non-blocking subscription
+  const timeoutSec = isMirror ? 30 : (opts.timeoutSec ?? 1800)   // give-up cap, used only when !noDeadline
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
   // the bare-wait / `call` baseline (the empty key). Per-pattern offsets mean one waiter's exit can't
@@ -164,9 +168,10 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
   let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
   const deadline = Date.now() + timeoutSec * 1000
-  // After the first match, linger briefly so a burst — an `ok` chased by an immediate runtime error,
-  // several embeds from one turn — lands in one wake instead of one wake per line.
-  const SETTLE_MS = 1000
+  // After the first match, linger so a burst lands in one wake. An embed's `ok` can be chased by a
+  // runtime error trailing first paint, so a mirror wait lingers 10s (the window that error can land in);
+  // a bulb event (a move, an approval) is a single line, so 1s.
+  const SETTLE_MS = isMirror ? 10_000 : 1000
   let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
   let pending = ''                                     // trailing partial line, completed by a later poll
 
@@ -186,7 +191,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
       }
     }
     if (settleUntil && Date.now() >= settleUntil) break
-    if (!settleUntil && Date.now() >= deadline) {
+    if (!noDeadline && !settleUntil && Date.now() >= deadline) {
       console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${timeoutSec}s`)
       exitCode = 2
       break
