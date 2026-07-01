@@ -72,7 +72,7 @@ export type OpenRouterRequestPayload = {
   model: string
   messages: ChatMessageDto[]
   stream: boolean
-  reasoning?: { effort: 'low' | 'medium' | 'high' }
+  reasoning?: { effort: 'none' | 'low' | 'medium' | 'high' }
   plugins?: OpenRouterWebPlugin[]
 }
 
@@ -87,7 +87,10 @@ export class OpenRouterProvider extends AIProvider {
   readonly defaultBaseUrl = 'https://openrouter.ai'
   readonly path: string = '/api/v1/chat/completions'
 
-  private readonly effortMap: Record<EffortLevel, 'low' | 'medium' | 'high'> = {
+  // 0 → `none` (reasoning off): OpenRouter normalizes this across providers, and it's the robust floor
+  // (its `minimal` isn't supported by every underlying model, e.g. gpt-5.4-mini).
+  private readonly effortMap: Record<EffortLevel, 'none' | 'low' | 'medium' | 'high'> = {
+    0: 'none',
     1: 'low',
     2: 'medium',
     3: 'high'

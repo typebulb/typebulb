@@ -88,6 +88,10 @@ export async function stopBreakout(pid: number) {
 // list by its `agent` field, not here. The host only overlays each bulb's remembered trust tier.
 export async function listBulbFiles() {
   return listProjectBulbFiles(projectCwd)
+    // Headless (server-only) bulbs run in console mode with no port, so the launcher's dev-server
+    // model — play → `:port` link, stop — can't represent them (a play click spawns a process that
+    // never registers). They stay a terminal feature (`typebulb <file>` / `call`), not a launcher row.
+    .filter(f => !f.serverOnly)
     .map(f => ({ ...f, trusted: isBulbTrusted(f.path) }))
 }
 
@@ -100,7 +104,9 @@ export async function listBulbFiles() {
 export async function searchBulbs(query: string) {
   const q = query.toLowerCase()
   const out: { path: string; hitCount: number; snippet: string }[] = []
-  for (const f of listProjectBulbFiles(projectCwd).sort((a, b) => b.mtime - a.mtime)) {
+  // Same headless filter as listBulbFiles — a search hit on a server-only bulb would surface an
+  // equally unlaunchable row.
+  for (const f of listProjectBulbFiles(projectCwd).filter(f => !f.serverOnly).sort((a, b) => b.mtime - a.mtime)) {
     let raw = ''
     try { raw = readFileSync(f.path, 'utf8') } catch { continue }
     const chunks: SearchTurn[] = []

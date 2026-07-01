@@ -21,6 +21,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { parseArgs, printHelp } from './args.js'
 import { findBulbFile, readBulb } from './pipeline.js'
+import { isServerOnly } from './bulb/bulbParser.js'
 import { resolveLocalOverride, type ResolvedLocalOverride } from './localOverride.js'
 import { isBulbTrusted } from './serve/trustStore.js'
 import { openBrowser } from './serve/browser.js'
@@ -262,7 +263,7 @@ async function main(): Promise<void> {
   // Server mode (--server flag, or a server.ts-only bulb): run server.ts directly in Node. A
   // malformed bulb leaves bulbInfo undefined and falls through to web mode, where the real parse
   // error surfaces.
-  if (bulbInfo && bulbInfo.bulb.server && (!bulbInfo.bulb.code || args.server)) {
+  if (bulbInfo && bulbInfo.bulb.server && (isServerOnly(bulbInfo.bulb) || args.server)) {
     requireServerTrust(args.trust, trustHint)
     await runConsole(bulbPath, args.watch, args.mode, local, serverCacheDir)
     return

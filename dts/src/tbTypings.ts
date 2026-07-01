@@ -37,8 +37,8 @@ const insight = `
 const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
-    /** Extended-thinking effort hint (1=low, 2=med, 3=high). Mapped to each provider's native mechanism (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Omit for the model's native default; use a non-reasoning model to avoid thinking entirely. */
-    effort?: 1 | 2 | 3;
+    /** Reasoning effort hint: 0=minimal, 1=low, 2=med, 3=high. Mapped to each provider's native mechanism (OpenAI/OpenRouter reasoning effort, Gemini thinking budget, Anthropic adaptive thinking). 0 minimizes reasoning — a floor, not a guaranteed "off": some models still think a little at 0, and adaptive models already self-skip at 1 (low). Level 1 (low) is the sensible default for most work; reach for 0 only when you truly want minimal deliberation. Omit for the model's own default. */
+    effort?: 0 | 1 | 2 | 3;
     provider?: string;
     model?: string;
     /** Enable/disable web search. Default: on for BYOK, always off for free model. */
@@ -139,16 +139,6 @@ const fs = `
     readBytes(path: string): Promise<Uint8Array>;
     /** Write text or raw bytes to a file. Creates parent directories if needed. */
     write(path: string, content: string | Uint8Array): Promise<boolean>;
-  };`
-
-const serverLogOnly = `
-  /**
-   * Server-side function proxy. The built-in \`log\` prints to CLI stdout
-   * (falls back to console.log on web). On the server side, this object only
-   * exposes \`log\` — server-to-server calls are not supported.
-   */
-  server: {
-    log(...args: any[]): Promise<void>;
   };`
 
 const clientOnlyMembers = `
@@ -261,12 +251,14 @@ declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerPro
 };
 `
 
-/** Typebulb globals available in Node-side code (server.ts). */
+/** Typebulb globals available in Node-side code (server.ts).
+ *  The AI subset only — server.ts is otherwise plain Node (its own `fs`, `console.log`), so the
+ *  browser-only `tb` helpers are intentionally absent here and must match serverTb.ts's runtime surface. */
 export const serverTbTypings = `${aiChunkType}
 /**
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${dataAndJson}${insight}${ai}${fs}${serverLogOnly}${models}${mode}
+declare const tb: {${ai}${models}${mode}
 };
 `

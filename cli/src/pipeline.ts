@@ -8,6 +8,7 @@ import { packageService } from './deps/resolver.js'
 import { renderHtml } from './bulb/template.js'
 import { ensureBulbServerPackages, extractServerImports } from './serve/serverDeps.js'
 import { rewriteServerOverrideImports, type ResolvedLocalOverride } from './localOverride.js'
+import { installServerTb } from './serve/serverTb.js'
 
 export async function findBulbFile(dir: string): Promise<string | null> {
   const files = await fs.readdir(dir)
@@ -53,6 +54,11 @@ export async function importServerModule(serverSource: string, basePath: string,
 
   const serverPath = path.join(cacheDir, 'server.mjs')
   await fs.writeFile(serverPath, code, 'utf-8')
+
+  // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models) before it runs — its free `tb`
+  // reference resolves to this, the same way the browser shim provides one. Must precede the import
+  // (server.ts top-level code runs on import). Only reached under trust (this import is trust-gated).
+  installServerTb()
 
   // Cache-bust with query param so re-imports pick up changes
   const fileUrl = `${pathToFileURL(serverPath).href}?t=${Date.now()}`

@@ -9,11 +9,11 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
-import type { ProviderProtocol, ResolvedAIProvider } from 'typebulb/ai'
-import { sendAIRequest, getProvider, normalizeUpstreamError, consumeStreamText, streamAiChunks, ProviderStreamError } from 'typebulb/ai'
+import { normalizeUpstreamError, consumeStreamText, streamAiChunks, ProviderStreamError } from 'typebulb/ai'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
-import { PROVIDER_ENV_KEYS, getFilteredModels, normalizeOllamaHost } from './modelCatalog.js'
+import { getFilteredModels } from './modelCatalog.js'
+import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
@@ -282,18 +282,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         return c.json({ message: resolved, code: 'unknown', retryable: false }, 400)
       }
 
-      // AiMessage → ChatMessageDto: prepend system as system message
-      const chatMessages = [
-        ...(system ? [{ role: 'system' as const, content: system }] : []),
-        ...messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
-      ]
-
-      const response = await sendAIRequest(resolved, {
-        model: resolved.model,
-        messages: chatMessages,
-        stream: true,
-        effort: (effort && effort > 0 ? effort : undefined) as 1 | 2 | 3 | undefined,
-        webSearch: webSearch ?? true
+      const response = await sendTbAi(resolved, {
+        messages: messages as Array<{ role: 'user' | 'assistant'; content: string }>,
+        system,
+        effort,
+        webSearch,
       })
 
       if (!response.ok) {
@@ -447,48 +440,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     port,
     close: () => server.close(),
   }
-}
-
-/**
- * Resolve provider and model for a tb.ai() call.
- *
- * Both provider and model must be specified — either via env vars
- * (TB_AI_PROVIDER, TB_AI_MODEL) or per-call overrides.
- */
-function resolveLocalProvider(reqProvider?: string, reqModel?: string): ResolvedAIProvider | string {
-  const protocol = reqProvider as ProviderProtocol | undefined
-    ?? process.env.TB_AI_PROVIDER as ProviderProtocol | undefined
-  const model = reqModel ?? process.env.TB_AI_MODEL
-
-  if (!protocol) return 'No provider specified. Set TB_AI_PROVIDER in your .env file or pass provider in the tb.ai() call.'
-  if (!model) return 'No model specified. Set TB_AI_MODEL in your .env file or pass model in the tb.ai() call.'
-
-  let spec
-  try { spec = getProvider(protocol) } catch { return `Unknown provider '${protocol}'.` }
-
-  // OpenAI-compatible local / self-hosted endpoints. Both append `/chat/completions` onto a base
-  // that ends in `/v1` (see OllamaProvider). `ollama` is the zero-config preset: keyless, origin
-  // from OLLAMA_HOST (Ollama's own env var, scheme optional) defaulting to localhost:11434; the
-  // `/v1` is supplied here so the provider path stays the bare operation.
-  if (protocol === 'ollama') {
-    const baseUrl = `${normalizeOllamaHost(process.env.OLLAMA_HOST ?? spec.defaultBaseUrl)}/v1`
-    return { apiKey: '', baseUrl, protocol, model, isFreeModel: false }
-  }
-  // `openai-compat` is the generic form for any OpenAI-compatible endpoint (LM Studio, vLLM, a
-  // self-hosted box, a keyed proxy): TB_AI_BASE_URL is the OpenAI-style base ending in `/v1`
-  // (paste-compatible with what these vendors document), used verbatim; the key is optional.
-  if (protocol === 'openai-compat') {
-    const baseUrl = process.env.TB_AI_BASE_URL
-    if (!baseUrl) return 'No base URL for openai-compat. Set TB_AI_BASE_URL (the OpenAI-style base ending in /v1, e.g. http://localhost:1234/v1) in your .env file.'
-    return { apiKey: process.env.TB_AI_API_KEY ?? '', baseUrl, protocol, model, isFreeModel: false }
-  }
-
-  const envKey = PROVIDER_ENV_KEYS[protocol]
-  if (!envKey) return `Unknown provider '${protocol}'.`
-  const apiKey = process.env[envKey]
-  if (!apiKey) return `No API key for '${protocol}'. Set ${envKey} in your .env file.`
-
-  return { apiKey, baseUrl: spec.defaultBaseUrl, protocol, model, isFreeModel: false }
 }
 
 function buildProxyResponseHeaders(contentType?: string, cacheControl?: string): Headers {

@@ -81,7 +81,7 @@ export async function runCall(
     } catch (e) {
       fail(e instanceof Error ? (e.stack ?? e.message) : String(e))
     }
-    process.exit(0)
+    return settleExit(0)
   }
 
   let result: unknown
@@ -93,11 +93,22 @@ export async function runCall(
 
   const out = serializeResult(result)
   if (out !== undefined) await writeStdout(out + '\n')
+  settleExit(0)
+}
 
-  // A server.ts with top-level side effects (an open DB pool) keeps the event loop alive, so the
-  // process won't exit on its own — force it. The await above guarantees stdout drained first, so
-  // we never truncate the result we were asked for (Invariant 3).
-  process.exit(0)
+/**
+ * End the call. A `tb.ai`/`fetch` from server.ts leaves undici sockets whose teardown a synchronous
+ * `process.exit` races — on Windows that aborts libuv (`!(handle->flags & UV_HANDLE_CLOSING)`, exit
+ * 127) even though stdout already flushed. So don't force-exit the common case: set the exit code and
+ * let the loop drain (a networked call still exits in ~1s — undici doesn't hold it open). The original
+ * hard exit existed only for a server.ts that *keeps* the loop alive (an open DB pool, a server it
+ * started); preserve that with an unref'd fallback timer — it can't hold the loop open itself, and
+ * fires to force-quit only if natural drain hasn't happened.
+ */
+function settleExit(code: number): void {
+  process.exitCode = code
+  const t = setTimeout(() => process.exit(code), 2000)
+  t.unref?.()
 }
 
 /** Resolve the call's argument list from either the positional heuristic or the `--args` escape hatch. */

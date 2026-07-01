@@ -25,4 +25,15 @@ describe('listBulbFiles', () => {
     expect(names).toEqual(['My App', 'My Notes'])   // both user bulbs; node_modules skipped
     expect(names).not.toContain('Dep')
   })
+
+  it('flags a headless (server.ts, no code.tsx) bulb as serverOnly', async () => {
+    const web = ['---', 'format: typebulb/v1', 'name: Web', '---', '', '**code.tsx**', '', '```tsx', 'export {}', '```', ''].join('\n')
+    const headless = ['---', 'format: typebulb/v1', 'name: Headless', '---', '', '**server.ts**', '', '```ts', 'export function go() {}', '```', ''].join('\n')
+    await writeFile(path.join(dir, 'web.bulb.md'), web)
+    await writeFile(path.join(dir, 'headless.bulb.md'), headless)
+
+    const byName = new Map(listBulbFiles(dir).map(f => [f.name, f.serverOnly]))
+    expect(byName.get('Web')).toBe(false)
+    expect(byName.get('Headless')).toBe(true)
+  })
 })

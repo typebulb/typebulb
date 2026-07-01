@@ -77,7 +77,7 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 | `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
 | `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()` — a typebulb.com feature; not supported locally. |
 | `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
-| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Plain Node — no `tb`; log with `console.log`. **Local only.** |
+| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Mostly plain Node — log with `console.log` — but `tb.ai`/`tb.ai.stream`/`tb.models` are callable here too (under `--trust`). **Local only.** |
 
 ### Example
 
@@ -241,6 +241,12 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 - **Reading the log:** it appends across every reload, so `typebulb logs --run latest <file>` shows just the current run (no need to clear).
 - **When done:** Ctrl-C, or `typebulb stop <file>` — closing the terminal leaves the server running detached.
 
+### Emitting a server-only bulb
+
+A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no port, absent from the launcher. Under `--trust` its code can call `tb.ai`, `tb.ai.stream`, and `tb.models` against your `.env` keys.
+
+- **Invoke one export with `typebulb call <file> <fn> [args…] --trust`.** It boots, runs that export, prints the `return` as JSON to stdout, and exits — a fresh boot per call. Log with `console.log` (no `tb.server.log` here); under `call` logs go to stderr, so the JSON result owns stdout.
+
 ## Sizing
 
 The host owns a bulb's **width**; you own its **height**.
@@ -368,10 +374,11 @@ Or you can rely on the default provider and model if you set them in `.env`.
 
 ### Reasoning effort
 
-`tb.ai()` accepts an optional `effort` parameter (1–3) that hints at how much extended thinking the model should use. Omit it for the model's native default; to skip extended thinking entirely, use a non-reasoning model rather than a dial position.
+`tb.ai()` accepts an optional `effort` parameter (0–3) that hints at how much the model should reason. `low` (1) is the sensible default for most work; omit it for the model's own default.
 
 | Level | Label | Effect |
 |-------|-------|--------|
+| 0 | Minimal | Least reasoning — mapped to each provider's floor. Not a guaranteed "off": some models still think a little, and adaptive ones already self-skip at low. |
 | 1 | Low | Light reasoning |
 | 2 | Med | Moderate reasoning |
 | 3 | High | Heavy reasoning |

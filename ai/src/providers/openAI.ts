@@ -14,9 +14,10 @@ import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProv
 
 // ── Wire types ───────────────────────────────────────────────────────
 
-// OpenAI Responses API reasoning types. (OpenAI's API also accepts 'minimal', but typebulb's effort
-// dial has no such level — omitting `effort` disables reasoning; the three levels are low/medium/high.)
-export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
+// OpenAI Responses API reasoning types. typebulb effort 0 maps to `none` (reasoning off) — `none` is
+// supported across the GPT-5.x line, whereas `minimal` is model-gated (gpt-5.5 has it; gpt-5.4-mini
+// 400s on it), so `none` is the robust floor. low/medium/high are 1/2/3. (`xhigh` is outside the dial.)
+export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high'
 export type OpenAIReasoningSummary = 'auto' | 'concise' | 'detailed'
 
 // OpenAI Responses API tool types
@@ -208,6 +209,7 @@ export class OpenAIProvider extends AIProvider {
   readonly path = '/v1/responses'
 
   private readonly effortMap: Record<EffortLevel, OpenAIReasoningEffort> = {
+    0: 'none',
     1: 'low',
     2: 'medium',
     3: 'high'
@@ -243,10 +245,9 @@ export class OpenAIProvider extends AIProvider {
     }
 
     if (this.isReasoningEnabled(opts)) {
-      payload.reasoning = {
-        effort: this.effortMap[opts!.effort!],
-        summary: 'auto'
-      }
+      const effort = this.effortMap[opts!.effort!]
+      // `summary: 'auto'` requests a reasoning summary; at `none` there's no reasoning to summarize.
+      payload.reasoning = effort === 'none' ? { effort } : { effort, summary: 'auto' }
     }
 
     return payload

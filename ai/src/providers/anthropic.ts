@@ -166,20 +166,29 @@ export class AnthropicProvider extends AIProvider {
     if (this.isReasoningEnabled(opts)) {
       const depth = opts!.effort!
       if (this.isModernModel(model)) {
-        // Opus 4.6+: adaptive thinking + effort parameter
-        const effortMap: Record<EffortLevel, 'low' | 'medium' | 'high' | 'max'> = {
-          1: 'low',
-          2: 'medium',
-          3: 'high'
+        // Opus 4.6+: adaptive thinking + effort parameter.
+        // 0 = minimal: send the lowest effort with NO `thinking` directive. On adaptive models where
+        // thinking is opt-in (Opus 4.7/4.8) omitting it runs the request *without* thinking — the real
+        // "off". On Sonnet 5 / Fable / Mythos, thinking is on-by-default or mandatory, so 0 floors to
+        // low-effort thinking rather than off (Anthropic has no sub-`low` effort rung).
+        if (depth === 0) {
+          payload.output_config = { effort: 'low' }
+        } else {
+          const effortMap: Record<1 | 2 | 3, 'low' | 'medium' | 'high'> = {
+            1: 'low',
+            2: 'medium',
+            3: 'high'
+          }
+          // display defaults to 'omitted' on Fable 5 / Mythos 5 / Opus 4.7+ / Sonnet 5 (a silent change from
+          // Opus 4.6 / Sonnet 4.6, which defaulted to 'summarized') — thinking still happens and is billed,
+          // but streams with empty text unless requested explicitly.
+          payload.thinking = { type: 'adaptive', display: 'summarized' }
+          payload.output_config = { effort: effortMap[depth] }
         }
-        // display defaults to 'omitted' on Fable 5 / Mythos 5 / Opus 4.7+ / Sonnet 5 (a silent change from
-        // Opus 4.6 / Sonnet 4.6, which defaulted to 'summarized') — thinking still happens and is billed,
-        // but streams with empty text unless requested explicitly.
-        payload.thinking = { type: 'adaptive', display: 'summarized' }
-        payload.output_config = { effort: effortMap[depth] }
-      } else {
-        // Older models: manual thinking with budget_tokens
-        const budgetMap: Record<EffortLevel, number> = {
+      } else if (depth !== 0) {
+        // Older models: manual thinking with budget_tokens. 0 = minimal → omit `thinking` entirely (off);
+        // budget_tokens: 0 is rejected, so there's no "tiny budget" rung below the smallest here.
+        const budgetMap: Record<1 | 2 | 3, number> = {
           1: 2048,
           2: 4096,
           3: 8192

@@ -16,3 +16,12 @@ export type LocalBulb = BulbData & { server: string }
 export function toLocalBulb(parsed: ParsedBulb): LocalBulb {
   return { ...toBulbData(parsed), server: parsed.files.get('server.ts') ?? '' }
 }
+
+/**
+ * A headless bulb: a `server.ts` block and no `code.tsx` page. It runs in console mode (runConsole) —
+ * no web server, no port. The runtime dispatch (index.ts) and the mirror launcher both key off this,
+ * so the rule lives here once rather than being spelled out at each site.
+ */
+export function isServerOnly(bulb: Pick<LocalBulb, 'code' | 'server'>): boolean {
+  return !!bulb.server && !bulb.code
+}

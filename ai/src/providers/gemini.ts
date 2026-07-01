@@ -147,9 +147,15 @@ export class GeminiProvider extends AIProvider {
     // `-1` (dynamic, always in-range, no per-model max risk). `includeThoughts` streams thought
     // summaries as `thought` parts, which the parser maps to AiChunk `{ kind: "reasoning" }`.
     if (this.isReasoningEnabled(opts)) {
-      const budgetMap: Record<EffortLevel, number> = { 1: 1024, 2: 8192, 3: -1 }
+      // 0 = minimal → thinkingBudget 0: disables thinking on 2.5 Flash/Lite (2.5 Pro can't disable and
+      // clamps up; Gemini 3.x wants `thinking_level` — a separate migration). At budget 0 there are no
+      // thoughts to stream, so `includeThoughts` is dropped.
+      const budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1 }
+      const thinkingBudget = budgetMap[opts!.effort!]
       payload.generationConfig = {
-        thinkingConfig: { includeThoughts: true, thinkingBudget: budgetMap[opts!.effort!] }
+        thinkingConfig: thinkingBudget === 0
+          ? { thinkingBudget: 0 }
+          : { includeThoughts: true, thinkingBudget },
       }
     }
 
