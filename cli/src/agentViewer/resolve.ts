@@ -1,5 +1,4 @@
 import { listAgentNames } from './registry.js'
-import { findProjectViewer } from '../serve/serverRegistry.js'
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
 import { ClaudeAdapter } from '../../agents/claude/server/adapter.js'
 import { PiAdapter } from '../../agents/pi/server/adapter.js'
@@ -54,13 +53,16 @@ export type AgentChoice = { name: string } | { ambiguous: string[] }
  *
  *  1. **Caller identity** — the process that ran `typebulb agent` inherited its harness's env marker
  *     (`detectsSelf`). This is the agent path; a human in a terminal sets no marker and falls through.
- *  2. **A live mirror for this cwd** — reuse whatever harness is already showing, rather than second-
- *     guessing it (TB-Agent-Mirror.md Invariant 2). Only reached when (1) missed, i.e. a human.
- *  3. **Disk signal** — harnesses with sessions under this cwd: exactly one → it; none → the canonical
+ *  2. **Disk signal** — harnesses with sessions under this cwd: exactly one → it; none → the canonical
  *     default (nothing to show and no preference expressed, so don't nag); two or more → ambiguous,
  *     ask the user. All pure parse / `statSync`, no inference (Invariant 1).
+ *
+ * A live mirror already serving this cwd is deliberately NOT a resolution signal: reusing whatever
+ * harness happens to be showing silently skipped the picker when a human had sessions for both, which
+ * read as the command ignoring them. Dedup still happens — `launchAgentViewer` reuses a running mirror
+ * for the *resolved* harness (TB-Agent-Mirror.md Invariant 2) — it just no longer decides *which*.
  */
-export async function resolveAgent(cwd: string): Promise<AgentChoice> {
+export function resolveAgent(cwd: string): AgentChoice {
   const names = listAgentNames()
   const adapters = new Map(names.filter(n => AGENT_ADAPTERS[n]).map(n => [n, AGENT_ADAPTERS[n]()]))
 
@@ -69,11 +71,7 @@ export async function resolveAgent(cwd: string): Promise<AgentChoice> {
     if (adapter.detectsSelf()) return { name }
   }
 
-  // 2. A mirror is already up for this project (any harness).
-  const live = await findProjectViewer(cwd)
-  if (live?.agent && adapters.has(live.agent)) return { name: live.agent }
-
-  // 3. Which harnesses have sessions here.
+  // 2. Which harnesses have sessions here.
   const withSessions = [...adapters].filter(([, a]) => a.listSessionFiles(cwd).length > 0).map(([n]) => n)
   if (withSessions.length === 1) return { name: withSessions[0] }
   if (withSessions.length === 0) return { name: names[0] }   // canonical default (first registered)

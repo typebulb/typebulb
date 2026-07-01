@@ -24,7 +24,7 @@ import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
  * run); off a TTY it prints a pick-one message (still exit 0) instead of launching.
  */
 export async function runAgent(version: string): Promise<void> {
-  const choice = await resolveAgent(process.cwd())
+  const choice = resolveAgent(process.cwd())
   if ('ambiguous' in choice) {
     // A human in a multi-harness project. On an interactive terminal, ask — then launch like any
     // resolved run (same detached spawn, same async exit-0 report), which restores the bare-`agent`
