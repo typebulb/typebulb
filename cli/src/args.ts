@@ -53,10 +53,9 @@ export interface CliArgs {
    *  embed wake match the `[embed <name>` tag prefix and a turn-based bulb wait on its `[chess]` event
    *  tag; a regex `[chess]` would be a character class, and the unpaired `[embed` an error. */
   match?: string
-  /** `wait --timeout <sec>`: a manual give-up cap for a *non-backgrounded* bulb wait (exit 2). Mostly
+  /** `wait --timeout <sec>`: a manual override of the housekeeping give-up cap (exit 2). Mostly
    *  vestigial — `wait` is a subscription, so an agent never sets it (lifecycle.ts runWait): a shim-
-   *  backgrounded wait ignores it (no give-up clock at all), and a mirror wait ignores it (fixed 30s
-   *  foreground-deadlock guard). It only bounds a manual/foreground bulb wait, default 1800. */
+   *  backgrounded wait ignores it (no give-up clock at all); everything else defaults to 1800. */
   timeoutSec?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every

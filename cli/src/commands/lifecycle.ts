@@ -129,8 +129,8 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  * exit. The wake-up half of the agent lifecycle (TB-Wait.md): any
  * process that blocks-until-event-then-exits is a signal an agent can subscribe to as a background task,
  * so a bulb's `console.log` on a user action — or the mirror's `[embed …]` status forward — re-invokes the
- * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = timeout (nothing logged —
- * for an embed wait, "no mirror tab open", distinct from "broken"); 3 = the server died mid-wait.
+ * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = gave up (the housekeeping
+ * cap elapsed with nothing matching — nobody watching, never "broken"); 3 = the server died mid-wait.
  *
  * The baseline is the target's persisted consumer offset — where the agent last touched this log (a
  * prior `wait`'s exit, or a `call`'s start) — so an event that lands while no watcher is attached
@@ -151,14 +151,20 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // tab opens on this session, a coffee-break away — a render landing then must NOT be swallowed) or a
   // running bulb's next `[chess]`-style line — bounded only by the shim's session reap and the mirror-
   // died exit below. Embed and turn-based bulb loop are the same shape here: both subscriptions, neither
-  // "completes". The lone surviving timeout is the give-up cap on a *non-backgrounded* wait — purely the
-  // foreground-deadlock guard for a harness that can't background (CC, indistinguishable from a misuse
-  // here): a foreground wait blocks the turn whose flush the line depends on, and the cap breaks it. The
-  // caller never sets it (model `--timeout` is moot under the shim, and a fixed default otherwise).
+  // "completes". The surviving give-up cap is HOUSEKEEPING (an unwatched orphan shouldn't park forever),
+  // never a semantic signal, so it is one generous default for every target. A mirror wait briefly
+  // carried a special 30s cap as a foreground-deadlock guard; removed, because the clock starts at
+  // process boot while the awaited render can't exist until the emitting turn flushes — a wait armed
+  // before a long message generation burned the whole cap mid-turn and exited 2 spuriously, misread as
+  // "no tab open" while the tab was open (field: two ~60s bulb generations, both timed out at 30s, both
+  // lines then delivered instantly to a re-arm off the cursor). The deadlock it guarded is bounded by
+  // the harness anyway — CC's own foreground tool timeout kills a misused foreground wait, and the shim
+  // keeps pi waits off the foreground — and a spurious give-up on correct use costs more than the stall
+  // it prevented (missed wakes fatal, spurious cheap — TB-Wait.md).
   const isMirror = server.agent != null
   const shimBackgrounded = process.env.TYPEBULB_WAIT_SHIM === '1'
   const noDeadline = shimBackgrounded            // a shim-backgrounded wait is a non-blocking subscription
-  const timeoutSec = isMirror ? 30 : (opts.timeoutSec ?? 1800)   // give-up cap, used only when !noDeadline
+  const timeoutSec = opts.timeoutSec ?? 1800     // housekeeping give-up cap, used only when !noDeadline
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
   // the bare-wait / `call` baseline (the empty key). Per-pattern offsets mean one waiter's exit can't
