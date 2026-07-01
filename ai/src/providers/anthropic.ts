@@ -265,10 +265,24 @@ export class AnthropicProvider extends AIProvider {
     return typeof json === 'object' && json !== null && 'type' in json
   }
 
-  /** Claude 4.6+: adaptive thinking, higher output limit */
+  /**
+   * Claude 4.6+ (including the entire 5 family): adaptive thinking + `output_config.effort`,
+   * higher output limit. Older models use legacy `thinking.type: 'enabled'` + `budget_tokens`.
+   *
+   * Version IDs come in two shapes and the minor is OPTIONAL:
+   *   - `claude-opus-4-8`, `claude-haiku-4-5-20251001` — major-minor
+   *   - `claude-sonnet-5`, `claude-fable-5`            — the 5 family dropped the minor
+   * A two-group regex misses the single-number ids, misreading Sonnet 5 as pre-4.6 and sending it
+   * down the legacy `thinking.type: 'enabled'` path — which the 5 family rejects outright
+   * ("use thinking.type.adaptive and output_config.effort"). `[a-z]+` (not `\w+`) also avoids
+   * matching the number-first legacy names (`claude-3-5-sonnet`), which stay non-modern.
+   */
   private isModernModel(model: string): boolean {
-    const m = model.match(/^claude-\w+-(\d+)-(\d+)/)
-    return !!m && (+m[1] > 4 || (+m[1] === 4 && +m[2] >= 6))
+    const m = model.match(/^claude-[a-z]+-(\d+)(?:-(\d+))?/i)
+    if (!m) return false
+    const major = +m[1]
+    const minor = m[2] ? +m[2] : 0
+    return major > 4 || (major === 4 && minor >= 6)
   }
 
   private getMaxTokens(model: string): number {
