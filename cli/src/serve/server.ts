@@ -263,11 +263,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // AI endpoint - tb.ai() calls AI providers directly using env API keys
   app.post('/__ai', async (c) => {
     try {
-      const { messages, system, effort, reasoning, provider: reqProvider, model: reqModel, webSearch, stream: wantStream } = await c.req.json<{
+      const { messages, system, effort, provider: reqProvider, model: reqModel, webSearch, stream: wantStream } = await c.req.json<{
         messages: Array<{ role: string; content: string }>
         system?: string
         effort?: number
-        reasoning?: number  // deprecated alias for `effort`
         provider?: string
         model?: string
         webSearch?: boolean
@@ -289,13 +288,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         ...messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
       ]
 
-      // Legacy 0 (the old "off"/"minimal" level) → no effort hint at all.
-      const rawEffort = effort ?? reasoning
       const response = await sendAIRequest(resolved, {
         model: resolved.model,
         messages: chatMessages,
         stream: true,
-        effort: (rawEffort && rawEffort > 0 ? rawEffort : undefined) as 1 | 2 | 3 | undefined,
+        effort: (effort && effort > 0 ? effort : undefined) as 1 | 2 | 3 | undefined,
         webSearch: webSearch ?? true
       })
 

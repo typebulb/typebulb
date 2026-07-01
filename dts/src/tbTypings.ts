@@ -39,8 +39,6 @@ const aiOptions = `options: {
     system?: string;
     /** Extended-thinking effort hint (1=low, 2=med, 3=high). Mapped to each provider's native mechanism (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Omit for the model's native default; use a non-reasoning model to avoid thinking entirely. */
     effort?: 1 | 2 | 3;
-    /** @deprecated Renamed to \`effort\`. Still accepted; a \`0\` is treated as omitted. */
-    reasoning?: 0 | 1 | 2 | 3;
     provider?: string;
     model?: string;
     /** Enable/disable web search. Default: on for BYOK, always off for free model. */
