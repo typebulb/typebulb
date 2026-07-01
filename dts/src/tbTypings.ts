@@ -37,7 +37,9 @@ const insight = `
 const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
-    /** Reasoning depth hint (0=min, 1=low, 2=med, 3=high). Mapped to provider-specific parameters (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Default: 0. */
+    /** Extended-thinking effort hint (1=low, 2=med, 3=high). Mapped to each provider's native mechanism (e.g. Anthropic adaptive thinking, OpenAI reasoning effort). Omit for the model's native default; use a non-reasoning model to avoid thinking entirely. */
+    effort?: 1 | 2 | 3;
+    /** @deprecated Renamed to \`effort\`. Still accepted; a \`0\` is treated as omitted. */
     reasoning?: 0 | 1 | 2 | 3;
     provider?: string;
     model?: string;
@@ -69,7 +71,7 @@ const ai = `
      * Streaming counterpart of \`tb.ai()\`. Yields \`{ kind: "text" | "reasoning", text }\` deltas
      * as they arrive; break the loop (or abort \`signal\`) to cancel and stop the upstream.
      *
-     * \`kind: "reasoning"\` deltas only arrive when you pass \`reasoning: 1-3\` AND use a
+     * \`kind: "reasoning"\` deltas only arrive when you pass \`effort: 1-3\` AND use a
      * thinking-capable model; otherwise the stream is \`text\`-only.
      *
      * @example

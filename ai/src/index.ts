@@ -1,4 +1,4 @@
-// AI wire protocol types (chat/stream DTOs, ProviderProtocol/ReasoningDepth/TbModelDto)
+// AI wire protocol types (chat/stream DTOs, ProviderProtocol/EffortLevel/TbModelDto)
 export * from './protocol.js'
 
 export { AIProvider, ProviderStreamError, type ChatRequestOpts } from './aiProvider.js'

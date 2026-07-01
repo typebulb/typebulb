@@ -5,6 +5,7 @@
 import type {
   ChatMessageDto,
   UpstreamErrorDto,
+  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -138,13 +139,17 @@ export class GeminiProvider extends AIProvider {
       }
     }
 
-    // Request thought summaries when reasoning is on. `thinkingBudget: -1` = dynamic, so the model
-    // self-regulates depth — the robust analog of a 1-3 dial across Gemini models (avoids per-model
-    // budget maxes); `includeThoughts` makes those thoughts stream as `thought` parts, which the
-    // parser maps to AiChunk `{ kind: "reasoning" }`.
+    // Map the 1-3 reasoning dial to a thinking budget so the effort selector actually controls depth
+    // — mirroring how the OpenRouter path honors `effort` per level (native previously hardcoded
+    // `thinkingBudget: -1`, always thinking maximally and ignoring the dial, which made native Gemini
+    // look like it "always reasons" while OpenRouter respected the dial). `low` gets a small budget
+    // (often below the summary threshold → blank, matching OpenRouter's `effort:'low'`); `high` uses
+    // `-1` (dynamic, always in-range, no per-model max risk). `includeThoughts` streams thought
+    // summaries as `thought` parts, which the parser maps to AiChunk `{ kind: "reasoning" }`.
     if (this.isReasoningEnabled(opts)) {
+      const budgetMap: Record<EffortLevel, number> = { 1: 1024, 2: 8192, 3: -1 }
       payload.generationConfig = {
-        thinkingConfig: { includeThoughts: true, thinkingBudget: -1 }
+        thinkingConfig: { includeThoughts: true, thinkingBudget: budgetMap[opts!.effort!] }
       }
     }
 

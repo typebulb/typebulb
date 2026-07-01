@@ -4,7 +4,7 @@
 import type {
   ChatMessageDto,
   UpstreamErrorDto,
-  ReasoningDepth,
+  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -87,8 +87,7 @@ export class OpenRouterProvider extends AIProvider {
   readonly defaultBaseUrl = 'https://openrouter.ai'
   readonly path: string = '/api/v1/chat/completions'
 
-  private readonly effortMap: Record<ReasoningDepth, 'low' | 'medium' | 'high'> = {
-    0: 'low',
+  private readonly effortMap: Record<EffortLevel, 'low' | 'medium' | 'high'> = {
     1: 'low',
     2: 'medium',
     3: 'high'
@@ -133,7 +132,7 @@ export class OpenRouterProvider extends AIProvider {
 
     if (this.isReasoningEnabled(opts)) {
       payload.reasoning = {
-        effort: this.effortMap[opts!.reasoning!]
+        effort: this.effortMap[opts!.effort!]
       }
     }
 

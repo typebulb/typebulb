@@ -56,13 +56,12 @@ const PROXY_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'] as const
 // uncached — the floor keeps a tiny first prompt (legitimately cache-less) from reading as a leak.
 const UNCACHED_MIN_TOKENS = 5000
 
-// The reasoning dial (TB-Agent-Switcher.md reasoning appendix). CC-CALIBRATED, deliberately NOT typebulb's
-// general 0–3 (minimal/low/medium/high) scale: Claude Code's effort range is low/medium/high(/max), default
-// medium for Opus, and routing through OpenRouter we map onto OpenRouter's own `reasoning.effort` enum —
-// which is itself low/medium/high. So we match NOMINALLY on those three (the label IS the wire value). We
-// drop typebulb's `minimal` (below CC's floor → would under-think vs native, a pure-calibration handicap)
-// and CC's `max` (Anthropic/Opus-only → collapses to high on OpenRouter). `low` is the floor, never the off
-// state (`effort:"none"`/`enabled:false`), which 400s mandatory-reasoning slugs (some DeepSeek/Grok/Step).
+// The reasoning dial (TB-Agent-Switcher.md reasoning appendix). CC-CALIBRATED to Claude Code's own effort
+// range: low/medium/high(/max), default medium for Opus. Routing through OpenRouter we map onto OpenRouter's
+// own `reasoning.effort` enum — itself low/medium/high — so we match NOMINALLY on those three (the label IS
+// the wire value). We drop CC's `max` (Anthropic/Opus-only → collapses to high on OpenRouter). `low` is the
+// floor, never the off state (`effort:"none"`/`enabled:false`), which 400s mandatory-reasoning slugs (some
+// DeepSeek/Grok/Step). (This is a route-global base level, distinct from typebulb's per-call `effort` dial.)
 const EFFORT = ['low', 'medium', 'high'] as const
 
 const settingsLocalPath = (cwd: string) => join(cwd, '.claude', 'settings.local.json')

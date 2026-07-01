@@ -4,7 +4,7 @@
 import type {
   ChatMessageDto,
   UpstreamErrorDto,
-  ReasoningDepth,
+  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -14,8 +14,9 @@ import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProv
 
 // ── Wire types ───────────────────────────────────────────────────────
 
-// OpenAI Responses API reasoning types
-export type OpenAIReasoningEffort = 'minimal' | 'low' | 'medium' | 'high'
+// OpenAI Responses API reasoning types. (OpenAI's API also accepts 'minimal', but typebulb's effort
+// dial has no such level — omitting `effort` disables reasoning; the three levels are low/medium/high.)
+export type OpenAIReasoningEffort = 'low' | 'medium' | 'high'
 export type OpenAIReasoningSummary = 'auto' | 'concise' | 'detailed'
 
 // OpenAI Responses API tool types
@@ -206,8 +207,7 @@ export class OpenAIProvider extends AIProvider {
   readonly defaultBaseUrl = 'https://api.openai.com'
   readonly path = '/v1/responses'
 
-  private readonly effortMap: Record<ReasoningDepth, OpenAIReasoningEffort> = {
-    0: 'minimal',
+  private readonly effortMap: Record<EffortLevel, OpenAIReasoningEffort> = {
     1: 'low',
     2: 'medium',
     3: 'high'
@@ -244,7 +244,7 @@ export class OpenAIProvider extends AIProvider {
 
     if (this.isReasoningEnabled(opts)) {
       payload.reasoning = {
-        effort: this.effortMap[opts!.reasoning!],
+        effort: this.effortMap[opts!.effort!],
         summary: 'auto'
       }
     }

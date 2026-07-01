@@ -1,4 +1,4 @@
-import type { ProviderProtocol, ChatMessageDto, ReasoningDepth, StreamErrorPayload } from './protocol.js'
+import type { ProviderProtocol, ChatMessageDto, EffortLevel, StreamErrorPayload } from './protocol.js'
 import { AIProvider } from './aiProvider.js'
 import { OpenAIProvider } from './providers/openAI.js'
 import { OpenRouterProvider } from './providers/openRouter.js'
@@ -41,7 +41,7 @@ export interface SendAIRequestOpts {
   model: string
   messages: ChatMessageDto[]
   stream: boolean
-  reasoning?: ReasoningDepth
+  effort?: EffortLevel
   webSearch?: boolean
   origin?: string
   signal?: AbortSignal
@@ -75,7 +75,7 @@ export async function sendAIRequest(
   const payload = spec.buildPayload(
     opts.messages,
     opts.model,
-    { reasoning: opts.reasoning, webSearch: opts.webSearch },
+    { effort: opts.effort, webSearch: opts.webSearch },
     opts.stream
   ) as Record<string, unknown>
 

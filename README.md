@@ -266,7 +266,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`, and every bare import declared in `config.json` `dependencies`.** Bare imports (`react`, `d3`, `three`, …) resolve from a CDN — no install step — but declaring them is **required, not optional**: an import missing from `dependencies` is a lint error that fails `npx typebulb check` *and* refuses to run. Declaring is also what pins versions and lets `check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`). So a bulb with imports must carry a `config.json` with a matching `dependencies` entry for each.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
-- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, reasoning?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off. For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
+- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off. For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
 - **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
@@ -366,13 +366,12 @@ You can call the provider and model explicitly like this: `tb.ai({ provider: "ge
 
 Or you can rely on the default provider and model if you set them in `.env`.
 
-### Reasoning
+### Reasoning effort
 
-`tb.ai()` accepts an optional `reasoning` parameter (0–3) that hints at how much extended thinking the model should use:
+`tb.ai()` accepts an optional `effort` parameter (1–3) that hints at how much extended thinking the model should use. Omit it for the model's native default; to skip extended thinking entirely, use a non-reasoning model rather than a dial position.
 
 | Level | Label | Effect |
 |-------|-------|--------|
-| 0 | Min | No extended reasoning (default) |
 | 1 | Low | Light reasoning |
 | 2 | Med | Moderate reasoning |
 | 3 | High | Heavy reasoning |
@@ -380,7 +379,7 @@ Or you can rely on the default provider and model if you set them in `.env`.
 ```typescript
 const { text } = await tb.ai({
   messages: [{ role: "user", content: "Explain quantum tunneling" }],
-  reasoning: 2,
+  effort: 2,
 });
 ```
 
@@ -395,7 +394,7 @@ for await (const c of tb.ai.stream({ messages })) {
 }
 ```
 
-Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `reasoning: 1-3` and a thinking-capable model**.
+Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-3` and a thinking-capable model**.
 
 ### Ollama & OpenAI-compatible endpoints
 

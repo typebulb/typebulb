@@ -148,12 +148,13 @@ export const typebulbShim = `
   }
 
   // tb.ai(): non-streaming, resolves with the full { text } (unchanged 90% path).
-  const aiCall = async ({ messages, system, reasoning, provider, model, webSearch, signal } = {}) => {
+  const aiCall = async ({ messages, system, effort, reasoning, provider, model, webSearch, signal } = {}) => {
     if (isEmbedded) throw embedErr('tb.ai()');
     const resp = await fetch('/__ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, system, reasoning, provider, model, webSearch }),
+      // 'reasoning' is the deprecated alias for 'effort'
+      body: JSON.stringify({ messages, system, effort: effort ?? reasoning, provider, model, webSearch }),
       signal
     });
     if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
@@ -170,11 +171,12 @@ export const typebulbShim = `
   // streaming tb.server.<gen>(). Break the loop (or abort the signal) to cancel.
   const aiStream = (opts = {}) => (async function* () {
     if (isEmbedded) throw embedErr('tb.ai.stream()');
-    const { messages, system, reasoning, provider, model, webSearch, signal } = opts;
+    const { messages, system, effort, reasoning, provider, model, webSearch, signal } = opts;
     const resp = await fetch('/__ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, system, reasoning, provider, model, webSearch, stream: true }),
+      // 'reasoning' is the deprecated alias for 'effort'
+      body: JSON.stringify({ messages, system, effort: effort ?? reasoning, provider, model, webSearch, stream: true }),
       signal
     });
     if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');

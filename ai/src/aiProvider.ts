@@ -1,7 +1,7 @@
 import type {
   ChatMessageDto,
   UpstreamErrorDto,
-  ReasoningDepth,
+  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -10,7 +10,7 @@ import type {
 } from './protocol.js'
 
 /** Options for building chat request payloads */
-export type ChatRequestOpts = { reasoning?: ReasoningDepth; webSearch?: boolean } | undefined
+export type ChatRequestOpts = { effort?: EffortLevel; webSearch?: boolean } | undefined
 
 /**
  * Error thrown by provider stream parsing when the provider or server reports an error.
@@ -72,8 +72,8 @@ export abstract class AIProvider {
 
   // ── Shared helpers ───────────────────────────────────────────────
 
-  protected isReasoningEnabled(opts: { reasoning?: ReasoningDepth } | undefined): boolean {
-    return opts?.reasoning !== undefined && opts.reasoning > 0
+  protected isReasoningEnabled(opts: { effort?: EffortLevel } | undefined): boolean {
+    return opts?.effort !== undefined
   }
 
   /** Split system messages from conversation messages. */

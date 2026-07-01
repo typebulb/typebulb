@@ -4,7 +4,7 @@
 import type {
   ChatMessageDto,
   UpstreamErrorDto,
-  ReasoningDepth,
+  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -91,7 +91,7 @@ export type AnthropicSseEventDto =
 /** Anthropic thinking (extended reasoning) */
 type AnthropicThinkingConfig =
   | { type: 'enabled'; budget_tokens: number }
-  | { type: 'adaptive' }
+  | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
 
 /** Anthropic web search tool definition */
 interface AnthropicWebSearchTool {
@@ -164,21 +164,22 @@ export class AnthropicProvider extends AIProvider {
     }
 
     if (this.isReasoningEnabled(opts)) {
-      const depth = opts!.reasoning!
+      const depth = opts!.effort!
       if (this.isModernModel(model)) {
         // Opus 4.6+: adaptive thinking + effort parameter
-        const effortMap: Record<ReasoningDepth, 'low' | 'medium' | 'high' | 'max'> = {
-          0: 'low',
+        const effortMap: Record<EffortLevel, 'low' | 'medium' | 'high' | 'max'> = {
           1: 'low',
           2: 'medium',
           3: 'high'
         }
-        payload.thinking = { type: 'adaptive' }
+        // display defaults to 'omitted' on Fable 5 / Mythos 5 / Opus 4.7+ / Sonnet 5 (a silent change from
+        // Opus 4.6 / Sonnet 4.6, which defaulted to 'summarized') — thinking still happens and is billed,
+        // but streams with empty text unless requested explicitly.
+        payload.thinking = { type: 'adaptive', display: 'summarized' }
         payload.output_config = { effort: effortMap[depth] }
       } else {
         // Older models: manual thinking with budget_tokens
-        const budgetMap: Record<ReasoningDepth, number> = {
-          0: 0,
+        const budgetMap: Record<EffortLevel, number> = {
           1: 2048,
           2: 4096,
           3: 8192

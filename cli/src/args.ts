@@ -380,8 +380,8 @@ AI API:
     TB_AI_MODEL=claude-haiku-4-5-20251001
   Both can be overridden per-call: tb.ai({ provider: "openai", model: "gpt-5.4-mini", ... })
   Don't guess a model id — run 'typebulb models' to list the exact ids your keys cover.
-  Optional reasoning depth (0=min, 1=low, 2=med, 3=high):
-    tb.ai({ ..., reasoning: 2 })
+  Optional effort level (1=low, 2=med, 3=high; omit for the model's native default):
+    tb.ai({ ..., effort: 2 })
 
 Examples:
   typebulb my-editor.bulb.md

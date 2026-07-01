@@ -30,10 +30,9 @@ type SwitchState = {
   caching: 'live' | 'uncached' | 'unknown'; reasoning: number | null; externalBaseUrl: string | null
 }
 
-// The reasoning dial — CC-calibrated low/medium/high (NOT typebulb's general minimal-based 0–3), shown only
-// while routing to an OpenRouter model. Index maps to the server's EFFORT (switcher.ts) → OpenRouter
-// `reasoning.effort`; we drop typebulb's "minimal" (below CC's floor) and CC's "max" (Anthropic-only). Keep
-// these two in sync with switcher.ts.
+// The reasoning dial — CC-calibrated low/medium/high, shown only while routing to an OpenRouter model.
+// Index maps to the server's EFFORT (switcher.ts) → OpenRouter `reasoning.effort`; we drop CC's "max"
+// (Anthropic-only). `low` is the floor (no off state). Keep these two in sync with switcher.ts.
 const REASONING_LEVELS: [number, string][] = [[0, 'Low'], [1, 'Med'], [2, 'High']]
 // The level pre-selected when the route has no explicit reasoning yet — medium, CC's Opus default. Mirrors
 // the server's own default (switcher.ts reasoningLevel); keep the two in sync.
@@ -286,7 +285,7 @@ export class ModelPill extends ComboboxPill<never> {
   }
 
   // The popover's top section: ONE row — a "More info" link on the left (lined up with the model titles
-  // below) and the reasoning dial on the right (a "reasoning" label + the Min/Low/Med/High select, the
+  // below) and the reasoning dial on the right (a "reasoning" label + the Low/Med/High select, the
   // select sized and column-aligned to the per-row "probe" button). The route headline was dropped as
   // redundant — the statusbar pill and the active-row marker already show the model — and the long
   // explanatory text moved into the "More info" drill-in (infoView), so the row stays one clean line.

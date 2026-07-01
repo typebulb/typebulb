@@ -4,6 +4,19 @@ import { resolveAgent } from '../agentViewer/resolve.js'
 import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
 
 /**
+ * The one place the CLI's colors are defined. ANSI only when stdout is a real terminal — piped output
+ * (what the agent reads) stays clean. `lit` (a warm "bulb-on" lime) marks the actionable artifacts —
+ * what you *do*: the URL to click, the commands to run, the file paths to open. Prose, headings, and
+ * decoration stay plain, so the eye lands on the do-able tokens. No `dim` tier: lighting what's
+ * actionable is enough. Only the URL adds underline — it's the one genuine link/click. `brand` tints
+ * the version banner (purple). Pass `tty=false` to no-op every code (the piped-output path).
+ */
+function palette(tty: boolean) {
+  const sgr = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s)
+  return { lit: sgr('38;5;70'), litLink: sgr('4;38;5;70'), brand: sgr('38;5;135') }
+}
+
+/**
  * `typebulb agent` (no `:target`) — the first command an agent runs. It prints (TB-Skill.md) a status
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
  * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the embed-vs-local rule
@@ -52,15 +65,7 @@ async function launchAndReport(version: string, name: string): Promise<void> {
     failed = e instanceof Error ? e.message : String(e)
   }
 
-  // ANSI only when stdout is a real terminal — piped output (what the agent reads) stays clean. `lit`
-  // (a bright "bulb-on" green) marks the actionable artifacts — what you *do*: the URL to click, the
-  // commands to run, the file paths to open. Prose, headings, and decoration stay plain, so the eye
-  // lands on the do-able tokens. No `dim` tier: lighting what's actionable is enough; dimming the rest
-  // only bought per-line guesswork. Only the URL adds underline — it's the one genuine link/click.
-  const tty = process.stdout.isTTY === true
-  const sgr = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s)
-  const lit = sgr('1;92'), litLink = sgr('1;4;92')   // bold bright green; the link adds underline
-  const brand = sgr('38;5;135')                      // brand-color tint (purple) for the version banner
+  const { lit, litLink, brand } = palette(process.stdout.isTTY === true)
 
   // Read-the-skill directive, shared by both cases. The direct file paths are ESSENTIAL: the agent reads
   // them with its (ungated) Read tool, whereas `npx typebulb skill` is a Bash command the host's
@@ -109,8 +114,7 @@ async function launchAndReport(version: string, name: string): Promise<void> {
  */
 async function promptHarness(version: string, names: string[]): Promise<string | undefined> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return undefined
-  const sgr = (code: string) => (s: string) => `\x1b[${code}m${s}\x1b[0m`
-  const lit = sgr('1;92'), brand = sgr('38;5;135')
+  const { lit, brand } = palette(true)   // reached only on a TTY (guarded above)
   const menu = [
     `  ${brand(`typebulb v${version}`)}`,
     `  This project has sessions for more than one agent harness.`,
@@ -138,9 +142,7 @@ async function promptHarness(version: string, names: string[]): Promise<string |
  * failure. (An agent caller never reaches here: it's detected by its env marker.)
  */
 function printAmbiguous(version: string, names: string[]): void {
-  const tty = process.stdout.isTTY === true
-  const sgr = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s)
-  const lit = sgr('1;92'), brand = sgr('38;5;135')
+  const { lit, brand } = palette(process.stdout.isTTY === true)
   const lines = [
     `  ${brand(`typebulb v${version}`)}`,
     `  This project has sessions for more than one agent harness.`,
