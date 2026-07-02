@@ -94,6 +94,18 @@ describe.skipIf(!RUN)('dts emit against the real CDN', () => {
     expect(paths['echarts']?.[0]).toMatch(/\.d\.cts$/)
   }, 60_000)
 
+  // mathjs's index.d.ts is a real module that ALSO contains a `declare module 'mathjs'`
+  // augmentation block — that must not be mistaken for an ambient declaration, which
+  // would suppress the shim and leave the import unresolvable (TS2307).
+  it('resolves mathjs (module with self-augmentation) to a shim', async () => {
+    const paths = await emitPaths(
+      '__net_test__/mathjs.bulb.md',
+      `import { compile, parse } from "mathjs"\nvoid [compile, parse]`,
+      { mathjs: '^15.1.1' },
+    )
+    expect(paths['mathjs']?.[0]).toBeDefined()
+  }, 60_000)
+
   // DefinitelyTyped fallback: lodash-es ships no own types; @types/lodash-es supplies them.
   it('resolves lodash-es types via DefinitelyTyped', async () => {
     const paths = await emitPaths(

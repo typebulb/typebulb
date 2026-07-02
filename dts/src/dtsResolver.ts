@@ -214,6 +214,11 @@ export class DtsResolver {
   // wrong and unnecessary — the declaration itself resolves the import once the file
   // is in the program. Callers suppress the shim and flag the file ambient instead.
   private ambientlyDeclares(dts: string, specifier: string): boolean {
+    // Only a script file can declare modules ambiently. If the file has any
+    // top-level import/export it IS a module, and its `declare module` blocks are
+    // augmentations — the file is a valid import target and keeps its shim
+    // (mathjs's index.d.ts self-augments this way).
+    if (/^(?:import|export)\b/m.test(dts)) return false
     for (const m of dts.matchAll(/declare\s+module\s+['"]([^'"]+)['"]/g)) {
       const decl = m[1]
       if (decl === specifier) return true
