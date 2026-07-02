@@ -250,6 +250,14 @@ export const typebulbShim = `
       return resp.json();
     },
 
+    // Own-keys check - true when the user's own AI backs tb.ai (env keys, compat endpoint, or Ollama)
+    hasOwnKeys: async () => {
+      if (isEmbedded) return false;
+      const resp = await fetch('/__has-own-keys');
+      if (!resp.ok) return false;
+      return (await resp.json()) === true;
+    },
+
     // Dump just logs to console in local mode
     dump: async (...args) => console.log('[tb.dump]', ...args),
 

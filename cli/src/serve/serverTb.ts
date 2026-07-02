@@ -7,14 +7,15 @@
  * the same mechanism the browser shim uses. Only reached under trust (server.ts imports only when
  * trusted), so it inherits the same key access as the HTTP route.
  *
- * Surface is deliberately the AI subset — `tb.ai`, `tb.ai.stream`, `tb.models`, `tb.mode`. server.ts is
- * otherwise plain Node (own `fs`, own `console.log`), so the browser-only helpers are not mirrored here.
+ * Surface is deliberately the AI subset — `tb.ai`, `tb.ai.stream`, `tb.models`, `tb.hasOwnKeys`,
+ * `tb.mode`. server.ts is otherwise plain Node (own `fs`, own `console.log`), so the browser-only
+ * helpers are not mirrored here.
  */
 
 import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
 import { consumeStreamText, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
-import { getFilteredModels } from './modelCatalog.js'
+import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
 
 interface TbAiOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -55,6 +56,7 @@ export function installServerTb(): void {
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     ai,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
+    hasOwnKeys,
     mode: 'local' as const,
   })
 }

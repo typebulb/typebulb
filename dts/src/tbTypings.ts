@@ -96,7 +96,14 @@ const models = `
     friendlyName: string;
     /** Provider display name, e.g. "Anthropic" */
     providerName: string;
-  }>>;`
+  }>>;
+  /**
+   * Whether the user's own AI keys back \`tb.ai\`. False means only the
+   * quota-limited courtesy model is available (or no AI at all) — a bulb
+   * making many AI calls should check this and show a "use your own keys"
+   * notice instead of running.
+   */
+  hasOwnKeys(): Promise<boolean>;`
 
 const theme = `
   /**

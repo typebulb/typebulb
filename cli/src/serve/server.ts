@@ -12,7 +12,7 @@ import type { EventEmitter } from 'events'
 import { normalizeUpstreamError, consumeStreamText, streamAiChunks } from 'typebulb/ai'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
-import { getFilteredModels } from './modelCatalog.js'
+import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
@@ -319,6 +319,15 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       return c.json(models)
     } catch {
       return c.json([], 200)
+    }
+  })
+
+  // Own-keys check — backs tb.hasOwnKeys(); false on failure, the safe gating answer
+  app.get('/__has-own-keys', async (c) => {
+    try {
+      return c.json(await hasOwnKeys())
+    } catch {
+      return c.json(false, 200)
     }
   })
 

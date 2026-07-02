@@ -88,6 +88,15 @@ export function hasAnyProviderKey(): boolean {
   return Object.values(PROVIDER_ENV_KEYS).some(k => !!process.env[k])
 }
 
+/** Backs `tb.hasOwnKeys()` in the CLI: is tb.ai backed by the user's own AI? True on any provider
+ *  key in the env, a configured openai-compat endpoint, or a reachable Ollama server — the keyless
+ *  setups are still the user's own AI, which is what the flag asks. Only probes Ollama (cached)
+ *  when nothing cheaper answers. */
+export async function hasOwnKeys(): Promise<boolean> {
+  if (hasAnyProviderKey() || !!process.env.TB_AI_BASE_URL) return true
+  return (await getOllamaModels()).length > 0
+}
+
 /** Render the filtered catalog as a terminal list: each model's exact id (what you pass as
  *  `tb.ai`'s `model`), its friendly name, and provider, id-first so a line is greppable. The
  *  configured default (TB_AI_PROVIDER / TB_AI_MODEL) is noted below when both are set. Pure (no
