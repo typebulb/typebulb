@@ -11,7 +11,7 @@ import { DefinitelyTypedProvider } from './definitelyTypedProvider.js'
 import { TypeRefScanner } from './typeRefScanner.js'
 import { VirtualFs } from './virtualFs.js'
 import { createFetchDts, type FetchDtsWithCache } from './fetchDts.js'
-import { DtsConfig, isDtsFile } from './dtsConfig.js'
+import { DtsConfig, isDtsFile, declarationCandidatesFor } from './dtsConfig.js'
 import type { DtsCache } from './cache.js'
 import type {
   TypeFetchResult,
@@ -30,9 +30,8 @@ export interface DtsResolverDeps {
 }
 
 /**
- * Resolves .d.ts files for a bulb's import set. Constructed via
- * `createDtsResolver(deps)`; each instance owns its own providers, in-flight
- * map, virtual filesystem, and fetch closure.
+ * Resolves .d.ts files for a bulb's import set. Each instance owns its own
+ * providers, in-flight map, virtual filesystem, and fetch closure.
  *
  * Web client wires Dexie-backed cache + typebulb/resolver web bits.
  * CLI wires FS-backed cache + typebulb/resolver Node bits.
@@ -56,7 +55,7 @@ export class DtsResolver {
     this.packageService = deps.packageService
     this.fetchDts = createFetchDts(deps.cache)
     this.typescriptProvider = new TypescriptProvider(this.fetchDts, deps.cdnClient)
-    this.definitelyTypedProvider = new DefinitelyTypedProvider(this.fetchDts, deps.cdnClient, deps.cache)
+    this.definitelyTypedProvider = new DefinitelyTypedProvider(deps.cdnClient, deps.cache)
     this.virtualFs = new VirtualFs()
   }
 
@@ -74,10 +73,6 @@ export class DtsResolver {
     this.inFlight.clear()
   }
 
-  private capArray<T>(items: T[], limit: number) {
-    return items.length <= limit ? items : items.slice(0, limit)
-  }
-
   private pushFileIfNew(files: ResolvedTypeFile[], path: string, content: string) {
     if (!files.some(f => f.path === path)) files.push({ path, content })
   }
@@ -88,11 +83,6 @@ export class DtsResolver {
     return { pkg, mainPath, files: [{ path: mainPath, content: stub }], shims: [{ module: pkg, path: mainPath }] }
   }
 
-  private async trySubpathWithRootFallback(pkg: string, ranges: PackageRanges) {
-    const parsed = new PackageRef(pkg)
-    return parsed.subpath ? this.fetchRootDts(parsed.name, ranges) : undefined
-  }
-
   private async fetchViaProviders(pkg: string) {
     for (const provider of [this.typescriptProvider, this.definitelyTypedProvider]) {
       try {
@@ -101,10 +91,6 @@ export class DtsResolver {
       } catch {}
     }
     return undefined
-  }
-
-  private subpathsMatch(requested: string, resolved: string) {
-    return new PackageRef(requested).subpath === new PackageRef(resolved).subpath
   }
 
   private async fetchRootDts(pkg: string, ranges: PackageRanges) {
@@ -120,9 +106,7 @@ export class DtsResolver {
     try { res = await this.fetchViaProviders(effectivePkg) } catch { return undefined }
     if (!res?.dts || !res.url) return undefined
 
-    try { await this.cache.setCachedFile(res.url, res.dts) } catch {}
-
-    if (this.subpathsMatch(effectivePkg, res.resolvedPkg || effectivePkg)) {
+    if (new PackageRef(effectivePkg).subpath === new PackageRef(res.resolvedPkg || effectivePkg).subpath) {
       try { await this.cache.setCachedDts(effectivePkg, res.dts, res.url) } catch {}
       return res
     }
@@ -171,7 +155,7 @@ export class DtsResolver {
       const baseDir = new URL('./', base)
       packageRootUrl ??= this.extractPackageRootUrl(base)
 
-      const refs = this.capArray(this.scanner.collectRelativeTypeRefs(dts), DtsConfig.maxRelativeTypeRefs)
+      const refs = this.scanner.collectRelativeTypeRefs(dts).slice(0, DtsConfig.maxRelativeTypeRefs)
 
       for (const rel of refs) {
         await this.tryRelativeRef(rel, baseDir, packageRootUrl, contentpkg, files, visited)
@@ -198,7 +182,7 @@ export class DtsResolver {
       const runtimePath = abs.pathname + abs.search
       const candidates = isDtsFile(runtimePath)
         ? [runtimePath]
-        : this.typescriptProvider.declarationCandidatesFor(runtimePath)
+        : declarationCandidatesFor(runtimePath)
 
       for (const cand of candidates) {
         const target = new URL(cand, abs)
@@ -251,7 +235,7 @@ export class DtsResolver {
     ranges: PackageRanges,
   ) {
     try {
-      const bare = this.capArray(this.scanner.collectBareModuleRefs(dts), DtsConfig.maxBareDeps)
+      const bare = this.scanner.collectBareModuleRefs(dts).slice(0, DtsConfig.maxBareDeps)
         .filter(mod => this.isDifferentPackage(mod, contentPkg))
       if (!bare.length) return
 
@@ -285,7 +269,7 @@ export class DtsResolver {
 
     if (dep.url) await this.expandRelativeRefs(dep.dts, dep.url, depPkg, files)
 
-    const inner = this.capArray(this.scanner.collectBareModuleRefs(dep.dts), DtsConfig.maxBareDeps)
+    const inner = this.scanner.collectBareModuleRefs(dep.dts).slice(0, DtsConfig.maxBareDeps)
       .filter(next => !visited.has(next))
 
     for (const next of inner) {
@@ -304,7 +288,9 @@ export class DtsResolver {
     const { effectivePackage } = await this.versionResolver.effectivePackage(pkg, ranges)
 
     return this.withInFlight(effectivePackage, async () => {
-      const res = await this.fetchRootDts(pkg, ranges) ?? await this.trySubpathWithRootFallback(pkg, ranges)
+      const parsed = new PackageRef(pkg)
+      const res = await this.fetchRootDts(pkg, ranges)
+        ?? (parsed.subpath ? await this.fetchRootDts(parsed.name, ranges) : undefined)
       if (!res) return this.createStubDef(pkg)
       return this.buildDefFromContent(pkg, res, res.resolvedPkg || pkg, ranges)
     })
@@ -336,8 +322,4 @@ export class DtsResolver {
 
     return { pkg: publicPkg, mainPath, files, shims, ambient }
   }
-}
-
-export function createDtsResolver(deps: DtsResolverDeps): DtsResolver {
-  return new DtsResolver(deps)
 }

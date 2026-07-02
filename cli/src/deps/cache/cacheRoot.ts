@@ -14,7 +14,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
-import { sha1 } from './cacheUtils.js'
+import { sha1, readJson } from './cacheUtils.js'
 
 const CACHE_SCHEMA_VERSION = 1
 
@@ -49,7 +49,7 @@ async function doInit(): Promise<void> {
   await fs.mkdir(cacheRoot, { recursive: true })
 
   const versionPath = path.join(cacheRoot, 'version.json')
-  const existing = await readJson(versionPath)
+  const existing = await readJson<{ version?: number }>(versionPath)
 
   if (existing?.version === CACHE_SCHEMA_VERSION) return
 
@@ -59,13 +59,4 @@ async function doInit(): Promise<void> {
     entries.map(name => fs.rm(path.join(cacheRoot, name), { recursive: true, force: true })),
   )
   await fs.writeFile(versionPath, JSON.stringify({ version: CACHE_SCHEMA_VERSION }) + '\n', 'utf8')
-}
-
-async function readJson<T = any>(filePath: string): Promise<T | undefined> {
-  try {
-    const text = await fs.readFile(filePath, 'utf8')
-    return JSON.parse(text) as T
-  } catch {
-    return undefined
-  }
 }

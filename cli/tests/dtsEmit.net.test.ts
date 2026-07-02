@@ -80,6 +80,20 @@ describe.skipIf(!RUN)('dts emit against the real CDN', () => {
     }
   }, 60_000)
 
+  // echarts declares `types: "types/dist/echarts.d.cts"` — a .d.cts entry. Before
+  // DTS_REGEX knew `cts`, this resolved only via content sniffing after four wasted
+  // double-extension probes (echarts.d.d.ts, …); its JSDoc @example imports also
+  // spawned phantom relative-ref probes. Pins that a .d.cts entry resolves cleanly.
+  it('resolves echarts (.d.cts types entry) to a shim', async () => {
+    const paths = await emitPaths(
+      '__net_test__/echarts.bulb.md',
+      `import * as echarts from "echarts"\nvoid echarts.init`,
+      { echarts: '^6.1.0' },
+    )
+    expect(paths['echarts']?.[0]).toBeDefined()
+    expect(paths['echarts']?.[0]).toMatch(/\.d\.cts$/)
+  }, 60_000)
+
   // DefinitelyTyped fallback: lodash-es ships no own types; @types/lodash-es supplies them.
   it('resolves lodash-es types via DefinitelyTyped', async () => {
     const paths = await emitPaths(

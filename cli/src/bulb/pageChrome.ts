@@ -6,6 +6,10 @@
  * Pure string assembly, isomorphic (no node builtins), so it lives in bulb/.
  */
 
+/** Escape text for safe interpolation inside an inline `<script>` body — a literal
+ *  `</script` in the payload would close the tag early and break out of the script. */
+export const escapeScript = (s: string) => s.replace(/<\/script/gi, '<\\/script')
+
 /** Escape text for safe interpolation into HTML element/attribute content. */
 export function escapeHtml(str: string): string {
   return str
@@ -48,7 +52,6 @@ export const baseResetStyle = `    *, *::before, *::after { box-sizing: border-b
  * independently. Ctrl/Cmd+Shift+L toggles the effective theme. See Specs/Theme.md.
  */
 export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string {
-  const escapeScript = (s: string) => s.replace(/<\/script/gi, '<\\/script')
   return `  <script>
     (function() {
       try {

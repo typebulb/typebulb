@@ -1,3 +1,5 @@
+import { normalizeRelative } from 'typebulb/resolver'
+
 const NODE_MODULES_PREFIX = 'file:///node_modules'
 
 /**
@@ -11,23 +13,9 @@ const NODE_MODULES_PREFIX = 'file:///node_modules'
  */
 export class VirtualFs {
   private epoch = 0
-  private listeners = new Set<(n: number) => void>()
 
-  getEpoch(): number {
-    return this.epoch
-  }
-
-  bumpEpoch(): number {
+  bumpEpoch(): void {
     this.epoch += 1
-    for (const l of this.listeners) {
-      try { l(this.epoch) } catch {}
-    }
-    return this.epoch
-  }
-
-  onEpochChange(cb: (n: number) => void): () => void {
-    this.listeners.add(cb)
-    return () => { this.listeners.delete(cb) }
   }
 
   epochDir(): string {
@@ -42,9 +30,4 @@ export class VirtualFs {
     const clean = normalizeRelative(rel)
     return `${NODE_MODULES_PREFIX}/${this.epochDir()}/${pkg}/${clean}`
   }
-}
-
-function normalizeRelative(rel: string): string {
-  const s = rel || ''
-  return s.startsWith('./') ? s.slice(2) : s.replace(/^\/+/, '')
 }

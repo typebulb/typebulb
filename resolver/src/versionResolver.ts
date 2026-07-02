@@ -14,10 +14,6 @@ export type EffectivePackageResult = {
 export class VersionResolver {
   constructor(private cache: PackageCache, private cdn: CdnClient, private semver: SemverService) {}
 
-  private selectVersionFromIndex(versions: string[], range: string, distTags?: Record<string, string>) {
-    return this.semver.selectBestVersion(versions, { range, distTags })
-  }
-
   /**
    * Learns the best available version for a package (no caching).
    * Used by packageAuto to determine what version we'd assign fresh.
@@ -41,9 +37,17 @@ export class VersionResolver {
       console.debug('[typebulb] cached version for', root, 'is not exact (', pinned, '); re-resolving from registry')
     }
 
+    const pinIfExact = async (v: string | undefined) => {
+      if (v && this.semver.isExactVersion(v)) {
+        await this.cache.setPinnedExact(root, range, v)
+        return v
+      }
+      return undefined
+    }
+
     const idx = await attempt(() => this.cdn.fetchVersionsIndex(root))
     if (idx?.versions?.length) {
-      const chosen = this.selectVersionFromIndex(idx.versions, range, idx.distTags)
+      const chosen = this.semver.selectBestVersion(idx.versions, { range, distTags: idx.distTags })
 
       if (!chosen) {
         // Routine cache refresh after a new release: the cached version set predates a release that
@@ -52,24 +56,16 @@ export class VersionResolver {
         await this.cache.invalidateVersionsCache(root)
         const freshIdx = await attempt(() => this.cdn.fetchVersionsIndex(root))
         if (freshIdx?.versions?.length) {
-          const freshChosen = this.selectVersionFromIndex(freshIdx.versions, range, freshIdx.distTags)
-          if (freshChosen && this.semver.isExactVersion(freshChosen)) {
-            await this.cache.setPinnedExact(root, range, freshChosen)
-            return freshChosen
-          }
+          const fresh = await pinIfExact(this.semver.selectBestVersion(freshIdx.versions, { range, distTags: freshIdx.distTags }))
+          if (fresh) return fresh
         }
-      } else if (this.semver.isExactVersion(chosen)) {
-        await this.cache.setPinnedExact(root, range, chosen)
-        return chosen
+      } else {
+        const exact = await pinIfExact(chosen)
+        if (exact) return exact
       }
     }
 
-    const exact = await this.cdn.resolveExactVersion(`${root}@${range}`)
-    if (exact && this.semver.isExactVersion(exact)) {
-      await this.cache.setPinnedExact(root, range, exact)
-      return exact
-    }
-    return undefined
+    return pinIfExact(await this.cdn.resolveExactVersion(`${root}@${range}`))
   }
 
   async effectivePackage(pkg: string, ranges: PackageRanges) {
@@ -77,9 +73,7 @@ export class VersionResolver {
     const root = parsed.root()
     const range = ranges[root]
 
-    const pinned = range
-      ? await attempt(() => this.cache.getPinnedExact(root, range)) ?? await attempt(() => this.resolveExactForRoot(root, range))
-      : undefined
+    const pinned = range ? await attempt(() => this.resolveExactForRoot(root, range)) : undefined
 
     return {
       effectivePackage: pinned ? parsed.withVersion(pinned).format() : pkg,

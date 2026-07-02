@@ -146,12 +146,13 @@ export class GeminiProvider extends AIProvider {
     // (often below the summary threshold → blank, matching OpenRouter's `effort:'low'`); `high` uses
     // `-1` (dynamic, always in-range, no per-model max risk). `includeThoughts` streams thought
     // summaries as `thought` parts, which the parser maps to AiChunk `{ kind: "reasoning" }`.
-    if (this.isReasoningEnabled(opts)) {
+    const effort = opts?.effort
+    if (effort !== undefined) {
       // 0 = minimal → thinkingBudget 0: disables thinking on 2.5 Flash/Lite (2.5 Pro can't disable and
       // clamps up; Gemini 3.x wants `thinking_level` — a separate migration). At budget 0 there are no
       // thoughts to stream, so `includeThoughts` is dropped.
       const budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1 }
-      const thinkingBudget = budgetMap[opts!.effort!]
+      const thinkingBudget = budgetMap[effort]
       payload.generationConfig = {
         thinkingConfig: thinkingBudget === 0
           ? { thinkingBudget: 0 }
@@ -162,7 +163,7 @@ export class GeminiProvider extends AIProvider {
     return payload
   }
 
-  parseError(errorText: string, status: number): UpstreamErrorDto {
+  override parseError(errorText: string, status: number): UpstreamErrorDto {
     if (!errorText) {
       return { message: `HTTP ${status}` }
     }
@@ -197,6 +198,7 @@ export class GeminiProvider extends AIProvider {
   // ── Response parsing ─────────────────────────────────────────────
 
   parseNonStreamingResponse(json: ProviderResponseDto): ChatResponseDto {
+    this.checkAndThrowError(json)
     this.checkGeminiError(json)
 
     if (!this.isGeminiResponse(json)) {
@@ -251,22 +253,6 @@ export class GeminiProvider extends AIProvider {
   }
 
   private checkGeminiError(json: unknown): void {
-    if (typeof json === 'object' && json !== null && 'error' in json) {
-      const errorObj = (json as { error: unknown }).error
-
-      let message: string
-      if (typeof errorObj === 'string') {
-        message = errorObj
-      } else if (typeof errorObj === 'object' && errorObj !== null) {
-        const err = errorObj as { message?: string; status?: string }
-        message = err.message || err.status || 'Gemini returned an error'
-      } else {
-        message = 'Gemini returned an error'
-      }
-
-      throw new ProviderStreamError(message)
-    }
-
     if (this.isGeminiResponse(json) && json.promptFeedback?.blockReason) {
       const reason = json.promptFeedback.blockReason
       throw new ProviderStreamError(`Prompt blocked: ${reason}`)

@@ -128,9 +128,3 @@ export function filterByTsVersion(entries: LibEntry[], tsVersion?: TsVersionGate
   const available = order[tsVersion]
   return entries.filter(e => !e.since || order[e.since] <= available)
 }
-
-/**
- * WebGPU types — sourced from the @webgpu/types npm package, not TypeScript's
- * bundled libs. Listed here as a marker so consumers know to include it.
- */
-export const WEBGPU_TYPES_PACKAGE = '@webgpu/types'

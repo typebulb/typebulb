@@ -5,7 +5,6 @@
  */
 
 export * from 'typebulb/format'
-export { splitIntoChunks as parseDataChunks } from 'typebulb/format'
 
 import { toBulbData, type BulbData, type ParsedBulb } from 'typebulb/format'
 

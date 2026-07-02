@@ -1,5 +1,57 @@
-export * from './chat.js'
-export * from './stream.js'
+// ── Chat types (shared across all providers) ─────────────────────────
+
+export type ChatRole = 'user' | 'assistant' | 'system'
+
+export interface ChatMessageDto {
+  role: ChatRole
+  content: string
+}
+
+export interface ChatResponseDto {
+  text: string
+  reasoning?: string
+  status?: 'complete' | 'interrupted' | 'failed' | 'cancelled'
+  error?: string
+}
+
+// Generic upstream error
+export interface UpstreamErrorDto {
+  message: string
+  type?: string
+  code?: string
+}
+
+// Stream piece emitted to UI/callers
+export interface ChatStreamPieceDto {
+  text?: string
+  reasoning?: string
+}
+
+/** A provider's raw JSON response body. Each AIProvider narrows it to its own DTO — the interfaces that extend this (see providers/*). */
+export interface ProviderResponseDto { [key: string]: unknown }
+
+/** One raw JSON SSE event from a provider stream. Each AIProvider casts it to its own *SseEventDto (see providers/*). */
+export interface ProviderStreamEventDto { [key: string]: unknown }
+
+// ── SSE streaming types (chat and inference endpoints share the same error format) ──
+
+/** Error codes for streaming API failures */
+export type StreamErrorCode = 'rate_limit' | 'context_exceeded' | 'parse_error' | 'network' | 'unknown'
+
+/** Base error payload (shared between SSE responses and postMessage) */
+export interface StreamErrorPayload {
+  code?: StreamErrorCode
+  message: string
+  retryable?: boolean
+}
+
+/**
+ * SSE error event format (adds type discriminator).
+ * Used by both /api/chat/stream and /api/infer endpoints.
+ */
+export interface StreamErrorDto extends Required<StreamErrorPayload> {
+  type: 'error'
+}
 
 /** AI provider wire protocol identifier. `ollama` and `openai-compat` are CLI-only: both talk to an
  *  OpenAI-compatible endpoint (local, self-hosted, or remote) and are never reachable from the web

@@ -1,5 +1,5 @@
 /**
- * Cross-platform editor launcher — the agent-agnostic sibling of browser.ts's openBrowser.
+ * Cross-platform editor launcher.
  * Any mirror bulb that renders file citations wants click-to-open, so the detached-spawn
  * boilerplate and editor resolution live here once rather than being re-derived per mirror.
  */

@@ -12,6 +12,7 @@ export {
 export { parseSseBlock, consumeSseStream, consumeSseStreamGen, consumeStreamText, streamAiChunks } from './sseParser.js'
 
 // Per-provider wire DTOs + provider implementations.
+export * from './providers/chatCompletions.js'
 export * from './providers/anthropic.js'
 export * from './providers/gemini.js'
 export * from './providers/openAI.js'

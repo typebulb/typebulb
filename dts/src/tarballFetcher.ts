@@ -63,5 +63,3 @@ export class TarballFetcher {
     return files
   }
 }
-
-export const tarballFetcher = new TarballFetcher()

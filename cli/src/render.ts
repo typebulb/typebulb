@@ -8,7 +8,7 @@
  * bundles it (no bare imports) — that's also what makes it `--replace`-able.
  */
 
-import { parseBulb, toLocalBulb, parseDataChunks, parseConfig } from './bulb/bulbParser.js'
+import { parseBulb, toLocalBulb, splitIntoChunks, parseConfig } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
 import { lint } from 'typebulb/lint'
 import { summarizeLint } from './bulb/lintGate.js'
@@ -106,7 +106,7 @@ export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark
     code: compiled.code,
     css: bulb.css,
     html: bulb.html,
-    data: parseDataChunks(bulb.data),
+    data: splitIntoChunks(bulb.data),
     insight: bulb.insight,
     importMap,
     watch: false,

@@ -11,10 +11,10 @@ import { createResolver, type PackageCache, type HttpClient } from 'typebulb/res
  * Subtlety this guards against: an *exact* declared version (`0.3.0`) slips
  * through, because the resolver parses it straight out of the requested esm.sh
  * URL and the CLI's shadow later overwrites it. But a *range* (`^0.3.0` — the
- * npm default) fails `isExactVersion`, so `resolveExactForRoot` gives up,
- * `pinEsmUrl` 404s, and `buildImportMap` throws before the shadow is ever
- * applied. `skipRoots` removes the package from resolution entirely, making
- * both forms behave identically.
+ * npm default) fails `isExactVersion`, so `resolveExactForRoot` gives up and
+ * `buildImportMap` throws before the shadow is ever applied. `skipRoots`
+ * removes the package from resolution entirely, making both forms behave
+ * identically.
  *
  * Also pins the error wording: that throw must NOT blame the network (it
  * historically said "network may be unavailable", which sent debugging in the

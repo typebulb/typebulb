@@ -77,7 +77,6 @@ export function sendTbAi(resolved: ResolvedAIProvider, req: TbAiRequest): Promis
   ]
   const e = req.effort
   return sendAIRequest(resolved, {
-    model: resolved.model,
     messages: chatMessages,
     stream: true,
     effort: (e != null && e >= 0 && e <= 3 ? e : undefined) as EffortLevel | undefined,

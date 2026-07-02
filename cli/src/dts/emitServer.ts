@@ -23,6 +23,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { existsSync } from 'fs'
 import { serverTbTypings } from 'typebulb/dts'
+import { baseCompilerOptions } from './emit.js'
 import { ensureCacheRoot, resolveEmitDir } from '../deps/cache/cacheRoot.js'
 import { ensureBulbServerPackages, extractServerImports } from '../serve/serverDeps.js'
 
@@ -89,22 +90,14 @@ export async function emitServerTypecheck(opts: ServerEmitOptions): Promise<Serv
 }
 
 function buildServerTsconfig(local?: { name: string; typesAbs?: string }) {
+  // The base's `moduleResolution: 'bundler'` (not 'node') matters doubly here: tsc must honour a
+  // package's `exports` map — a server import like `typebulb/servers` is an `exports` subpath,
+  // unresolvable under classic node resolution. Without --replace's `paths` shim (the published
+  // path) it would otherwise TS2307, cascading the import to `any`.
   const compilerOptions: Record<string, unknown> = {
-    target: 'es2023',
-    module: 'esnext',
-    // 'bundler' (not 'node') so tsc honours a package's `exports` map — a server
-    // import like `typebulb/servers` is an `exports` subpath, unresolvable under
-    // classic node resolution. Without --replace's `paths` shim (the published path)
-    // it would otherwise TS2307, cascading the import to `any`.
-    moduleResolution: 'bundler',
+    ...baseCompilerOptions,
     lib: ['ES2023'],
     types: ['node'],
-    strict: true,
-    noEmit: true,
-    skipLibCheck: true,
-    esModuleInterop: true,
-    allowSyntheticDefaultImports: true,
-    forceConsistentCasingInFileNames: true,
   }
 
   // Map the override package (bare name + any subpath) to its local .d.ts so tsc
@@ -116,8 +109,8 @@ function buildServerTsconfig(local?: { name: string; typesAbs?: string }) {
     const fwd = (p: string) => p.replace(/\\/g, '/')
     const distDir = fwd(path.dirname(local.typesAbs))
     const bareTypes = fwd(local.typesAbs).replace(/\.d\.ts$/, '')
-    // No `baseUrl` (deprecated TS 6.0 / removed 7.0, and would fail `check` on the config itself):
-    // these `paths` values are absolute, so tsc resolves them without one.
+    // These `paths` values are absolute, so tsc resolves them without a `baseUrl`
+    // (deliberately absent — see baseCompilerOptions).
     compilerOptions.paths = {
       [local.name]: [bareTypes],
       [`${local.name}/*`]: [`${distDir}/*`],

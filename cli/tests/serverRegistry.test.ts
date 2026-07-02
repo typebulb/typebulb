@@ -98,13 +98,6 @@ describe('serverRegistry', () => {
     expect(readWaitCursor(process.pid, '[embed C')).toBeUndefined()  // unseen pattern ⇒ caller falls back
   })
 
-  // A pre-keying `{ offset }` file still resumes — read as the bare-wait baseline (empty key).
-  it('a legacy single-offset cursor file degrades to the bare-wait baseline', async () => {
-    await writeFile(path.join(dir, `${process.pid}.wait.json`), JSON.stringify({ offset: 321 }))
-    expect(readWaitCursor(process.pid)).toBe(321)
-    expect(readWaitCursor(process.pid, '[embed A')).toBeUndefined()
-  })
-
   // Regression: the prune once parsed `<pid>.wait.json` as a registry entry (a bare `.json` suffix
   // test), found no pid, and unlinked it as garbage — every registry read ate the cursor, so `wait`
   // never resumed. A live server's sidecars must survive the prune untouched.

@@ -54,9 +54,28 @@ export async function consumeSseStream<T = any>(
   onChunk: (chunk: T) => void,
   signal?: AbortSignal
 ): Promise<{ receivedAnyData: boolean }> {
+  // "Any bytes read", not "any chunk parsed" — callers use it to tell a dead connection
+  // (failed) from a stream that died mid-flight (interrupted).
+  let receivedAnyData = false
+  for await (const chunk of consumeSseStreamGen<T>(reader, signal, () => { receivedAnyData = true })) {
+    onChunk(chunk)
+  }
+  return { receivedAnyData }
+}
+
+/**
+ * Pull-based twin of {@link consumeSseStream}: yields each parsed SSE block as it arrives so a
+ * caller can `for await` the stream (and tear it down by breaking the loop). Same framing and
+ * `[DONE]` handling; single-sources the SSE parsing. Cancels the reader on early exit; throws
+ * on abort so callers' error paths fire.
+ */
+export async function* consumeSseStreamGen<T = any>(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+  onBytes?: () => void
+): AsyncGenerator<T> {
   const decoder = new TextDecoder()
   let buffer = ''
-  let receivedAnyData = false
 
   // reader.read() can block for seconds after cancel; race against abort for immediate exit
   const abortPromise: Promise<never> | null = signal
@@ -66,68 +85,20 @@ export async function consumeSseStream<T = any>(
       })
     : null
 
-  while (true) {
-    const readResult = abortPromise
-      ? await Promise.race([reader.read(), abortPromise])
-      : await reader.read()
-    const { done, value } = readResult
-    if (done) {
-      // Process any remaining buffer content
-      if (buffer.trim()) {
-        const parsed = parseSseBlock<T>(buffer)
-        if (parsed !== null && parsed !== 'done') {
-          onChunk(parsed)
-        }
-      }
-      break
-    }
-
-    receivedAnyData = true
-    buffer += decoder.decode(value, { stream: true })
-
-    let { pos: sep, len: sepLen } = findSeparator(buffer)
-    while (sep !== -1) {
-      const block = buffer.slice(0, sep)
-      buffer = buffer.slice(sep + sepLen)
-
-      const parsed = parseSseBlock<T>(block)
-      if (parsed === 'done') {
-        buffer = ''
-        break
-      }
-      if (parsed !== null) {
-        onChunk(parsed)
-      }
-
-      ;({ pos: sep, len: sepLen } = findSeparator(buffer))
-    }
-  }
-
-  return { receivedAnyData }
-}
-
-/**
- * Pull-based twin of {@link consumeSseStream}: yields each parsed SSE block as it arrives so a
- * caller can `for await` the stream (and tear it down by breaking the loop). Same framing and
- * `[DONE]` handling; single-sources the SSE parsing. Cancels the reader on early exit.
- */
-export async function* consumeSseStreamGen<T = any>(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal?: AbortSignal
-): AsyncGenerator<T> {
-  const decoder = new TextDecoder()
-  let buffer = ''
   try {
     while (true) {
-      if (signal?.aborted) return
-      const { done, value } = await reader.read()
+      const { done, value } = abortPromise
+        ? await Promise.race([reader.read(), abortPromise])
+        : await reader.read()
       if (done) {
+        // Process any remaining buffer content
         if (buffer.trim()) {
           const parsed = parseSseBlock<T>(buffer)
           if (parsed !== null && parsed !== 'done') yield parsed
         }
         return
       }
+      onBytes?.()
       buffer += decoder.decode(value, { stream: true })
       let { pos: sep, len: sepLen } = findSeparator(buffer)
       while (sep !== -1) {

@@ -1,8 +1,8 @@
 import { VersionResolver } from './versionResolver.js'
-import type { PackageCache, PackageRanges } from './types.js'
+import type { PackageRanges } from './types.js'
 import { PackageRef } from './packageRef.js'
-import { attempt } from './attempt.js'
 import { CdnClient } from './cdnClient.js'
+import { ESM_HOST } from './cdnConstants.js'
 import { PeerResolver, peerNames, depNames, type ResolvedRoot, type PackageFlags } from './peerResolver.js'
 import { init, parse } from 'es-module-lexer'
 
@@ -15,7 +15,7 @@ export class PackageService {
     /\bexport\s+[^'";]*?from\s*['"]([^'"]+)['"]/g
   ]
 
-  constructor(private version: VersionResolver, private cdn: CdnClient, private peer: PeerResolver, private cache: PackageCache) {}
+  constructor(private version: VersionResolver, private cdn: CdnClient, private peer: PeerResolver) {}
 
   /** Fast sync import extraction using regex (for quick comparisons) */
   extractImportsSync(source: string): string[] {
@@ -67,7 +67,7 @@ export class PackageService {
     )
 
     const entries = this.buildEntries(
-      [...directImports, ...autoAddedPeers.map(p => p.name)], allRoots, flags, ranges
+      [...directImports, ...autoAddedPeers.map(p => p.name)], allRoots, flags
     )
 
     return {
@@ -76,39 +76,28 @@ export class PackageService {
     }
   }
 
+  /** Resolution is `resolveExactForRoot`'s pipeline or a clear failure — never an unpinned range.
+   *  (Its final step already probes esm.sh, exact-version-guarded, so a registry outage still
+   *  resolves when the CDN redirect names an exact version.) */
   private async resolveVersion(name: string, ranges: PackageRanges): Promise<string> {
     const range = ranges[name]
-    const pkgSpec = range ? `${name}@${range}` : name
-    let version = await this.version.resolveExactForRoot(name, range)
-
+    const version = await this.version.resolveExactForRoot(name, range)
     if (!version) {
-      const pinned = await attempt(() => this.cdn.pinEsmUrl(pkgSpec))
-      if (!pinned) {
-        // Don't claim "network down" — the usual cause is a range that matches
-        // no published version (e.g. ^0.3.0 before 0.3.0 ships), not an outage.
-        throw new Error(
-          `Cannot resolve ${pkgSpec}: no matching version is published (the package or version may not exist, or the registry was unreachable).`,
-        )
-      }
-      version = PackageRef.versionFromUrl(pinned)
-      if (version && range) {
-        await attempt(() => this.cache.setPinnedExact(name, range, version!))
-      }
+      // Don't claim "network down" — the usual cause is a range that matches
+      // no published version (e.g. ^0.3.0 before 0.3.0 ships), not an outage.
+      throw new Error(
+        `Cannot resolve ${range ? `${name}@${range}` : name}: no matching version is published (the package or version may not exist, or the registry was unreachable).`,
+      )
     }
-
-    if (!version) {
-      throw new Error(`Cannot resolve ${pkgSpec}: no concrete version found.`)
-    }
-
     return version
   }
 
-  private buildEntries(imports: string[], roots: ResolvedRoot[], flags: Map<string, PackageFlags>, ranges: PackageRanges) {
+  private buildEntries(imports: string[], roots: ResolvedRoot[], flags: Map<string, PackageFlags>) {
     const rootMap = new Map(roots.map(r => [r.name, r]))
 
     const versionedPkg = (pkg: string) => {
       const root = rootMap.get(PackageRef.rootOf(pkg))!
-      return new PackageRef(pkg).withPreferredVersion(root.version, ranges[root.name]).format()
+      return new PackageRef(pkg).withVersion(root.version).format()
     }
 
     // Packages that must be singletons: peer roots OR shared deps
@@ -180,7 +169,7 @@ export class PackageService {
       if (!addedPkgs.has(name)) {
         entries.push([name, this.cdn.buildEsmUrl(versionedPkg(name), {})])
       }
-      entries.push([`${name}/`, `${this.cdn.esmHost}/${versionedPkg(name)}/`])
+      entries.push([`${name}/`, `${ESM_HOST}/${versionedPkg(name)}/`])
     }
 
     return entries

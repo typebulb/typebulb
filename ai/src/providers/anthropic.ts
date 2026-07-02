@@ -3,8 +3,6 @@
  */
 import type {
   ChatMessageDto,
-  UpstreamErrorDto,
-  EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
@@ -163,8 +161,8 @@ export class AnthropicProvider extends AIProvider {
       payload.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
     }
 
-    if (this.isReasoningEnabled(opts)) {
-      const depth = opts!.effort!
+    const depth = opts?.effort
+    if (depth !== undefined) {
       if (this.isModernModel(model)) {
         // Opus 4.6+: adaptive thinking + effort parameter.
         // 0 = minimal: send the lowest effort with NO `thinking` directive. On adaptive models where
@@ -203,10 +201,6 @@ export class AnthropicProvider extends AIProvider {
     return payload
   }
 
-  parseError(errorText: string, status: number): UpstreamErrorDto {
-    return this.parseJsonError(errorText, status)
-  }
-
   // ── Response parsing ─────────────────────────────────────────────
 
   parseNonStreamingResponse(json: ProviderResponseDto): ChatResponseDto {
@@ -238,14 +232,6 @@ export class AnthropicProvider extends AIProvider {
         if (json.delta.type === 'thinking_delta') {
           return { reasoning: json.delta.thinking || '' }
         }
-        return null
-
-      case 'message_start':
-      case 'content_block_start':
-      case 'content_block_stop':
-      case 'message_delta':
-      case 'message_stop':
-      case 'ping':
         return null
 
       default:

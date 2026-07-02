@@ -83,9 +83,8 @@ type WaitCursors = Record<string, number>
 
 function readWaitCursors(pid: number): WaitCursors {
   try {
-    const raw = JSON.parse(readFileSync(waitCursorPath(pid), 'utf8')) as { cursors?: unknown; offset?: unknown }
+    const raw = JSON.parse(readFileSync(waitCursorPath(pid), 'utf8')) as { cursors?: unknown }
     if (raw.cursors && typeof raw.cursors === 'object') return raw.cursors as WaitCursors
-    if (typeof raw.offset === 'number') return { '': raw.offset }   // legacy single-offset file ⇒ bare baseline
     return {}
   } catch {
     return {}
@@ -282,22 +281,16 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
       // and must never be parsed — or pruned — as an entry: a bare `.json` suffix test once made the
       // prune eat every wait cursor as a "garbage entry" on each registry read.
       if (!/^\d+\.json$/.test(name)) return
-      const p = path.join(serversDir(), name)
+      const pid = parseInt(name, 10) // the filename IS the pid — the key entry + sidecars share
       let entry: BulbServer | undefined
       try {
-        entry = JSON.parse(await readFile(p, 'utf8')) as BulbServer
+        entry = JSON.parse(await readFile(path.join(serversDir(), name), 'utf8')) as BulbServer
       } catch {
-        await unlink(p).catch(() => {}) // unreadable/garbage ⇒ drop
+        await unregisterServer(pid) // unreadable/garbage ⇒ drop it and its sidecars
         return
       }
       if (entry && typeof entry.pid === 'number' && isAlive(entry.pid)) live.push(entry)
-      else {
-        await unlink(p).catch(() => {})
-        if (entry?.pid) {
-          await unlink(serverLogPath(entry.pid)).catch(() => {})
-          await unlink(waitCursorPath(entry.pid)).catch(() => {})
-        }
-      }
+      else await unregisterServer(pid)
     }),
   )
   const scoped = cwd ? live.filter(s => s.agent == null && isUnderProject(s.file, cwd)) : live

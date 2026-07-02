@@ -1,7 +1,7 @@
 import { resolve as resolveExports } from 'resolve.exports'
-import { PackageRef, type CdnClient } from 'typebulb/resolver'
-import { TypeProvider, type TypeFetchResult } from './typeProvider.js'
-import { DECLARATION_EXTENSIONS, DTS_REGEX, makeDeclarationCandidates } from './dtsConfig.js'
+import { PackageRef, normalizeRelative, ensureLeadingDotSlash, type CdnClient } from 'typebulb/resolver'
+import type { TypeProvider, TypeFetchResult } from './typeProvider.js'
+import { DECLARATION_EXTENSIONS, DTS_REGEX, isDtsFile, declarationCandidatesFor } from './dtsConfig.js'
 import { fetchWithRetry } from './httpFetch.js'
 import type { FetchDtsWithCache } from './fetchDts.js'
 
@@ -16,9 +16,25 @@ type PackageJson = {
   exports?: unknown
 }
 
-export class TypescriptProvider extends TypeProvider {
-  constructor(fetchDts: FetchDtsWithCache, private cdnClient: CdnClient) {
-    super(fetchDts)
+export class TypescriptProvider implements TypeProvider {
+  constructor(private fetchDts: FetchDtsWithCache, private cdnClient: CdnClient) {}
+
+  private async tryUrls(urls: string[]) {
+    for (const url of urls) {
+      const out = await this.fetchDts(url)
+      if (!out) continue
+
+      if (this.looksLikeDts(out.dts)) return out
+      if (isDtsFile(out.url)) return out
+    }
+    return undefined
+  }
+
+  private looksLikeDts(text: string) {
+    if (/^\s*export\s*\{\s*\}\s*;?\s*$/m.test(text)) return true
+    return /declare\s+(module|namespace|class|interface|function|const|var|let)/.test(text)
+      || /interface\s+\w+/.test(text)
+      || /type\s+\w+\s*=/.test(text)
   }
 
   private async loadPackageAtVersionedRoot(root: string, version?: string) {
@@ -53,17 +69,17 @@ export class TypescriptProvider extends TypeProvider {
     fetchCandidate: (rel: string) => Promise<TypeFetchResult | undefined>,
   ) {
     if (sel.kind === 'types') {
-      const clean = this.cdnClient.normalizeRelative(sel.path)
+      const clean = normalizeRelative(sel.path)
       if (!clean || clean === '/' || clean === '.') {
         return this.tryUntilSuccess([...DECLARATION_EXTENSIONS], fetchCandidate)
       }
       if (!DTS_REGEX.test(clean)) {
-        const res = await this.tryUntilSuccess(this.declarationCandidatesFor(clean), fetchCandidate)
+        const res = await this.tryUntilSuccess(declarationCandidatesFor(clean), fetchCandidate)
         if (res) return res
       }
       return fetchCandidate(clean)
     }
-    const others = this.declarationCandidatesFor(sel.path)
+    const others = declarationCandidatesFor(sel.path)
     return this.tryUntilSuccess([...DECLARATION_EXTENSIONS, ...others], fetchCandidate)
   }
 
@@ -105,7 +121,7 @@ export class TypescriptProvider extends TypeProvider {
       const fetcher = (rel: string) => this.fetchCandidateFrom(baseDir, parsed.name, rel)
 
       if (parsed.subpath) {
-        const key = this.cdnClient.ensureLeadingDotSlash(parsed.subpath)
+        const key = ensureLeadingDotSlash(parsed.subpath)
         const expPath = this.resolveExportsPath(pkg, key)
 
         if (expPath) {
@@ -113,7 +129,7 @@ export class TypescriptProvider extends TypeProvider {
           if (res) return { ...res, resolvedPkg: resolvedFullPkg }
         }
 
-        const res = await this.tryUntilSuccess(this.declarationCandidatesFor(key), fetcher)
+        const res = await this.tryUntilSuccess(declarationCandidatesFor(key), fetcher)
         if (res) return { ...res, resolvedPkg: resolvedFullPkg }
       }
 
@@ -136,20 +152,9 @@ export class TypescriptProvider extends TypeProvider {
   }
 
   private async fetchCandidateFrom(baseDir: string, root: string, rel: string) {
-    const relNorm = this.cdnClient.normalizeRelative(rel)
+    const relNorm = normalizeRelative(rel)
     const url = new URL(relNorm, baseDir).toString()
-    const out = await this.fetchDtsText(url)
+    const out = await this.tryUrls([url])
     return out ? { dts: out.dts, url: out.url, resolvedPkg: root } : undefined
-  }
-
-  declarationCandidatesFor(runtimePath: string) {
-    if (!runtimePath || runtimePath === './' || runtimePath === '/') {
-      return [...DECLARATION_EXTENSIONS]
-    }
-    const base = runtimePath.replace(/\.(mjs|cjs|js|mts|cts|ts)$/i, '')
-    const candidates = makeDeclarationCandidates(base)
-    const trailingBase = base.endsWith('/') ? base : `${base}/`
-    candidates.push(...makeDeclarationCandidates(`${trailingBase}index`))
-    return candidates
   }
 }

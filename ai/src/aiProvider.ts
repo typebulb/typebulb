@@ -53,7 +53,9 @@ export abstract class AIProvider {
     stream: boolean
   ): unknown
 
-  abstract parseError(errorText: string, status: number): UpstreamErrorDto
+  parseError(errorText: string, status: number): UpstreamErrorDto {
+    return this.parseJsonError(errorText, status)
+  }
 
   // ── Response parsing (inbound) ───────────────────────────────────
 
@@ -72,10 +74,6 @@ export abstract class AIProvider {
 
   // ── Shared helpers ───────────────────────────────────────────────
 
-  protected isReasoningEnabled(opts: { effort?: EffortLevel } | undefined): boolean {
-    return opts?.effort !== undefined
-  }
-
   /** Split system messages from conversation messages. */
   protected extractSystemMessages(messages: ChatMessageDto[], separator = '\n\n'): {
     system: string | undefined
@@ -91,7 +89,7 @@ export abstract class AIProvider {
   /**
    * Parse JSON error response with nested error object (common OpenAI/Anthropic format)
    */
-  protected parseJsonError(errorText: string, status: number, includeCode = false): UpstreamErrorDto {
+  protected parseJsonError(errorText: string, status: number): UpstreamErrorDto {
     if (!errorText) {
       return { message: `HTTP ${status}` }
     }
@@ -99,14 +97,10 @@ export abstract class AIProvider {
     try {
       const parsed = JSON.parse(errorText)
       if (parsed.error && typeof parsed.error === 'object') {
-        const result: UpstreamErrorDto = {
+        return {
           message: parsed.error.message || `HTTP ${status}`,
           type: parsed.error.type
         }
-        if (includeCode) {
-          result.code = parsed.error.code
-        }
-        return result
       }
       if (parsed.message) {
         return { message: parsed.message }
@@ -123,7 +117,7 @@ export abstract class AIProvider {
    * - Unified format: { type: 'error', code, message, retryable }
    * - Provider format: { error: "message" } or { error: { message: "..." } }
    */
-  private checkAndThrowError(json: unknown): void {
+  protected checkAndThrowError(json: unknown): void {
     if (typeof json !== 'object' || json === null) return
     const obj = json as Record<string, unknown>
     // Unified error format (used by both chat and infer endpoints)

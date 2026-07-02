@@ -38,7 +38,6 @@ export interface ResolvedAIProvider {
 
 /** Options for sending AI requests */
 export interface SendAIRequestOpts {
-  model: string
   messages: ChatMessageDto[]
   stream: boolean
   effort?: EffortLevel
@@ -68,13 +67,13 @@ export async function sendAIRequest(
   opts: SendAIRequestOpts
 ): Promise<Response> {
   const spec = getProvider(provider.protocol)
-  const path = spec.getPath(opts.model, opts.stream)
+  const path = spec.getPath(provider.model, opts.stream)
   const url = joinUrl(provider.baseUrl, path)
 
   const headers = spec.buildHeaders(provider.apiKey, opts.origin)
   const payload = spec.buildPayload(
     opts.messages,
-    opts.model,
+    provider.model,
     { effort: opts.effort, webSearch: opts.webSearch },
     opts.stream
   ) as Record<string, unknown>

@@ -1,8 +1,7 @@
 import * as path from 'path'
-import { EventEmitter } from 'events'
 import { loadEnv, reportEnv } from '../env.js'
 import { readBulb, importServerModule } from '../pipeline.js'
-import { watchBulb } from '../serve/watcher.js'
+import { watchPath } from '../serve/watcher.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -25,15 +24,16 @@ export async function runConsole(bulbPath: string, watch: boolean, mode: string 
 
   if (watch) {
     console.log('Watching for changes...\n')
-    const fileChangeEmitter = new EventEmitter()
-    fileChangeEmitter.on('reload', async () => {
-      try {
-        console.log('Re-running...')
-        await run()
-      } catch (e) {
-        console.error('Error:', e)
-      }
+    watchPath({
+      target: bulbPath,
+      onChange: async () => {
+        try {
+          console.log('Re-running...')
+          await run()
+        } catch (e) {
+          console.error('Error:', e)
+        }
+      },
     })
-    watchBulb({ bulbPath, emitter: fileChangeEmitter })
   }
 }

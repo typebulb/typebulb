@@ -3,7 +3,6 @@
  */
 import type {
   ChatMessageDto,
-  UpstreamErrorDto,
   EffortLevel,
   ChatStreamPieceDto,
   ChatResponseDto,
@@ -85,62 +84,17 @@ interface OpenAIResponseContentLocation extends OpenAIResponseItemLocation {
   content_index: number
 }
 
-// Event type definitions using composition
-export type OpenAIResponseCreatedEvent = OpenAIResponseEventBase & {
-  type: 'response.created'
-  response: {
-    id: string
-    object: 'response'
-    created_at: number
-    model: string
-  }
-}
-
-export type OpenAIResponseInProgressEvent = OpenAIResponseEventBase & {
-  type: 'response.in_progress'
-}
-
-export type OpenAIResponseOutputItemAddedEvent = OpenAIResponseEventBase & {
-  type: 'response.output_item.added'
-  output_index: number
-  item: OpenAIResponseOutputItem
-}
-
-export type OpenAIResponseOutputItemDoneEvent = OpenAIResponseEventBase & {
-  type: 'response.output_item.done'
-  output_index: number
-  item: OpenAIResponseOutputItem
-}
-
-export type OpenAIResponseContentPartAddedEvent = OpenAIResponseEventBase & OpenAIResponseContentLocation & {
-  type: 'response.content_part.added'
-  part: OpenAIResponseOutputText
-}
-
-export type OpenAIResponseContentPartDoneEvent = OpenAIResponseEventBase & OpenAIResponseContentLocation & {
-  type: 'response.content_part.done'
-  part: OpenAIResponseOutputText
-}
-
+// Event type definitions using composition — only the events we handle are typed; everything else
+// (created/in_progress/output_item/content_part/done/web_search/annotation events) falls through
+// the catch-all and is ignored.
 export type OpenAIResponseOutputTextDeltaEvent = OpenAIResponseEventBase & OpenAIResponseContentLocation & {
   type: 'response.output_text.delta'
   delta: string
 }
 
-export type OpenAIResponseOutputTextDoneEvent = OpenAIResponseEventBase & OpenAIResponseContentLocation & {
-  type: 'response.output_text.done'
-  text: string
-}
-
 export type OpenAIResponseReasoningSummaryTextDeltaEvent = OpenAIResponseEventBase & OpenAIResponseItemLocation & {
   type: 'response.reasoning_summary_text.delta'
   delta: string
-  summary_index: number
-}
-
-export type OpenAIResponseReasoningSummaryTextDoneEvent = OpenAIResponseEventBase & OpenAIResponseItemLocation & {
-  type: 'response.reasoning_summary_text.done'
-  text: string
   summary_index: number
 }
 
@@ -163,43 +117,14 @@ export type OpenAIResponseFailedEvent = OpenAIResponseEventBase & {
   type: 'response.failed'
 }
 
-// Web search events
-export type OpenAIResponseWebSearchInProgressEvent = OpenAIResponseEventBase & {
-  type: 'response.web_search_call.in_progress'
-}
-
-export type OpenAIResponseWebSearchSearchingEvent = OpenAIResponseEventBase & {
-  type: 'response.web_search_call.searching'
-}
-
-export type OpenAIResponseWebSearchCompletedEvent = OpenAIResponseEventBase & {
-  type: 'response.web_search_call.completed'
-}
-
-// Annotation events
-export type OpenAIResponseAnnotationAddedEvent = OpenAIResponseEventBase & OpenAIResponseContentLocation & {
-  type: 'response.output_text.annotation.added'
-}
-
-// Union of all OpenAI Responses API events
+// Union of OpenAI Responses API events (handled events typed, the rest catch-all)
 export type OpenAIResponseSseEventDto =
-  | OpenAIResponseCreatedEvent
-  | OpenAIResponseInProgressEvent
-  | OpenAIResponseOutputItemAddedEvent
-  | OpenAIResponseOutputItemDoneEvent
-  | OpenAIResponseContentPartAddedEvent
-  | OpenAIResponseContentPartDoneEvent
   | OpenAIResponseOutputTextDeltaEvent
-  | OpenAIResponseOutputTextDoneEvent
-  | OpenAIResponseAnnotationAddedEvent
   | OpenAIResponseReasoningSummaryTextDeltaEvent
-  | OpenAIResponseReasoningSummaryTextDoneEvent
-  | OpenAIResponseWebSearchInProgressEvent
-  | OpenAIResponseWebSearchSearchingEvent
-  | OpenAIResponseWebSearchCompletedEvent
   | OpenAIResponseCompletedEvent
   | OpenAIResponseErrorEvent
   | OpenAIResponseFailedEvent
+  | { type: string }
 
 // ── Provider implementation ──────────────────────────────────────────
 
@@ -244,17 +169,13 @@ export class OpenAIProvider extends AIProvider {
       payload.tools = [{ type: 'web_search' }]
     }
 
-    if (this.isReasoningEnabled(opts)) {
-      const effort = this.effortMap[opts!.effort!]
+    if (opts?.effort !== undefined) {
+      const effort = this.effortMap[opts.effort]
       // `summary: 'auto'` requests a reasoning summary; at `none` there's no reasoning to summarize.
       payload.reasoning = effort === 'none' ? { effort } : { effort, summary: 'auto' }
     }
 
     return payload
-  }
-
-  parseError(errorText: string, status: number): UpstreamErrorDto {
-    return this.parseJsonError(errorText, status, true)
   }
 
   // ── Response parsing ─────────────────────────────────────────────
@@ -288,11 +209,7 @@ export class OpenAIProvider extends AIProvider {
   protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
     if (!this.isResponsesApiEvent(json)) return null
 
-    const eventType = json.type
-    switch (eventType) {
-      case 'error':
-        return null
-
+    switch (json.type) {
       case 'response.failed': {
         const resp = (json as any).response
         const errObj = resp?.error
@@ -302,25 +219,10 @@ export class OpenAIProvider extends AIProvider {
       }
 
       case 'response.output_text.delta':
-        return { text: json.delta }
+        return { text: (json as OpenAIResponseOutputTextDeltaEvent).delta }
 
       case 'response.reasoning_summary_text.delta':
-        return { reasoning: json.delta }
-
-      case 'response.created':
-      case 'response.in_progress':
-      case 'response.output_item.added':
-      case 'response.output_item.done':
-      case 'response.content_part.added':
-      case 'response.content_part.done':
-      case 'response.output_text.done':
-      case 'response.output_text.annotation.added':
-      case 'response.reasoning_summary_text.done':
-      case 'response.completed':
-      case 'response.web_search_call.in_progress':
-      case 'response.web_search_call.searching':
-      case 'response.web_search_call.completed':
-        return null
+        return { reasoning: (json as OpenAIResponseReasoningSummaryTextDeltaEvent).delta }
 
       default:
         return null

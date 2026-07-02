@@ -38,13 +38,17 @@ export const typebulbShim = `
   const messageHandlers = new Set();
   const parseMsg = (s) => { if (s === '' || s == null) return undefined; try { return JSON.parse(s); } catch { return s; } };
 
+  // The trust gate denies privileged routes with a plain-text 403 naming --trust;
+  // surface that as-is rather than a JSON-parse miss on a non-JSON body.
+  const deny403 = async (resp, what) => {
+    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || (what + ' is blocked — re-run with --trust'));
+  };
+
   // Filesystem API - calls back to the local server.
   // The server returns raw bytes (no JSON envelope); read() decodes as UTF-8.
   const failIfNotOk = async (resp, action, path) => {
     if (resp.ok) return;
-    // The trust gate denies privileged routes with a plain-text 403 naming --trust;
-    // surface that as-is rather than a JSON-parse miss on a non-JSON body.
-    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.fs is blocked — re-run with --trust');
+    await deny403(resp, 'tb.fs');
     const err = await resp.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to ' + action + ' file: ' + path);
   };
@@ -147,44 +151,37 @@ export const typebulbShim = `
     }
   }
 
-  // tb.ai(): non-streaming, resolves with the full { text } (unchanged 90% path).
-  const aiCall = async ({ messages, system, effort, provider, model, webSearch, signal } = {}) => {
-    if (isEmbedded) throw embedErr('tb.ai()');
+  // Shared /__ai transport: embed guard, POST (stream:true flags the NDJSON path — JSON.stringify
+  // drops the key when undefined, so the non-streaming body is unchanged), 403 → trust hint.
+  const aiFetch = async (what, { messages, system, effort, provider, model, webSearch, signal } = {}, stream) => {
+    if (isEmbedded) throw embedErr(what);
     const resp = await fetch('/__ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, system, effort, provider, model, webSearch }),
+      body: JSON.stringify({ messages, system, effort, provider, model, webSearch, stream }),
       signal
     });
-    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
+    await deny403(resp, what);
+    return resp;
+  };
+  const aiError = (data) => {
+    const err = new Error(data.message || 'tb.ai() call failed');
+    err.code = data.code || 'unknown';
+    err.retryable = !!data.retryable;
+    return err;
+  };
+  // tb.ai(): non-streaming, resolves with the full { text } (unchanged 90% path).
+  const aiCall = async (opts) => {
+    const resp = await aiFetch('tb.ai()', opts, undefined);
     const data = await resp.json();
-    if (!resp.ok) {
-      const err = new Error(data.message || 'tb.ai() call failed');
-      err.code = data.code || 'unknown';
-      err.retryable = !!data.retryable;
-      throw err;
-    }
+    if (!resp.ok) throw aiError(data);
     return data;
   };
   // tb.ai.stream(): async iterable of AiChunk ({ kind:'text'|'reasoning', text }). Same idiom as a
   // streaming tb.server.<gen>(). Break the loop (or abort the signal) to cancel.
   const aiStream = (opts = {}) => (async function* () {
-    if (isEmbedded) throw embedErr('tb.ai.stream()');
-    const { messages, system, effort, provider, model, webSearch, signal } = opts;
-    const resp = await fetch('/__ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, system, effort, provider, model, webSearch, stream: true }),
-      signal
-    });
-    if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || 'tb.ai() is blocked — re-run with --trust');
-    if (!resp.ok && !isStreamResp(resp)) {
-      const data = await resp.json().catch(() => ({}));
-      const err = new Error(data.message || 'tb.ai() call failed');
-      err.code = data.code || 'unknown';
-      err.retryable = !!data.retryable;
-      throw err;
-    }
+    const resp = await aiFetch('tb.ai.stream()', opts, true);
+    if (!resp.ok && !isStreamResp(resp)) throw aiError(await resp.json().catch(() => ({})));
     yield* readStream(resp);
   })();
   const ai = Object.assign(aiCall, { stream: aiStream });
@@ -193,9 +190,7 @@ export const typebulbShim = `
   // (a streamed async-generator export). The server picks by export kind; this stays graceful if
   // they're mismatched (await a stream → array of chunks; for-await a normal result → one value).
   const serverCall = (name, args) => {
-    const ensureOk403 = async (resp) => {
-      if (resp.status === 403) throw new Error((await resp.text().catch(() => '')) || ('tb.server.' + name + '() is blocked — re-run with --trust'));
-    };
+    const what = 'tb.server.' + name + '()';
     let respP = null;
     const start = () => respP || (respP = fetch('/__api/' + name, {
       method: 'POST',
@@ -203,18 +198,18 @@ export const typebulbShim = `
       body: JSON.stringify({ args })
     }));
     const single = async () => {
-      if (isEmbedded) throw embedErr('tb.server.' + name + '()');
+      if (isEmbedded) throw embedErr(what);
       const resp = await start();
-      await ensureOk403(resp);
+      await deny403(resp, what);
       if (isStreamResp(resp)) { const out = []; for await (const v of readStream(resp)) out.push(v); return out; }
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'API call failed');
       return data.result;
     };
     const iterate = async function* () {
-      if (isEmbedded) throw embedErr('tb.server.' + name + '()');
+      if (isEmbedded) throw embedErr(what);
       const resp = await start();
-      await ensureOk403(resp);
+      await deny403(resp, what);
       if (isStreamResp(resp)) { yield* readStream(resp); return; }
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'API call failed');

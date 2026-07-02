@@ -1,4 +1,5 @@
 import { LRUCache } from 'lru-cache'
+import { DtsConfig } from './dtsConfig.js'
 import type { DtsCache } from './cache.js'
 
 export type FetchOut = { dts: string; url: string } | undefined
@@ -9,15 +10,14 @@ export type FetchOut = { dts: string; url: string } | undefined
  * dedup map. The closure isolates cache state per resolver instance.
  */
 export function createFetchDts(cache: DtsCache) {
-  const negativeCache = new LRUCache<string, number>({ ttl: 10_000, max: 500 })
+  const negativeCache = new LRUCache<string, true>({ ttl: DtsConfig.negativeTtlMs, max: 500 })
   const inFlight = new Map<string, Promise<FetchOut>>()
 
   return async function fetchDtsWithCache(url: string): Promise<FetchOut> {
     try {
       if (await cache.isNegative(url)) return undefined
 
-      const neg = negativeCache.get(url)
-      if (neg && Date.now() - neg < 10_000) return undefined
+      if (negativeCache.has(url)) return undefined
 
       const cached = await cache.getCachedFile(url)
       if (cached) return { dts: cached, url }
@@ -29,7 +29,7 @@ export function createFetchDts(cache: DtsCache) {
         const resp = await fetch(url, { cache: 'no-store' })
         if (!resp.ok) {
           if (resp.status === 404) {
-            negativeCache.set(url, Date.now())
+            negativeCache.set(url, true)
             await cache.recordNegative(url)
           }
           return undefined

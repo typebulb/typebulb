@@ -1,19 +1,15 @@
 import { PackageRef, semverService, type CdnClient } from 'typebulb/resolver'
-import { TypeProvider } from './typeProvider.js'
-import { makeDeclarationCandidates } from './dtsConfig.js'
+import type { TypeProvider } from './typeProvider.js'
+import { declarationCandidatesFor } from './dtsConfig.js'
 import { TarballFetcher } from './tarballFetcher.js'
 import type { DtsCache } from './cache.js'
-import type { FetchDtsWithCache } from './fetchDts.js'
 
-export class DefinitelyTypedProvider extends TypeProvider {
+export class DefinitelyTypedProvider implements TypeProvider {
   constructor(
-    fetchDts: FetchDtsWithCache,
     private cdnClient: CdnClient,
     private cache: DtsCache,
     private tarballFetcher = new TarballFetcher(),
-  ) {
-    super(fetchDts)
-  }
+  ) {}
 
   private typesNameCandidates(name: string): string[] {
     const base = name.startsWith('@') ? name.slice(1).replace('/', '__') : name
@@ -38,19 +34,15 @@ export class DefinitelyTypedProvider extends TypeProvider {
 
   /**
    * Declaration-file candidates for a subpath, keyed as the tarball stores them
-   * (package-relative, no leading `./`). A runtime extension is stripped first —
-   * `examples/jsm/controls/OrbitControls.js` lives at `OrbitControls.d.ts`, not
-   * `OrbitControls.js.d.ts` — mirroring TypescriptProvider.declarationCandidatesFor.
-   * The raw-subpath forms are kept as a fallback for paths whose dot isn't a JS
-   * extension (e.g. a literal `foo.bar` directory).
+   * (package-relative, no leading `./`). `declarationCandidatesFor` strips a
+   * runtime extension first — `examples/jsm/controls/OrbitControls.js` lives at
+   * `OrbitControls.d.ts`, not `OrbitControls.js.d.ts`. The raw-subpath forms are
+   * kept as a fallback for paths whose dot isn't a JS extension (e.g. a literal
+   * `foo.bar` directory).
    */
   private subpathCandidates(subpath: string): string[] {
     const base = subpath.replace(/\.(mjs|cjs|js|mts|cts|ts)$/i, '')
-    const out = [
-      ...makeDeclarationCandidates(base),
-      `${base}/index.d.ts`,
-      `${base}/index.d.mts`,
-    ]
+    const out = declarationCandidatesFor(subpath)
     if (base !== subpath) out.push(`${subpath}.d.ts`, `${subpath}/index.d.ts`)
     return out
   }

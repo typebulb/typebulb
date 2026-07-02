@@ -1,6 +1,6 @@
 export type Version = string
 
-import { gt, satisfies as satisfiesFn, maxSatisfying, major, prerelease, rsort, valid } from 'semver'
+import { gt, satisfies as satisfiesFn, maxSatisfying, major, valid } from 'semver'
 
 export class SemverService {
 
@@ -12,18 +12,6 @@ export class SemverService {
   satisfies(range: string, v: Version): boolean {
     if (!range || !range.trim()) return true
     return Boolean(satisfiesFn(v, range, { includePrerelease: true }))
-  }
-
-  pickMaxSatisfying(versions: Version[], range: string): Version | undefined {
-    if (!versions?.length) return undefined
-    const res = maxSatisfying(versions, range, { includePrerelease: true }) as string | null
-    return res === null ? undefined : res
-  }
-
-  pickLatest(versions: Version[]): Version | undefined {
-    if (!versions?.length) return undefined
-    const sorted = rsort(versions)
-    return sorted[0]
   }
 
   selectBestVersion(
@@ -58,10 +46,6 @@ export class SemverService {
 
   majorOf(v: Version): number {
     return major(v)
-  }
-
-  isPrerelease(version: Version): boolean {
-    return prerelease(version) !== null
   }
 
   isExactVersion(version: string): boolean {

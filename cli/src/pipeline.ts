@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
-import { parseBulb, toLocalBulb, parseDataChunks, parseConfig, validateBulbStructure, type LocalBulb } from './bulb/bulbParser.js'
+import { parseBulb, toLocalBulb, splitIntoChunks, parseConfig, validateBulbStructure, type LocalBulb } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
 import { assertDeclaredImports } from './bulb/lintGate.js'
 import { packageService } from './deps/resolver.js'
@@ -68,7 +68,7 @@ export async function importServerModule(serverSource: string, basePath: string,
 
 export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, serverCacheDir: string) {
   const { bulb, config } = await readBulb(bulbPath)
-  const dataChunks = parseDataChunks(bulb.data)
+  const dataChunks = splitIntoChunks(bulb.data)
 
   // Enforce the CLI's authored-config contract before compiling — every bare client import declared in
   // config.json `dependencies`, else the import-driven resolver silently CDN-resolves "latest" and the

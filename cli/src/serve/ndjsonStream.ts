@@ -28,7 +28,9 @@ interface StreamErrorEnvelope {
   retryable: boolean
 }
 
-function toStreamError(e: unknown): StreamErrorEnvelope {
+/** Project a caught unknown onto the wire error shape ({message, code, retryable}) shared by the
+ *  NDJSON error envelope and the `/__ai` JSON error body (TB-Server-Streaming.md). */
+export function toStreamError(e: unknown): StreamErrorEnvelope {
   if (e instanceof ProviderStreamError) {
     return { message: e.message, code: e.code, retryable: e.retryable }
   }

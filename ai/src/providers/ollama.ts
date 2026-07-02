@@ -1,6 +1,6 @@
 /**
  * A generic OpenAI-compatible Chat Completions client (`/v1/chat/completions`, choices[]) — wire
- * types and provider implementation. Backs two CLI-only protocols (see
+ * types and parsing shared via ChatCompletionsProvider. Backs two CLI-only protocols (see
  * runtime/cli/src/serve/server.ts `resolveLocalProvider`):
  *   - `ollama`        — zero-config preset: keyless, base URL OLLAMA_HOST / http://localhost:11434.
  *   - `openai-compat` — generic: base URL TB_AI_BASE_URL, optional key TB_AI_API_KEY (LM Studio,
@@ -12,51 +12,9 @@
  * first-class `message.thinking`, `num_ctx`/`think` options) is out of scope for tb.ai — reach it
  * via a server.ts export. See runtime-specs/TB-Custom-Providers.md.
  */
-import type {
-  ChatMessageDto,
-  UpstreamErrorDto,
-  ChatStreamPieceDto,
-  ChatResponseDto,
-  ProviderResponseDto,
-  ProviderStreamEventDto
-} from '../protocol.js'
-import { AIProvider, type ChatRequestOpts } from '../aiProvider.js'
-
-// ── Wire types ───────────────────────────────────────────────────────
-
-// Non-streaming response (Chat Completions style)
-export interface OllamaMessageDto {
-  content: string
-  // Some models surface chain-of-thought separately; field name varies by build.
-  reasoning?: string
-  reasoning_content?: string
-}
-
-export interface OllamaChoiceDto {
-  message?: OllamaMessageDto
-}
-
-export interface OllamaResponseDto extends ProviderResponseDto {
-  choices: OllamaChoiceDto[]
-}
-
-// SSE events (streaming)
-export interface OllamaDeltaDto {
-  content?: string
-  reasoning?: string
-  reasoning_content?: string
-}
-
-export interface OllamaStreamChoiceDto {
-  delta?: OllamaDeltaDto
-  message?: OllamaDeltaDto
-}
-
-export interface OllamaStreamEventDto extends ProviderStreamEventDto {
-  choices: OllamaStreamChoiceDto[]
-}
-
-// ── Provider implementation ──────────────────────────────────────────
+import type { ChatMessageDto } from '../protocol.js'
+import type { ChatRequestOpts } from '../aiProvider.js'
+import { ChatCompletionsProvider } from './chatCompletions.js'
 
 /** Ollama OpenAI-compatible request payload */
 export type OllamaRequestPayload = {
@@ -65,7 +23,7 @@ export type OllamaRequestPayload = {
   stream: boolean
 }
 
-export class OllamaProvider extends AIProvider {
+export class OllamaProvider extends ChatCompletionsProvider {
   protected readonly providerName = 'Ollama'
   // Bring-your-own-endpoint convention: the base is the OpenAI-style root ending in `/v1` and the
   // operation path is just `/chat/completions` — paste-compatible with every OpenAI-compat vendor
@@ -100,45 +58,5 @@ export class OllamaProvider extends AIProvider {
     stream: boolean
   ): OllamaRequestPayload {
     return { model, messages, stream }
-  }
-
-  parseError(errorText: string, status: number): UpstreamErrorDto {
-    return this.parseJsonError(errorText, status, true)
-  }
-
-  // ── Response parsing ─────────────────────────────────────────────
-
-  parseNonStreamingResponse(json: ProviderResponseDto): ChatResponseDto {
-    if (!this.hasChoices(json)) return { text: '' }
-
-    const choice = (json as OllamaResponseDto).choices[0]
-    const msg = choice?.message
-    const text = msg?.content ?? ''
-    const reasoning = msg?.reasoning ?? msg?.reasoning_content
-    return { text, reasoning }
-  }
-
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
-    if (!this.hasChoices(json)) return null
-
-    const choice = (json as OllamaStreamEventDto).choices[0]
-    if (!choice) return null
-
-    const delta = choice.delta || choice.message
-    if (!delta) return null
-
-    const text = delta.content || undefined
-    const reasoning = delta.reasoning || delta.reasoning_content || undefined
-
-    if (!text && !reasoning) return null
-
-    return { text, reasoning }
-  }
-
-  // ── Private helpers ──────────────────────────────────────────────
-
-  private hasChoices(json: unknown): boolean {
-    return typeof json === 'object' && json !== null
-      && 'choices' in json && Array.isArray((json as { choices?: unknown }).choices)
   }
 }

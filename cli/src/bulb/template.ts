@@ -4,7 +4,7 @@
 
 import type { ImportMap } from 'typebulb/resolver'
 import { typebulbShim } from './shim.js'
-import { escapeHtml, baseResetStyle, themeHeadScript } from './pageChrome.js'
+import { escapeHtml, escapeScript, baseResetStyle, themeHeadScript } from './pageChrome.js'
 
 export interface RenderOptions {
   name: string
@@ -39,9 +39,6 @@ export function renderHtml(options: RenderOptions): string {
   // `body` must stay content-height so the auto-height protocol's `body.scrollHeight`
   // can shrink the frame to the content (a 100%-tall body would peg it to the frame).
   const pageHeight = embedded ? '' : '\n    html, body { height: 100%; }'
-
-  // Escape script content for embedding
-  const escapeScript = (s: string) => s.replace(/<\/script/gi, '<\\/script')
 
   // Route browser package fetches through the CLI's caching /proxy/ endpoint.
   // Relative URL means we don't need to know the port at template-render time.

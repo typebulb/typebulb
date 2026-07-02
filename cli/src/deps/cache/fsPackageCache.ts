@@ -42,24 +42,21 @@ type MetaEntry = {
   updatedAt: number
 }
 
-const MISSING = Symbol('missing')
-type Cached<T> = T | typeof MISSING
-
 export class FsPackageCache implements PackageCache {
-  private pinnedMem = new Map<string, Cached<string>>()
-  private indexMem = new Map<string, Cached<IndexEntry>>()
-  private metaMem = new Map<string, Cached<MetaEntry>>()
+  // `undefined` values memoize a confirmed miss — presence is tested with `.has()`.
+  private pinnedMem = new Map<string, string | undefined>()
+  private indexMem = new Map<string, IndexEntry | undefined>()
+  private metaMem = new Map<string, MetaEntry | undefined>()
   private negativeCache = new NegativeCacheHelper(new FsNegativeStore(negativeFile))
 
   // ── Pinned exact versions ────────────────────────────────────────────────
 
   async getPinnedExact(name: string, range: string): Promise<string | undefined> {
     const key = `${name}@${range}`
-    const mem = this.pinnedMem.get(key)
-    if (mem !== undefined) return mem === MISSING ? undefined : mem
+    if (this.pinnedMem.has(key)) return this.pinnedMem.get(key)
     await ensureCacheRoot()
     const fromDisk = await readText(path.join(pinnedDir, sha1(key) + '.txt'))
-    this.pinnedMem.set(key, fromDisk ?? MISSING)
+    this.pinnedMem.set(key, fromDisk)
     return fromDisk
   }
 
@@ -74,11 +71,10 @@ export class FsPackageCache implements PackageCache {
   // ── Version indexes ──────────────────────────────────────────────────────
 
   async getIndex(name: string): Promise<IndexEntry | undefined> {
-    const mem = this.indexMem.get(name)
-    if (mem !== undefined) return mem === MISSING ? undefined : mem
+    if (this.indexMem.has(name)) return this.indexMem.get(name)
     await ensureCacheRoot()
     const fromDisk = await readJson<IndexEntry>(path.join(indexesDir, encodeName(name) + '.json'))
-    this.indexMem.set(name, fromDisk ?? MISSING)
+    this.indexMem.set(name, fromDisk)
     return fromDisk
   }
 
@@ -121,11 +117,10 @@ export class FsPackageCache implements PackageCache {
 
   async getMeta(name: string, version: string): Promise<MetaEntry | undefined> {
     const key = `${name}@${version}`
-    const mem = this.metaMem.get(key)
-    if (mem !== undefined) return mem === MISSING ? undefined : mem
+    if (this.metaMem.has(key)) return this.metaMem.get(key)
     await ensureCacheRoot()
     const fromDisk = await readJson<MetaEntry>(metaPath(name, version))
-    this.metaMem.set(key, fromDisk ?? MISSING)
+    this.metaMem.set(key, fromDisk)
     return fromDisk
   }
 

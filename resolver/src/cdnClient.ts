@@ -10,11 +10,16 @@ type MemoEntry = { value: Semver | undefined; ts: number }
 type JsDelivrMeta = { versions: string[]; distTags?: Record<string,string> }
 type PackageJsonPartial = { dependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, PeerMeta> }
 
-export class CdnClient {
-  readonly esmHost = ESM_HOST
-  readonly jsDelivrBase = JSDELIVR_BASE
-  readonly jsDelivrMeta = JSDELIVR_META
+export function normalizeRelative(rel: string) {
+  const s = rel || ''
+  return s.startsWith('./') ? s.slice(2) : s.replace(/^\/+/, '')
+}
 
+export function ensureLeadingDotSlash(rel: string) {
+  return rel.startsWith('./') ? rel : `./${rel}`
+}
+
+export class CdnClient {
   private readonly pinMs = 10_000
   private readonly versionsIndexMs = 24 * 60 * 60 * 1000
   private readonly metaTtlMs = 7 * 24 * 60 * 60 * 1000 // 7 days
@@ -22,22 +27,13 @@ export class CdnClient {
 
   constructor(private cache: PackageCache, private http: HttpClient) {}
 
-  normalizeRelative(rel: string) {
-    const s = rel || ''
-    return s.startsWith('./') ? s.slice(2) : s.replace(/^\/+/, '')
-  }
-
-  ensureLeadingDotSlash(rel: string) {
-    return rel.startsWith('./') ? rel : `./${rel}`
-  }
-
   baseDir(input: string | PackageRef) {
     const s = typeof input === 'string' ? new PackageRef(input) : input
-    return `${this.jsDelivrBase}${s.name}${s.version ? `@${s.version}` : ''}/`
+    return `${JSDELIVR_BASE}${s.name}${s.version ? `@${s.version}` : ''}/`
   }
 
   file(input: string | PackageRef, rel: string) {
-    return new URL(this.normalizeRelative(rel), this.baseDir(input)).toString()
+    return new URL(normalizeRelative(rel), this.baseDir(input)).toString()
   }
 
   packageJson(input: string | PackageRef) {
@@ -49,13 +45,7 @@ export class CdnClient {
     const qs = new URLSearchParams({ target })
     if (bundle) qs.append('bundle', '')
     if (external?.length) qs.append('external', external.join(','))
-    return `${this.esmHost}/${pkg}?${qs.toString()}`
-  }
-
-  async pinEsmUrl(pkg: string, target = 'es2022') {
-    const url = this.buildEsmUrl(pkg, { target })
-    const resp = await attempt(() => this.http.head(url))
-    return resp?.ok ? (resp.url || url) : undefined
+    return `${ESM_HOST}/${pkg}?${qs.toString()}`
   }
 
   async resolveExactVersion(pkg: string) {
@@ -65,7 +55,7 @@ export class CdnClient {
 
     const value = await this.tryResolveFromUrls([
       this.buildEsmUrl(pkg),
-      `${this.esmHost}/${pkg}`
+      `${ESM_HOST}/${pkg}`
     ])
 
     this.pinCache.set(pkg, { value, ts: now })
@@ -90,7 +80,7 @@ export class CdnClient {
     }
 
     const data = await attempt(() =>
-      this.http.getJson<JsDelivrMeta>(`${this.jsDelivrMeta}${encodeURIComponent(name)}`)
+      this.http.getJson<JsDelivrMeta>(`${JSDELIVR_META}${encodeURIComponent(name)}`)
     )
 
     if (!data?.versions?.length) {

@@ -24,8 +24,7 @@ import { findBulbFile, readBulb } from './pipeline.js'
 import { isServerOnly } from './bulb/bulbParser.js'
 import { resolveLocalOverride, type ResolvedLocalOverride } from './localOverride.js'
 import { isBulbTrusted } from './serve/trustStore.js'
-import { openBrowser } from './serve/browser.js'
-import { isKnownAgent, listAgentNames } from './agentViewer/registry.js'
+import { listAgentNames } from './agentViewer/registry.js'
 import { runCheck } from './commands/check.js'
 import { runPredict } from './commands/predict.js'
 import { runTrust } from './commands/trust.js'
@@ -34,7 +33,6 @@ import { runModels } from './commands/models.js'
 import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
-import { findProjectViewer } from './serve/serverRegistry.js'
 import { ensureHarnessWaitSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -111,28 +109,9 @@ async function main(): Promise<void> {
   }
   if (args.subcommand === 'agent') {
     // Bare `agent` → ensure this project's mirror is up (launching one detached if none is) and
-    // print the what-to-do guidance. `agent:<name>` serves that mirror in the foreground.
-    if (!args.agentTarget) {
-      await runAgent(VERSION)
-      return
-    }
-    // `agent:<name>` → serve that mirror (TB-Agent-Mirror.md).
-    // Reject an unknown agent up front rather than emitting a cryptic "file not found".
-    if (!isKnownAgent(args.agentTarget)) {
-      console.error(`Unknown agent '${args.agentTarget}'. Known: ${listAgentNames().join(', ')}.`)
-      process.exit(1)
-    }
-    // At most ONE mirror per project: a mirror reflects the CC session in the cwd it was launched in, so
-    // it has a 1-1 relationship with that project — a second one binds a fresh port, tails the same
-    // sessions, and (until reaped) piles up as an orphaned server. So if a live mirror for this agent
-    // already serves this cwd, re-use it (re-open its tab unless --no-open) instead of spawning another.
-    const existing = await findProjectViewer(process.cwd(), args.agentTarget)
-    if (existing) {
-      console.log(`Mirror '${args.agentTarget}' is already running for this project:\n  ${existing.url}`)
-      if (args.open) await openBrowser(existing.url)
-      return
-    }
-    await runAgentViewer(args)
+    // print the what-to-do guidance. `agent:<name>` serves that mirror in the foreground
+    // (TB-Agent-Mirror.md) — validation and the one-mirror-per-project reuse live in runAgentViewer.
+    await (args.agentTarget ? runAgentViewer(args) : runAgent(VERSION))
     return
   }
   if (args.subcommand === 'trust' || args.subcommand === 'untrust') {

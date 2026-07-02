@@ -4,10 +4,11 @@ import { fileURLToPath } from 'url'
 import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
+import open from 'open'
 import { startServer, findAvailablePort } from '../serve/server.js'
-import { openBrowser } from '../serve/browser.js'
-import { watchDir } from '../serve/watcher.js'
-import { registerServer, unregisterServer, startServerLog } from '../serve/serverRegistry.js'
+import { watchPath } from '../serve/watcher.js'
+import { registerServer, unregisterServer, startServerLog, findProjectViewer } from '../serve/serverRegistry.js'
+import { isKnownAgent, listAgentNames } from './registry.js'
 import { buildAgentHtml, clientBundleUrl } from './page.js'
 
 // Each agent mirror's server module, keyed by agent name. The values are *static* `import()` literals
@@ -30,8 +31,24 @@ const AGENT_SERVERS: Record<string, () => Promise<Record<string, unknown>>> = {
  */
 export async function runAgentViewer(args: CliArgs): Promise<void> {
   const basePath = process.cwd()
-  // The agent to mirror (`agent:<name>`); the dispatcher has already validated it via isKnownAgent.
+  // The agent to mirror (`agent:<name>`). Reject an unknown agent up front rather than
+  // emitting a cryptic "file not found".
   const agent = args.agentTarget!
+  if (!isKnownAgent(agent)) {
+    console.error(`Unknown agent '${agent}'. Known: ${listAgentNames().join(', ')}.`)
+    process.exit(1)
+  }
+
+  // At most ONE mirror per project: a mirror reflects the CC session in the cwd it was launched in, so
+  // it has a 1-1 relationship with that project — a second one binds a fresh port, tails the same
+  // sessions, and (until reaped) piles up as an orphaned server. So if a live mirror for this agent
+  // already serves this cwd, re-use it (re-open its tab unless --no-open) instead of spawning another.
+  const existing = await findProjectViewer(basePath, agent)
+  if (existing) {
+    console.log(`Mirror '${agent}' is already running for this project:\n  ${existing.url}`)
+    if (args.open) await open(existing.url)
+    return
+  }
 
   // Tee console to `<pid>.log` from the outset so `typebulb logs` can tail the mirror
   // without a terminal (mirrors runWeb). Restored in cleanup; unregisterServer drops the file.
@@ -138,8 +155,9 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     // to either this agent's client or the shared neutral client triggers a rebuild.
     const devSource = existsSync(agentClientDir)
     let building = false
-    cleanupWatcher = watchDir({
-      dir: devSource ? agentsSourceDir : assetDir,
+    cleanupWatcher = watchPath({
+      target: devSource ? agentsSourceDir : assetDir,
+      events: 'all',
       onChange: async () => {
         if (building) return
         building = true
@@ -156,7 +174,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     })
   }
 
-  if (args.open) await openBrowser(url)
+  if (args.open) await open(url)
 
   const cleanup = async () => {
     console.log('\nShutting down...')

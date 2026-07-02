@@ -47,8 +47,7 @@ function makeProvider(opts: ProviderOpts) {
       new Map(Object.entries(filesByVersion[version] ?? {})),
   } as any
 
-  const fetchDts = (async () => undefined) as any
-  return new DefinitelyTypedProvider(fetchDts, cdnClient, cache, tarballFetcher)
+  return new DefinitelyTypedProvider(cdnClient, cache, tarballFetcher)
 }
 
 describe('DefinitelyTypedProvider subpath resolution', () => {

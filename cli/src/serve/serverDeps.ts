@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { satisfies } from 'semver'
+import { PackageRef } from 'typebulb/resolver'
 
 const execFileAsync = promisify(execFile)
 
@@ -57,7 +58,7 @@ export async function ensureBulbServerPackages(
 /** A bare spec declared in the bulb's config.json installs at that range; a spec
  *  that already carries a version is left as-is. */
 export function applyDeclaredRange(spec: string, declaredRanges?: Record<string, string>): string {
-  if (!declaredRanges || specVersion(spec)) return spec
+  if (!declaredRanges || PackageRef.parse(spec).version) return spec
   const range = declaredRanges[spec]
   return range ? `${spec}@${range}` : spec
 }
@@ -70,9 +71,9 @@ export function applyDeclaredRange(spec: string, declaredRanges?: Record<string,
  * subpath export) gets upgraded instead of silently kept.
  */
 export function isInstalled(spec: string, bulbCacheDir: string): boolean {
-  const pkgDir = path.join(bulbCacheDir, 'node_modules', bareName(spec))
+  const { name, version: range } = PackageRef.parse(spec)
+  const pkgDir = path.join(bulbCacheDir, 'node_modules', name)
   if (!existsSync(pkgDir)) return false
-  const range = specVersion(spec)
   if (!range) return true
   try {
     const installed = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf-8')).version
@@ -99,28 +100,7 @@ export function extractServerImports(code: string): string[] {
     // specifiers (e.g. a --replace override rewritten to a local file:// path). An npm
     // package name never contains ':', so this can't drop a real dependency.
     if (specifier.includes(':')) continue
-    const pkgName = specifier.startsWith('@')
-      ? specifier.split('/').slice(0, 2).join('/')
-      : specifier.split('/')[0]!
-    packages.add(pkgName)
+    packages.add(PackageRef.rootOf(specifier))
   }
   return [...packages]
-}
-
-/** "@types/node@^22" → "@types/node"; "three" → "three"; "@scope/pkg" → "@scope/pkg". */
-function bareName(spec: string): string {
-  if (spec.startsWith('@')) {
-    const slash = spec.indexOf('/')
-    if (slash < 0) return spec
-    const at = spec.indexOf('@', slash + 1)
-    return at < 0 ? spec : spec.slice(0, at)
-  }
-  const at = spec.indexOf('@')
-  return at < 0 ? spec : spec.slice(0, at)
-}
-
-/** The version/range suffix of a spec, or '' if bare. "@types/node@^22" → "^22". */
-function specVersion(spec: string): string {
-  const name = bareName(spec)
-  return spec.length > name.length ? spec.slice(name.length + 1) : ''
 }

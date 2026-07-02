@@ -66,11 +66,6 @@ export class PackageRef implements IPackageRef {
     }
   }
 
-  static versionFromUrl(url: string): string | undefined {
-    const s = PackageRef.fromUrl(url)
-    return s?.version
-  }
-
   format(): string {
     const base = this.version ? `${this.name}@${this.version}` : this.name
     return this.subpath ? `${base}/${this.subpath}` : base
@@ -86,11 +81,6 @@ export class PackageRef implements IPackageRef {
     // Preserve both version and subpath by constructing from an object, not a string
     // Using a string would trigger the string constructor path and drop the provided args
     return new PackageRef({ name: this.name, version: undefIfEmpty(v), subpath: this.subpath })
-  }
-
-  withPreferredVersion(exact?: string, range?: string): PackageRef {
-    const version = exact || range
-    return version ? this.withVersion(version) : this
   }
 
   static isBare(pkg: string) {

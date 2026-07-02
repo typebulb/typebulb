@@ -15,11 +15,11 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import {
-  createDtsResolver,
+  DtsResolver,
   clientTbTypings,
   esLibEntries,
   domLibEntries,
-  type DtsResolver,
+  filterByTsVersion,
   type LibEntry,
 } from 'typebulb/dts'
 import { cdnClient, packageService, versionResolver } from '../deps/resolver.js'
@@ -30,7 +30,7 @@ import type { ResolvedLocalOverride } from '../localOverride.js'
 let resolverInstance: DtsResolver | undefined
 function getResolver(): DtsResolver {
   if (!resolverInstance) {
-    resolverInstance = createDtsResolver({
+    resolverInstance = new DtsResolver({
       cache: new FsDtsCache(),
       cdnClient,
       packageService,
@@ -140,25 +140,30 @@ export async function emitClientTypecheck(opts: DtsEmitOptions): Promise<DtsEmit
   return { dir: targetDir }
 }
 
+/** compilerOptions shared by both typecheck emits (client here, server in emitServer.ts).
+ *  No `baseUrl` in either config: deprecated in TS 6.0 (TS5101), removed in 7.0 — emitting it
+ *  makes a recent consumer's `tsc` fail on the generated config itself, before it ever reads
+ *  the bulb. It's also unneeded — `paths` values are `./`-relative or absolute, which tsc
+ *  resolves without one (no baseUrl required since TS 4.1). */
+export const baseCompilerOptions = {
+  target: 'es2023',
+  module: 'esnext',
+  moduleResolution: 'bundler',
+  strict: true,
+  noEmit: true,
+  skipLibCheck: true,
+  esModuleInterop: true,
+  allowSyntheticDefaultImports: true,
+  forceConsistentCasingInFileNames: true,
+}
+
 function buildTsconfig(jsxImportSource: string | undefined, paths: Record<string, string[]>, ambientIncludes: string[] = []) {
   return {
     compilerOptions: {
-      target: 'es2023',
-      module: 'esnext',
-      moduleResolution: 'bundler',
+      ...baseCompilerOptions,
       lib: libNamesForTsconfig([...esLibEntries, ...domLibEntries]),
       jsx: 'react-jsx',
       jsxImportSource: jsxImportSource ?? 'react',
-      strict: true,
-      noEmit: true,
-      skipLibCheck: true,
-      esModuleInterop: true,
-      allowSyntheticDefaultImports: true,
-      forceConsistentCasingInFileNames: true,
-      // No `baseUrl`: deprecated in TS 6.0 (TS5101), removed in 7.0 — emitting it makes a recent
-      // consumer's `tsc` fail on this generated config itself, before it ever reads the bulb. It's
-      // also unneeded — every `paths` value is `./`-relative, which tsc resolves against this
-      // tsconfig's own directory (no baseUrl required since TS 4.1).
       paths,
     },
     include: ['code.tsx', 'tb.d.ts', ...ambientIncludes],
@@ -169,7 +174,7 @@ function buildTsconfig(jsxImportSource: string | undefined, paths: Record<string
 function libNamesForTsconfig(entries: LibEntry[]): string[] {
   // Skip TS 5.5+ entries by default — conservative choice; emitted dir must
   // typecheck under whatever TS the consumer has, and we don't know the version.
-  return entries.filter(e => !e.since).map(e => titleCaseLibName(e.name))
+  return filterByTsVersion(entries).map(e => titleCaseLibName(e.name))
 }
 
 function titleCaseLibName(name: string): string {

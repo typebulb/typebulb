@@ -3,8 +3,7 @@ import { loadEnv, reportEnv } from '../env.js'
 import { readBulb, importServerModule } from '../pipeline.js'
 import { BUILTINS, resolveServerFn, isAsyncGenerator } from '../serve/builtins.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
-import { listBulbServers, readServerLog, writeWaitCursor } from '../serve/serverRegistry.js'
-import { normalizeBulbPath } from '../serve/paths.js'
+import { listBulbServers, serversForBulb, readServerLog, writeWaitCursor } from '../serve/serverRegistry.js'
 
 /**
  * `typebulb call <file> <fn> [arg…]` — boot a bulb's **server.ts**, invoke one exported function by
@@ -40,8 +39,7 @@ export async function runCall(
   // the call must wake (spuriously at worst), never be skipped
   // (TB-Wait.md). Best-effort; no server running ⇒ no channel to anchor.
   try {
-    const abs = normalizeBulbPath(bulbPath)
-    const running = (await listBulbServers()).find(s => normalizeBulbPath(s.file) === abs)
+    const running = serversForBulb(await listBulbServers(), bulbPath)[0]
     if (running) writeWaitCursor(running.pid, readServerLog(running.pid).offset)
   } catch { /* never let wake bookkeeping break the call */ }
 

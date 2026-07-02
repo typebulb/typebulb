@@ -5,9 +5,9 @@ import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile } from '../pipeline.js'
 import { predictTrust } from '../bulb/predictTrust.js'
+import open from 'open'
 import { startServer, findAvailablePort } from '../serve/server.js'
-import { openBrowser } from '../serve/browser.js'
-import { watchBulb, watchDir } from '../serve/watcher.js'
+import { watchPath } from '../serve/watcher.js'
 import { registerServer, unregisterServer, startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
@@ -103,28 +103,24 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let cleanupOverrideWatcher: (() => void) | undefined
 
   if (args.watch && reloadEmitter) {
-    // Create a wrapper emitter that recompiles on change
-    const fileChangeEmitter = new EventEmitter()
-    fileChangeEmitter.on('reload', async () => {
-      try {
-        console.log('Recompiling...')
-        const result = await loadAndCompile(bulbPath, true, args.trust, local, serverCacheDir)
-        html = result.html
-        serverExports = result.serverExports
-        // New run boundary (only on a successful recompile — a compile error keeps the old run
-        // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
-        runId++
-        console.log(runMarker(runId))
-        // Signal browser to reload
-        reloadEmitter.emit('reload')
-      } catch (e) {
-        console.error('Compile error:', e)
-      }
-    })
-
-    cleanupWatcher = watchBulb({
-      bulbPath,
-      emitter: fileChangeEmitter,
+    cleanupWatcher = watchPath({
+      target: bulbPath,
+      onChange: async () => {
+        try {
+          console.log('Recompiling...')
+          const result = await loadAndCompile(bulbPath, true, args.trust, local, serverCacheDir)
+          html = result.html
+          serverExports = result.serverExports
+          // New run boundary (only on a successful recompile — a compile error keeps the old run
+          // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
+          runId++
+          console.log(runMarker(runId))
+          // Signal browser to reload
+          reloadEmitter.emit('reload')
+        } catch (e) {
+          console.error('Compile error:', e)
+        }
+      },
     })
 
     // Also watch the override's served folder so a local rebuild refreshes the
@@ -133,8 +129,9 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     // the page (the benchmarking idiom).
     if (local) {
       const { name, serveDir } = local
-      cleanupOverrideWatcher = watchDir({
-        dir: serveDir,
+      cleanupOverrideWatcher = watchPath({
+        target: serveDir,
+        events: 'all',
         onChange: () => {
           console.log(`Local package '${name}' changed. Browser reloading...\n`)
           reloadEmitter.emit('reload')
@@ -149,7 +146,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // before findAvailablePort is what frees the port in time to land on it again — see above.)
   if (args.open) {
     if (replaced.some(s => s.port === port)) console.log('  Reusing the open browser tab.\n')
-    else await openBrowser(url)
+    else await open(url)
   }
 
   // Handle shutdown

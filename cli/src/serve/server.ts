@@ -9,12 +9,12 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
-import { normalizeUpstreamError, consumeStreamText, streamAiChunks, ProviderStreamError } from 'typebulb/ai'
+import { normalizeUpstreamError, consumeStreamText, streamAiChunks } from 'typebulb/ai'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { recordDenial } from './serverRegistry.js'
 import { getFilteredModels } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
-import { streamNdjson } from './ndjsonStream.js'
+import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 
@@ -308,11 +308,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
       return c.json({ text })
     } catch (e) {
-      if (e instanceof ProviderStreamError) {
-        return c.json({ message: e.message, code: e.code, retryable: e.retryable }, 500)
-      }
-      const message = errorMessage(e)
-      return c.json({ message, code: 'unknown', retryable: false }, 500)
+      return c.json(toStreamError(e), 500)
     }
   })
 

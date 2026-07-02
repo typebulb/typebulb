@@ -1,65 +1,10 @@
 /**
- * OpenRouter API (Chat Completions style with choices[]) — wire types and provider implementation.
+ * OpenRouter API (Chat Completions style with choices[]) — request building; wire types and
+ * parsing shared via ChatCompletionsProvider.
  */
-import type {
-  ChatMessageDto,
-  UpstreamErrorDto,
-  EffortLevel,
-  ChatStreamPieceDto,
-  ChatResponseDto,
-  ProviderResponseDto,
-  ProviderStreamEventDto
-} from '../protocol.js'
-import { AIProvider, type ChatRequestOpts } from '../aiProvider.js'
-
-// ── Wire types ───────────────────────────────────────────────────────
-
-// Non-streaming response (Chat Completions style)
-export interface OpenRouterMessageDto {
-  content: string
-  reasoning?: string
-}
-
-export interface OpenRouterChoiceDto {
-  message?: OpenRouterMessageDto
-  text?: string
-}
-
-export interface OpenRouterResponseDto extends ProviderResponseDto {
-  choices: OpenRouterChoiceDto[]
-  reasoning?: string
-}
-
-// SSE events (streaming)
-export interface OpenRouterDeltaDto {
-  content?: string
-  reasoning?: string
-}
-
-export interface OpenRouterStreamChoiceDto {
-  delta?: OpenRouterDeltaDto
-  message?: OpenRouterDeltaDto
-}
-
-export interface OpenRouterStreamEventDto extends ProviderStreamEventDto {
-  choices: OpenRouterStreamChoiceDto[]
-}
-
-// Error response (OpenAI-compatible format)
-export interface OpenRouterErrorResponseDto {
-  error: {
-    message: string
-    type?: string
-    code?: string
-  }
-}
-
-// Union of streaming events and errors
-export type OpenRouterSseEventDto =
-  | OpenRouterStreamEventDto
-  | OpenRouterErrorResponseDto
-
-// ── Provider implementation ──────────────────────────────────────────
+import type { ChatMessageDto, EffortLevel } from '../protocol.js'
+import type { ChatRequestOpts } from '../aiProvider.js'
+import { ChatCompletionsProvider } from './chatCompletions.js'
 
 /** OpenRouter web search plugin */
 interface OpenRouterWebPlugin {
@@ -76,7 +21,7 @@ export type OpenRouterRequestPayload = {
   plugins?: OpenRouterWebPlugin[]
 }
 
-export class OpenRouterProvider extends AIProvider {
+export class OpenRouterProvider extends ChatCompletionsProvider {
   protected readonly providerName = 'OpenRouter'
   // First-party convention (like anthropic/openai/gemini): the base is the bare origin and the
   // full versioned mount lives in `path`. OpenRouter mounts its OpenAI-compatible API at `/api/v1`
@@ -133,54 +78,13 @@ export class OpenRouterProvider extends AIProvider {
       payload.plugins = [{ id: 'web' }]
     }
 
-    if (this.isReasoningEnabled(opts)) {
+    const effort = opts?.effort
+    if (effort !== undefined) {
       payload.reasoning = {
-        effort: this.effortMap[opts!.effort!]
+        effort: this.effortMap[effort]
       }
     }
 
     return payload
-  }
-
-  parseError(errorText: string, status: number): UpstreamErrorDto {
-    return this.parseJsonError(errorText, status, true)
-  }
-
-  // ── Response parsing ─────────────────────────────────────────────
-
-  parseNonStreamingResponse(json: ProviderResponseDto): ChatResponseDto {
-    if (!this.hasChoices(json)) {
-      return { text: '' }
-    }
-
-    const resp = json as OpenRouterResponseDto
-    const choice = resp.choices[0]
-    const text = choice?.message?.content ?? choice?.text ?? ''
-    const reasoning = choice?.message?.reasoning ?? resp.reasoning
-
-    return { text, reasoning }
-  }
-
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
-    if (!this.hasChoices(json)) return null
-
-    const choice = (json as OpenRouterStreamEventDto).choices[0]
-    if (!choice) return null
-
-    const delta = choice.delta || choice.message
-    if (!delta) return null
-
-    const text = delta.content || undefined
-    const reasoning = delta.reasoning || undefined
-
-    if (!text && !reasoning) return null
-
-    return { text, reasoning }
-  }
-
-  // ── Private helpers ──────────────────────────────────────────────
-
-  private hasChoices(json: unknown): boolean {
-    return typeof json === 'object' && json !== null && 'choices' in json && Array.isArray((json as any).choices)
   }
 }
