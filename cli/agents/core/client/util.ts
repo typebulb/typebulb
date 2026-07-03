@@ -35,6 +35,16 @@ export function truncate(s: string, max: number): string {
 // original path for launch + display, this is only the key.
 export function pathKey(p: string): string { return p.replace(/\\/g, '/').toLowerCase() }
 
+// Project-relative display form of an absolute path: strip the cwd prefix (case-insensitive,
+// separator-agnostic) so a tool row reads `runtime/…`, not `c:\Code\typebulb\runtime\…`. A path
+// outside the project stays absolute.
+export function displayPath(p: string, cwd: string): string {
+  if (!cwd) return p
+  const np = p.replace(/\\/g, '/')
+  const ncwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  return np.toLowerCase().startsWith(ncwd.toLowerCase() + '/') ? np.slice(ncwd.length + 1) : p
+}
+
 // Last path segment, trailing separators trimmed — the file or directory name ('' for an empty path).
 export function basename(p: string): string {
   return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''

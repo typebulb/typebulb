@@ -19,7 +19,10 @@ export type Event =
   | { type: 'session'; sessionId: string }
   | { type: 'user'; text: string }
   | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean }
-  | { type: 'tool_result'; id: string; content: string; isError: boolean }
+  // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
+  // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
+  // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.
+  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string }
   | { type: 'cleared' }
   | { type: 'usage'; in: number; out: number; cached: number; cacheCreate: number }
   // An abandoned (orphaned) branch off a fork point — the agent drops these; the mirror surfaces them

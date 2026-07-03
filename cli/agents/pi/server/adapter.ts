@@ -1,7 +1,7 @@
 import { statSync, openSync, readSync, closeSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { capText, dataUriImage } from '../../core/server/text.js'
+import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
@@ -122,7 +122,9 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
       return { events }
     }
     if (m.role === 'toolResult') {
-      events.push({ type: 'tool_result', id: m.toolCallId ?? '', content: this.contentText(m.content), isError: !!m.isError })
+      // pi has no structured result object (CC's toolUseResult), so the digest is the generic one.
+      const content = this.contentText(m.content)
+      events.push({ type: 'tool_result', id: m.toolCallId ?? '', content, isError: !!m.isError, digest: firstLineDigest(content) })
       return { events }
     }
     if (m.role === 'bashExecution') {

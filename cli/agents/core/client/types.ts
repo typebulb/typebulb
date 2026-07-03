@@ -52,7 +52,9 @@ export interface IRoot {
 }
 
 
-export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean }
+// `digest` is the tool_result event's one-line OUT summary ("463 lines", "2 files"), shown as the
+// collapsed row's indented ⎿ line once the result lands.
+export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean; digest?: string }
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set
 // only when an assistant message contains live ````bulb```` embeds: the text split into markdown
 // chunks (string) and BulbEmbed components, rendered in order in place of the single markdown div.

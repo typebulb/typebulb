@@ -1,7 +1,7 @@
 import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { capText, dataUriImage } from '../../core/server/text.js'
+import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
@@ -27,6 +27,9 @@ interface JsonlEntry {
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage }
   usage?: TokenUsage
   attachment?: { type?: string; prompt?: unknown; commandMode?: string }
+  // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
+  // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
+  toolUseResult?: unknown
 }
 
 interface ContentBlock {
@@ -130,6 +133,57 @@ export function cleanUserText(text: string): string {
 }
 function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
+}
+
+const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
+const fmtSize = (n: unknown): string =>
+  typeof n !== 'number' ? ''
+    : n < 1024 ? `${n}B`
+    : n < 1048576 ? `${Math.round(n / 1024)}KB`
+    : `${(n / 1048576).toFixed(1)}MB`
+
+// One-line OUT digest of a tool result, from CC's structured `toolUseResult` — the same object CC's
+// own condensed renderers consume (tools/*/UI.tsx), so the mirror speaks CC's vocabulary: "463 lines",
+// "2 files", "+12 −3". The entry doesn't name the tool, so this matches on shape; unknown shapes
+// (MCP tools, agents) fall back to the first line of the raw result text. Exported for the test.
+export function toolResultDigest(r: unknown, content: string): string {
+  if (typeof r === 'string') return firstLineDigest(r)                       // error text, mostly
+  if (!r || typeof r !== 'object') return firstLineDigest(content)
+  const o = r as Record<string, any>
+  // Read: { type: 'text'|'image'|'pdf'|'parts'|'file_unchanged', file: {…} }
+  if (o.type === 'text' && typeof o.file?.numLines === 'number') return plural(o.file.numLines, 'line')
+  if (o.type === 'image') { const s = fmtSize(o.file?.originalSize); return s ? `image (${s})` : 'image' }
+  if (o.type === 'pdf') { const s = fmtSize(o.file?.originalSize); return s ? `PDF (${s})` : 'PDF' }
+  if (o.type === 'parts' && typeof o.file?.count === 'number') return plural(o.file.count, 'page')
+  if (o.type === 'file_unchanged') return 'unchanged since last read'
+  // Write (create) before the structuredPatch check — its patch is all additions, the line count says more.
+  if (o.type === 'create' && typeof o.content === 'string') return `created, ${plural(o.content.split('\n').length, 'line')}`
+  // Grep: mode discriminates content / count / files_with_matches
+  if (o.mode === 'content') return plural(o.numLines ?? 0, 'line')
+  if (o.mode === 'count') return `${plural(o.numMatches ?? 0, 'match', 'matches')} (${plural(o.numFiles ?? 0, 'file')})`
+  if (o.mode === 'files_with_matches') return plural(o.numFiles ?? 0, 'file')
+  // Edit / MultiEdit: structuredPatch hunks → +added −removed
+  if (Array.isArray(o.structuredPatch)) {
+    let add = 0, del = 0
+    for (const h of o.structuredPatch) for (const l of (h?.lines ?? [])) {
+      if (typeof l !== 'string') continue
+      if (l.startsWith('+')) add++
+      else if (l.startsWith('-')) del++
+    }
+    return `+${add} −${del}`
+  }
+  // Bash: show output, not a count — the first stdout line usually is the answer
+  if (typeof o.stdout === 'string' || typeof o.stderr === 'string') {
+    if (o.backgroundTaskId) return 'running in background'
+    if (o.interrupted) return 'interrupted'
+    return firstLineDigest(o.stdout || o.stderr || '') || 'no output'
+  }
+  if (typeof o.code === 'number' && typeof o.codeText === 'string') return `${o.code} ${o.codeText}`   // WebFetch
+  if (typeof o.searchCount === 'number') return plural(o.searchCount, 'search', 'searches')            // WebSearch
+  if (Array.isArray(o.matches) && typeof o.total_deferred_tools === 'number') return plural(o.matches.length, 'tool')  // ToolSearch
+  if (Array.isArray(o.newTodos)) return plural(o.newTodos.length, 'todo')                              // TodoWrite
+  if (typeof o.numFiles === 'number') return plural(o.numFiles, 'file')                                // Glob (no mode)
+  return firstLineDigest(content)
 }
 
 // A turn the mirror never shows: a sub-agent sidechain, or one of CC's isMeta injections (a launched
@@ -244,7 +298,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
       } else if (Array.isArray(content)) {
         for (const b of content) {
           if (b?.type === 'tool_result') {
-            events.push({ type: 'tool_result', id: b.tool_use_id ?? '', content: toText(b.content), isError: !!b.is_error })
+            const content = toText(b.content)
+            events.push({ type: 'tool_result', id: b.tool_use_id ?? '', content, isError: !!b.is_error, digest: toolResultDigest(entry.toolUseResult, content) })
           } else {
             const text = userTextBlock(b) || blockToMarkdown(b)
             if (text) events.push({ type: 'user', text })

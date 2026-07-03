@@ -10,6 +10,19 @@ export function capText(s: string): string {
     : s
 }
 
+// One-line OUT digest of raw tool-result text — the generic fallback every adapter shares (Pi always,
+// Claude for toolUseResult shapes it doesn't know): first non-empty line, ANSI-stripped and capped,
+// with a "(+K lines)" tail so a wall of output still reads at a glance. '' when there's nothing to say.
+const ANSI_CODES = /\u001b\[[0-9;]*m/g
+export function firstLineDigest(text: string): string {
+  const lines = text.replace(ANSI_CODES, '').split('\n').map(l => l.trim()).filter(Boolean)
+  const first = lines[0]
+  if (!first) return ''
+  const capped = first.length > 96 ? first.slice(0, 96).trimEnd() + '…' : first
+  const rest = lines.length - 1
+  return rest > 0 ? `${capped} (+${rest} line${rest === 1 ? '' : 's'})` : capped
+}
+
 // A base64 image → an inline markdown image so it renders instead of dumping raw base64. One format,
 // shared by every adapter's image-block path (CC reads `source.media_type`/`source.data`, Pi reads
 // `mimeType`/`data`), so the data-URI shape can't drift between them.

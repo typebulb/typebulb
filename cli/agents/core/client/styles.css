@@ -1231,8 +1231,10 @@ a.server-port:hover { text-decoration: underline; }
 /* Verb + summary are inline siblings sharing one line box and font, so they sit
    on a common baseline. Ellipsis truncation lives on the wrapper, not the
    children — overflow:hidden on the summary itself skews its baseline. */
+/* flex: 0 1 auto (not 1) so the pending '…' sits right after the label instead of at the row's
+   far edge; the label shrinks with ellipsis when the row is tight. */
 .tool-label {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -1247,6 +1249,20 @@ a.server-port:hover { text-decoration: underline; }
   user-select: text;
 }
 .tool-run { color: var(--muted); }
+
+/* The OUT line ("463 lines", "2 files", the first stdout line) — a collapsed tool's second row,
+   indented under the verb with CC's ⎿ marker (::before, so a copy drag doesn't grab it). Clickable
+   like the head (it's part of the row); the text itself stays selectable, same deal as .tool-sum. */
+.tool-digest {
+  padding: 0 0 .15rem 1.2rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  user-select: text;
+}
+.tool-digest::before { content: '⎿'; margin-right: .5rem; user-select: none; }
 
 /* Code-display panels inside an open tool card: raw input/output (.tool-in,
    .tool-out) and per-hunk diff halves (.diff-old, .diff-new). All four share
@@ -1266,6 +1282,19 @@ a.server-port:hover { text-decoration: underline; }
   overflow: auto;
 }
 .tool-out { color: var(--muted); }
+/* Structured input fields inside an open tool card (one row per input key), replacing the old raw
+   JSON dump. The key is a muted inline label; the value keeps the shared mono geometry, flowing on
+   the same line and wrapping/multi-lining as pre-wrap dictates. */
+.tool-field + .tool-field { margin-top: .5rem; }
+.tool-key { color: var(--muted); margin-right: .6rem; user-select: text; }
+.tool-val { display: inline; margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
+/* Line-banded unified-diff view for a diff-shaped string input (looksLikeUnifiedDiff): the same
+   add/remove band colors as .diff-new/.diff-old, applied per line; hunk/file headers muted. */
+.udiff { white-space: pre-wrap; word-break: break-word; }
+.udiff-line { padding: 0 .2rem; }
+.udiff-add { background: color-mix(in srgb, var(--diff-add) 24%, transparent); }
+.udiff-del { background: color-mix(in srgb, var(--err) 24%, transparent); }
+.udiff-hunk { color: var(--muted); }
 /* The band carries the add/remove signal; text stays --fg so it's readable. Colouring the text the same
    hue as its fill (red-on-red) is what washes a diff out — the band alone is the convention. */
 .diff-old {

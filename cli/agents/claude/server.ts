@@ -24,5 +24,5 @@ export * from './server/switcher.js'
 
 // Test surface (imported by name from './server.js'): the Claude cleaning/schema helpers and the
 // neutral text cap. `openFile` rides the launcher re-export above.
-export { isHiddenTurn, blockToMarkdown, cleanUserText } from './server/adapter.js'
-export { capText } from '../core/server/text.js'
+export { isHiddenTurn, blockToMarkdown, cleanUserText, toolResultDigest } from './server/adapter.js'
+export { capText, firstLineDigest } from '../core/server/text.js'

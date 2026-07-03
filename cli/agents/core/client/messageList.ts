@@ -4,11 +4,38 @@ import { renderMarkdown, userMarkdown, splitBulbSegments } from './markdown.js'
 import { CopyButton } from './copyButton.js'
 import { BulbEmbed } from './bulbEmbed.js'
 import { supersededFlags, chainPositions } from './chains.js'
-import { asStr, turnClassFor } from './util.js'
+import { asStr, turnClassFor, displayPath } from './util.js'
 
 function toolSummary(input: Record<string, unknown>): string {
   if (!input || typeof input !== 'object') return ''
   return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
+}
+
+// A multi-line summary (a heredoc Bash command) must not break the one-line row: first line + '…'.
+function oneLine(s: string): string {
+  const nl = s.indexOf('\n')
+  return nl === -1 ? s : s.slice(0, nl).trimEnd() + ' …'
+}
+
+// A unified diff riding in a string input (patcher's `diff`, a pasted git patch). Content-sniffed —
+// an @@ hunk header plus a +/- line — so any tool qualifies, no tool-name coupling; prose can't
+// trip it (no line-anchored @@).
+function looksLikeUnifiedDiff(s: string): boolean {
+  return /^@@/m.test(s) && /^[+-]/m.test(s)
+}
+
+// Line-banded unified-diff view: +/- lines get the same add/remove bands the Edit diff view uses,
+// @@ hunk and ---/+++ file headers go muted. Beats squeezing a UDF into old/new blocks, which would
+// destroy the interleaving the format is for.
+function udiffView(s: string) {
+  return div({ class: 'udiff' }, s.split('\n').map(line => {
+    const cls =
+      line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') ? 'udiff-hunk'
+      : line.startsWith('+') ? 'udiff-add'
+      : line.startsWith('-') ? 'udiff-del'
+      : ''
+    return div({ class: ['udiff-line', cls] }, line === '' ? ' ' : line)
+  }))
 }
 
 // File-aware tools whose path should open in VS Code / Cursor on click.
@@ -205,7 +232,7 @@ export class MessageList extends Component {
 
   applyToolResult(e: Extract<ServerEvent, { type: 'tool_result' }>) {
     const t = this.#findTool(e.id)
-    if (t) { t.result = e.content; t.isError = e.isError }
+    if (t) { t.result = e.content; t.isError = e.isError; t.digest = e.digest }
   }
 
   // An abandoned branch the server surfaced at this point in the stream (TB-LostMessage.md). It rides in
@@ -231,7 +258,7 @@ export class MessageList extends Component {
         out.push({ id: ++this.#idSeq, role: 'assistant', text: ev.text, thinking: ev.thinking, tools: ev.tools.map(t => ({ ...t, isError: false })) })
       } else if (ev.type === 'tool_result') {
         const t = out.flatMap(m => m.tools).find(t => t.id === ev.id)
-        if (t) { t.result = ev.content; t.isError = ev.isError }
+        if (t) { t.result = ev.content; t.isError = ev.isError; t.digest = ev.digest }
       }
     }
     return out
@@ -411,7 +438,8 @@ export class MessageList extends Component {
   tool(t: Tool) {
     const open = this.openTools.has(t.id)
     const filePath = filePathOf(t.name, t.input)
-    const sum = filePath ?? toolSummary(t.input)
+    // File paths display project-relative (full path in the title + the click); the rest one-lined.
+    const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input))
     // Hand-rolled toggle, not <details>/<summary>: Chrome swallows custom-scheme
     // (vscode://) anchor clicks inside <summary>.
     return div({ class: ['tool', t.isError ? 'err' : '', open ? 'open' : ''] },
@@ -437,21 +465,39 @@ export class MessageList extends Component {
                       e.stopPropagation()                            // don't toggle row
                       tb.server.openFile(filePath)
                     },
-                  }, filePath)
+                  }, sum)
                 : span({ class: 'tool-sum' }, sum))
             : null,
         ),
         t.result === undefined ? span({ class: 'tool-run' }, '…') : null,
       ),
+      // The OUT line (CC's shape): once the result lands, the digest gets its own indented ⎿ row —
+      // full-width IN above, scannable OUT below. Collapsed only: the open card shows the real
+      // output, so the abridged line would just duplicate it. Pending rows stay one line (the '…').
+      !open && t.result !== undefined && t.digest
+        ? div({ class: 'tool-digest', onClick: () => { toggleInSet(this.openTools, t.id); this.update() } }, t.digest)
+        : null,
       open ? this.toolBody(t) : null,
       open && t.result !== undefined ? pre({ class: 'tool-out' }, t.result.slice(0, 4000)) : null,
     )
   }
 
-  // Diff view for editing tools; JSON for everything else.
+  // Diff view for editing tools; labelled key/value fields for everything else (a raw JSON dump
+  // reads badly — quoted, escaped, brace-wrapped).
   toolBody(t: Tool) {
     const hunks = diffHunks(t)
-    if (!hunks) return pre({ class: 'tool-in' }, JSON.stringify(t.input, null, 2))
+    if (!hunks) {
+      const fields = Object.entries(t.input ?? {})
+      if (!fields.length) return null
+      return div({ class: 'tool-in' },
+        // The ':' is a real text node (not CSS ::after) so a copy drag yields "key: value".
+        fields.map(([k, v]) => div({ class: 'tool-field' },
+          span({ class: 'tool-key' }, `${k}:`),
+          typeof v === 'string' && looksLikeUnifiedDiff(v)
+            ? udiffView(v)
+            : pre({ class: 'tool-val' }, typeof v === 'string' ? v : JSON.stringify(v, null, 2)),
+        )))
+    }
     return div({ class: 'diff' },
       ...hunks.flatMap((h, i) => [
         hunks.length > 1 ? div({ class: 'diff-step' }, `edit ${i + 1}/${hunks.length}`) : null,
