@@ -1191,6 +1191,10 @@ a.server-port:hover { text-decoration: underline; }
   padding-left: .6rem;
   border-left: 2px solid color-mix(in srgb, var(--fg) 18%, transparent);
   opacity: .82;
+  /* Same column geometry as .messages — the tools-only negative-margin rule assumes a 1rem gap. */
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
   /* --turn-color is a custom property and INHERITS — the stub's own .bubble.turn-N sets it, so without
      this reset every nested orphan bubble inherits the parent turn's color and redraws the stripe
      (the recursive-line bug). Reset to transparent so .bubble::before falls back to no stripe here. */
