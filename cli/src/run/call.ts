@@ -40,7 +40,11 @@ export async function runCall(
   // (TB-Wait.md). Best-effort; no server running ⇒ no channel to anchor.
   try {
     const running = serversForBulb(await listBulbServers(), bulbPath)[0]
-    if (running) writeWaitCursor(running.pid, readServerLog(running.pid).offset)
+    if (running) {
+      writeWaitCursor(running.pid, readServerLog(running.pid).offset)
+      // A fresh boot beside a live server looks like RPC into it but isn't — warn (TB-Call.md Inv. 6).
+      console.error(`note: 'call' boots a fresh server.ts instance; the running server (${running.url}) is not contacted — state shared with it must live on disk.`)
+    }
   } catch { /* never let wake bookkeeping break the call */ }
 
   const envResult = loadEnv(mode)
