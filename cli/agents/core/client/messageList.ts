@@ -1,4 +1,4 @@
-import { Component, div, span, a, pre, details, summary } from 'domeleon'
+import { Component, div, span, a, pre, details, summary, svg, path, type HValues } from 'domeleon'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
 import { renderMarkdown, userMarkdown, splitBulbSegments } from './markdown.js'
 import { CopyButton } from './copyButton.js'
@@ -17,6 +17,15 @@ function oneLine(s: string): string {
   return nl === -1 ? s : s.slice(0, nl).trimEnd() + ' …'
 }
 
+// The one disclosure triangle every collapsible renders. SVG, not a font glyph — glyphs centre
+// unpredictably (bulbsPill's icons hit the same thing); open is the same shape rotated by CSS.
+const caret = (open: boolean) => svg({ class: ['caret-tri', open ? 'open' : ''], viewBox: '0 0 16 16', width: '10', height: '10' },
+  path({ d: 'M4 1.5 L13 8 L4 14.5 Z', fill: 'currentColor' }))
+
+// The abandoned-branch fork mark — an SVG ⑂ (U+2442 renders tiny from fallback fonts).
+const forkIcon = () => svg({ class: 'fork-icon', viewBox: '0 0 16 16', width: '11', height: '11', fill: 'none' },
+  path({ d: 'M4 2 V8 H12 V2 M8 8 V14', stroke: 'currentColor', strokeWidth: '1.8', strokeLineCap: 'square' }))
+
 // A unified diff riding in a string input (patcher's `diff`, a pasted git patch). Content-sniffed —
 // an @@ hunk header plus a +/- line — so any tool qualifies, no tool-name coupling; prose can't
 // trip it (no line-anchored @@).
@@ -24,18 +33,20 @@ function looksLikeUnifiedDiff(s: string): boolean {
   return /^@@/m.test(s) && /^[+-]/m.test(s)
 }
 
-// Line-banded unified-diff view: +/- lines get the same add/remove bands the Edit diff view uses,
-// @@ hunk and ---/+++ file headers go muted. Beats squeezing a UDF into old/new blocks, which would
-// destroy the interleaving the format is for.
+// Only the ± lines, banded like the Edit diff view — file headers, @@ markers, and context lines
+// are patch protocol, not what changed. A ⋯ row separates hunks.
 function udiffView(s: string) {
-  return div({ class: 'udiff' }, s.split('\n').map(line => {
-    const cls =
-      line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') ? 'udiff-hunk'
-      : line.startsWith('+') ? 'udiff-add'
-      : line.startsWith('-') ? 'udiff-del'
-      : ''
-    return div({ class: ['udiff-line', cls] }, line === '' ? ' ' : line)
-  }))
+  const rows: ReturnType<typeof div>[] = []
+  let pastFirstHunk = false
+  for (const line of s.split('\n')) {
+    if (line.startsWith('@@')) {
+      if (pastFirstHunk) rows.push(div({ class: 'udiff-gap' }, '⋯'))
+      pastFirstHunk = true
+    } else if (/^[+-]/.test(line) && !line.startsWith('+++') && !line.startsWith('---')) {
+      rows.push(div({ class: ['udiff-line', line.startsWith('+') ? 'udiff-add' : 'udiff-del'] }, line))
+    }
+  }
+  return div({ class: 'udiff' }, rows)
 }
 
 // File-aware tools whose path should open in VS Code / Cursor on click.
@@ -64,11 +75,37 @@ function diffHunks(t: Tool): Hunk[] | undefined {
   }
 }
 
+// mcp__linqpad-patcher__apply_patch → "Linqpad-patcher [apply_patch]". Lazy server match is CC's own
+// split (a tool name containing __ survives); the bracket format is deliberately not CC's.
+function toolDisplayName(name: string): string {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name)
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} [${m[2]}]` : name
+}
+
+// Unified-diff string inputs, if the tool carries any (patcher's patch/diff fields).
+function patchesOf(t: Tool): string[] {
+  return Object.values(t.input ?? {}).filter((v): v is string => typeof v === 'string' && looksLikeUnifiedDiff(v))
+}
+
+// TodoWrite's checklist input, or undefined for every other tool.
+type TodoItem = { content?: string; status?: string; activeForm?: string }
+function todosOf(t: Tool): TodoItem[] | undefined {
+  return t.name === 'TodoWrite' && Array.isArray(t.input?.todos) ? t.input.todos as TodoItem[] : undefined
+}
+
+// "3/8 done · ◼ Verifying already-fixed findings" — counts plus the in-progress item's activeForm,
+// replacing the boilerplate "Todos have been modified successfully…" result digest.
+function todoDigest(todos: TodoItem[]): string {
+  const done = todos.filter(td => td.status === 'completed').length
+  const active = todos.find(td => td.status === 'in_progress')
+  return `${done}/${todos.length} done${active ? ` · ◼ ${active.activeForm ?? active.content ?? ''}` : ''}`
+}
+
 // One-line summary of a turn's collapsed (intermediate) bubbles: step count +
 // tool tally, e.g. "5 steps · Read, Edit ×2, Bash". Pure data, no inference.
 function summarizeSteps(msgs: Msg[]): string {
   const counts = new Map<string, number>()
-  for (const m of msgs) for (const t of m.tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
+  for (const m of msgs) for (const t of m.tools) counts.set(toolDisplayName(t.name), (counts.get(toolDisplayName(t.name)) ?? 0) + 1)
   const tally = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ')
   const n = msgs.length
   return `${n} step${n === 1 ? '' : 's'}${tally ? ` · ${tally}` : ''}`
@@ -357,11 +394,11 @@ export class MessageList extends Component {
   // abandoned-branch fork. Both are a .bubble carrying the turn stripe (color continuous with the turn)
   // and a clickable .turn-summary header (caret + label) that toggles `set`/`key`; the fork additionally
   // shows `body` beneath when open. They differ only in those four inputs.
-  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: string, body?: ReturnType<typeof div>) {
+  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, body?: ReturnType<typeof div>) {
     const expanded = set.has(id)
     return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key },
       div({ class: 'turn-summary', onClick: () => { toggleInSet(set, id); this.update() } },
-        span({ class: 'tool-caret' }, expanded ? '▾' : '▸'),
+        caret(expanded),
         span({ class: 'turn-summary-text' }, label),
       ),
       body ?? null,
@@ -375,7 +412,7 @@ export class MessageList extends Component {
     const body = this.expandedForks.has(msg.id)
       ? div({ class: 'fork-body' }, f.sub.map(sub => this.bubble(sub, turnIdx, undefined, false)))
       : undefined
-    const label = `⑂ ${f.count} message${f.count === 1 ? '' : 's'} on an abandoned branch`
+    const label = [forkIcon(), ` ${f.count} message${f.count === 1 ? '' : 's'} on an abandoned branch`]
     return this.#collapsibleRow(`fork-${msg.id}`, turnIdx, this.expandedForks, msg.id, label, body)
   }
 
@@ -425,7 +462,7 @@ export class MessageList extends Component {
     const expanded = this.expandedEmbeds.has(embed.key)
     const stub = div({ class: 'md', key: `fold-${embed.key}` },
       div({ class: 'bulb-fold', onClick: () => this.#toggleEmbed(embed.key) },
-        span({ class: 'tool-caret' }, expanded ? '▾' : '▸'),
+        caret(expanded),
         span({ class: 'bulb-fold-text' }, `${embed.name ?? 'bulb'} — Version ${embed.chainPosition}`),
         span({ class: 'bulb-fold-app' }, '💡')))
     return expanded ? [stub, embed.view()] : [stub]
@@ -438,23 +475,16 @@ export class MessageList extends Component {
   tool(t: Tool) {
     const open = this.openTools.has(t.id)
     const filePath = filePathOf(t.name, t.input)
+    const todos = todosOf(t)
     // File paths display project-relative (full path in the title + the click); the rest one-lined.
     const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input))
-    // Hand-rolled toggle, not <details>/<summary>: Chrome swallows custom-scheme
-    // (vscode://) anchor clicks inside <summary>.
-    return div({ class: ['tool', t.isError ? 'err' : '', open ? 'open' : ''] },
-      div({
-        class: 'tool-head',
-        onClick: () => {
-          toggleInSet(this.openTools, t.id)
-          this.update()
-        },
-      },
-        span({ class: 'tool-caret' }, open ? '▾' : '▸'),
+    // The head is inert prose (only the file-path link reacts); the digest row below is the toggle.
+    return div({ class: ['tool', t.isError ? 'err' : ''] },
+      div({ class: 'tool-head' },
         // Verb + summary wrap together so inline flow baseline-aligns them across
         // their two fonts (see .tool-label).
         div({ class: 'tool-label' },
-          span({ class: 'tool-name' }, t.name),
+          span({ class: 'tool-name', ...(t.name.startsWith('mcp__') ? { title: t.name } : {}) }, toolDisplayName(t.name)),
           sum
             ? (filePath
                 ? a({
@@ -462,7 +492,6 @@ export class MessageList extends Component {
                     title: filePath,
                     onClick: (e: MouseEvent) => {
                       e.preventDefault()
-                      e.stopPropagation()                            // don't toggle row
                       tb.server.openFile(filePath)
                     },
                   }, sum)
@@ -471,20 +500,37 @@ export class MessageList extends Component {
         ),
         t.result === undefined ? span({ class: 'tool-run' }, '…') : null,
       ),
-      // The OUT line (CC's shape): once the result lands, the digest gets its own indented ⎿ row —
-      // full-width IN above, scannable OUT below. Collapsed only: the open card shows the real
-      // output, so the abridged line would just duplicate it. Pending rows stay one line (the '…').
-      !open && t.result !== undefined && t.digest
-        ? div({ class: 'tool-digest', onClick: () => { toggleInSet(this.openTools, t.id); this.update() } }, t.digest)
+      // The OUT digest row, doubling as the toggle; '(no output)' keeps an empty result expandable.
+      t.result !== undefined
+        ? div({ class: 'tool-digest', onClick: () => { toggleInSet(this.openTools, t.id); this.update() } },
+            caret(open),
+            (todos ? todoDigest(todos) : t.digest) || '(no output)')
         : null,
-      open ? this.toolBody(t) : null,
-      open && t.result !== undefined ? pre({ class: 'tool-out' }, t.result.slice(0, 4000)) : null,
+      // open with no result = a live auto-expanded edit; its diff shows while the tool runs.
+      // Checklist/patch results are protocol boilerplate the digest already restates — show them
+      // only on error, where the result is the diagnostic.
+      open ? div({ class: 'tool-card' },
+          this.toolBody(t),
+          t.result !== undefined && (!(todos || patchesOf(t).length) || t.isError)
+            ? pre({ class: 'tool-out' }, t.result.slice(0, 4000)) : null,
+        ) : null,
     )
   }
 
   // Diff view for editing tools; labelled key/value fields for everything else (a raw JSON dump
   // reads badly — quoted, escaped, brace-wrapped).
   toolBody(t: Tool) {
+    // CC's checklist treatment: tick / filled square / hollow square, per status.
+    const todos = todosOf(t)
+    if (todos) return div({ class: 'todo-list' },
+      todos.map(td => div({ class: ['todo', td.status ?? ''] },
+        span({ class: 'todo-icon' }, td.status === 'completed' ? '✔' : td.status === 'in_progress' ? '◼' : '◻'),
+        span({ class: 'todo-text' }, td.content ?? ''),
+      )))
+    // A diff-carrying input (patcher tools) owns the card: its sibling fields (filePath, options)
+    // are addressing the digest row already shows.
+    const patches = patchesOf(t)
+    if (patches.length) return div({ class: 'tool-in' }, patches.map(udiffView))
     const hunks = diffHunks(t)
     if (!hunks) {
       const fields = Object.entries(t.input ?? {})

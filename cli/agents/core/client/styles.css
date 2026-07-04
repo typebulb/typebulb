@@ -1153,29 +1153,25 @@ a.server-port:hover { text-decoration: underline; }
 .tool {
   font-size: .85rem;
 }
-/* Clickable caret row, shared by tool heads and the collapsed-turn summary: a flex
-   row that's an unselectable click target. align-items:center centers the caret
-   against the label box (verb↔summary alignment is handled inside .tool-label). */
+/* Row shape shared by tool heads and the collapsed-turn summary; only the latter is a click
+   target (a tool's toggle is its digest row). */
 .tool-head, .turn-summary {
   display: flex;
   align-items: center;
   gap: .5rem;
   padding: .15rem 0;
+}
+.turn-summary {
   cursor: pointer;
   user-select: none;
 }
-.tool.open {
-  margin-top: .55rem;
-  background: var(--veil);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.tool.open .tool-head {
-  padding: .4rem .6rem;
-}
-/* line-height: 1 keeps the oversized caret's box from inflating the row height. */
-.tool-caret { color: var(--muted); font-size: 1.4rem; line-height: 1; width: 1ch; }
-.tool-name { font-weight: 600; color: var(--accent); }
+/* The shared disclosure triangle (caret() in messageList.ts). flex:none so a squeezed row can't
+   crush it; the digest row has no flex gap, so its spacing rides the marker. */
+.caret-tri { flex: none; transition: transform .15s ease; }
+.caret-tri.open { transform: rotate(90deg); }
+.tool-digest .caret-tri { margin-right: .5rem; }
+/* Plain bold — an accent verb reads as a hyperlink; accent is reserved for the file-path link. */
+.tool-name { font-weight: 600; }
 /* Errors here are routine (a first-read miss the retry fixes), so a failed tool
    recolors just its verb rather than boxing the whole row — a quiet signal. */
 .tool.err .tool-name { color: var(--err); }
@@ -1184,6 +1180,7 @@ a.server-port:hover { text-decoration: underline; }
    answer). Same caret/row shape as a tool head, italic muted label. */
 .turn-summary { color: var(--muted); font-size: .85rem; }
 .turn-summary-text { font-style: italic; }
+.fork-icon { vertical-align: -1px; margin-right: .15rem; }
 .turn-summary:hover .turn-summary-text { color: var(--fg); }
 
 /* An expanded abandoned-branch (fork) stub renders its orphan messages here — set apart from the live
@@ -1227,7 +1224,6 @@ a.server-port:hover { text-decoration: underline; }
    (equal specificity, later in source) and the stub actually gets its breathing room. */
 .md .bulb-fold { margin: .7rem 0; }
 .bulb-fold:hover { background: color-mix(in srgb, var(--fg) 8%, var(--panel)); }
-.bulb-fold .tool-caret { color: inherit; }   /* follow the accent row color */
 /* Verb + summary are inline siblings sharing one line box and font, so they sit
    on a common baseline. Ellipsis truncation lives on the wrapper, not the
    children — overflow:hidden on the summary itself skews its baseline. */
@@ -1243,18 +1239,13 @@ a.server-port:hover { text-decoration: underline; }
 .tool-sum {
   margin-left: .5rem;
   color: var(--muted);
-  /* Re-enable selection the .tool-head blankets off: the verb/caret stay an
-     unselectable click target, but the summary is real data (path, pattern,
-     command) worth copying. A drag selects; a plain click still toggles. */
-  user-select: text;
 }
 .tool-run { color: var(--muted); }
 
-/* The OUT line ("463 lines", "2 files", the first stdout line) — a collapsed tool's second row,
-   indented under the verb with CC's ⎿ marker (::before, so a copy drag doesn't grab it). Clickable
-   like the head (it's part of the row); the text itself stays selectable, same deal as .tool-sum. */
+/* The OUT line ("463 lines", the first stdout line): a tool's second row and its only toggle.
+   Text stays selectable — a drag copies, a plain click toggles. */
 .tool-digest {
-  padding: 0 0 .15rem 1.2rem;
+  padding: 0 0 .15rem .6rem;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1262,7 +1253,27 @@ a.server-port:hover { text-decoration: underline; }
   cursor: pointer;
   user-select: text;
 }
-.tool-digest::before { content: '⎿'; margin-right: .5rem; user-select: none; }
+.tool-digest:hover { color: var(--fg); }
+
+/* Expanded input/output card beneath the digest row — additive only, the rows above keep their
+   collapsed look. First child sheds its top divider (nothing above it inside the card). */
+.tool-card {
+  margin: .15rem 0 .55rem .6rem;
+  background: var(--veil);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.tool-card > :first-child, .tool-card > .diff:first-child > :first-child { border-top: none; }
+
+/* TodoWrite checklist (CC's treatment: struck-through done, bold in-progress, plain pending). */
+.todo-list { padding: .45rem .7rem; display: grid; gap: .25rem; font-size: .85rem; }
+.todo { display: flex; gap: .5rem; align-items: baseline; }
+.todo-icon { flex: none; }
+.todo.completed .todo-icon { color: var(--diff-add); }
+.todo.completed .todo-text { text-decoration: line-through; color: var(--muted); }
+.todo.in_progress .todo-text { font-weight: 600; }
+.todo.in_progress .todo-icon { color: var(--accent); }
 
 /* Code-display panels inside an open tool card: raw input/output (.tool-in,
    .tool-out) and per-hunk diff halves (.diff-old, .diff-new). All four share
@@ -1288,13 +1299,13 @@ a.server-port:hover { text-decoration: underline; }
 .tool-field + .tool-field { margin-top: .5rem; }
 .tool-key { color: var(--muted); margin-right: .6rem; user-select: text; }
 .tool-val { display: inline; margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
-/* Line-banded unified-diff view for a diff-shaped string input (looksLikeUnifiedDiff): the same
-   add/remove band colors as .diff-new/.diff-old, applied per line; hunk/file headers muted. */
+/* Line-banded unified-diff view (± lines only): the same add/remove band colors as
+   .diff-new/.diff-old; a muted ⋯ row separates hunks. */
 .udiff { white-space: pre-wrap; word-break: break-word; }
 .udiff-line { padding: 0 .2rem; }
 .udiff-add { background: color-mix(in srgb, var(--diff-add) 24%, transparent); }
 .udiff-del { background: color-mix(in srgb, var(--err) 24%, transparent); }
-.udiff-hunk { color: var(--muted); }
+.udiff-gap { color: var(--muted); user-select: none; }
 /* The band carries the add/remove signal; text stays --fg so it's readable. Colouring the text the same
    hue as its fill (red-on-red) is what washes a diff out — the band alone is the convention. */
 .diff-old {
