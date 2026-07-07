@@ -60,8 +60,8 @@ describe('toolResultDigest', () => {
 
 describe('firstLineDigest', () => {
   it('caps a long first line and counts the rest', () => {
-    const out = firstLineDigest('x'.repeat(200) + '\n\n  second  \nthird')
-    expect(out.length).toBeLessThan(120)
+    const out = firstLineDigest('x'.repeat(500) + '\n\n  second  \nthird')
+    expect(out.length).toBeLessThan(320)
     expect(out).toContain('…')
     expect(out).toContain('(+2 lines)')
   })

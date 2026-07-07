@@ -1,17 +1,14 @@
-import { div, span, a, button, pre, svg, path, rect } from 'domeleon'
+import { div, span, a, button, pre } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
+import { icon } from './icons.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { pathKey, basename, bulbBasename, relTime } from './util.js'
 import type { RunningServer, BulbFile, BulbRow, BulbHit } from './types.js'
 
-// Inline SVG play/stop icons for the launch/stop controls (the pattern from
-// typebulbs/xor-x-ray.bulb.md): font glyphs centre unpredictably across platforms, a fixed
-// viewBox is reliable, and currentColor lets the button's own colour flow through.
-const btnIcon = (...shapes: unknown[]) => svg({ viewBox: '0 0 16 16', width: '13', height: '13', class: 'btn-icon' }, ...shapes as never[])
-// Triangle nudged ~2px right of centre: a right-pointing triangle's visual mass sits left of its
-// bounding box, so geometric centring reads as too-far-left in the round button.
-const iconPlay = () => btnIcon(path({ d: 'M5.5 2 L15.5 8 L5.5 14 Z', fill: 'currentColor' }))
-const iconStop = () => btnIcon(rect({ x: 3, y: 3, width: 10, height: 10, fill: 'currentColor' }))
+// Launch/stop icons through icons.ts (material play/stop, filled): svgs centre reliably where
+// font glyphs don't, and currentColor lets the button's own colour flow through.
+const iconPlay = () => icon('play', 'btn-icon')
+const iconStop = () => icon('stop', 'btn-icon')
 
 // Status-bar bulb launcher + off-switch. Lists every *.bulb.md in the project (MRU-first,
 // type to filter) so a bulb you just authored is one click from running — no trip to the

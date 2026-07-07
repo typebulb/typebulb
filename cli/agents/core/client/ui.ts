@@ -1,5 +1,9 @@
 import { Component, div, span, button, inputText, type VElement } from 'domeleon'
 
+/** Whether a scroll container rests within `px` of its bottom — the sticky-autoscroll test. */
+export const stuckToBottom = (el: Element, px: number) =>
+  el.scrollHeight - (el.scrollTop + el.clientHeight) < px
+
 // Shared filter input + clear (×) for the bulb launcher and the session picker — one copy of the
 // filter chrome (the bulb-local analogue of client's uiHelpers/searchBox; the bulb can't import
 // that). The host owns the value (it drives the filtered list + highlight) and the key handling

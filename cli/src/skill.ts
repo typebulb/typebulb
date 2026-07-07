@@ -36,14 +36,15 @@ export function bundledDescriptionPath(): string { return path.join(packageRoot(
 
 /** Discovery metadata wrapped onto the README at emit time (the README itself carries none). The
  *  `description` is read from `description.md` — the single source the `agent` output also points
- *  at — and flattened to the one line YAML frontmatter wants; `version` stamps the typebulb release
- *  the skill was cut from, so a persisted copy is self-identifying and its staleness is checkable
- *  (see freshnessNote). */
+ *  at — flattened to one line and JSON-quoted (a JSON string is a valid YAML scalar; unquoted, any
+ *  `: ` in the prose parses as a nested mapping and the whole frontmatter fails); `version` stamps
+ *  the typebulb release the skill was cut from, so a persisted copy is self-identifying and its
+ *  staleness is checkable (see freshnessNote). */
 export function skillFrontmatter(version: string): string {
   const description = readFileSync(bundledDescriptionPath(), 'utf8').trim().replace(/\s+/g, ' ')
   return `---
 name: typebulb
-description: ${description}
+description: ${JSON.stringify(description)}
 version: ${version}
 ---`
 }

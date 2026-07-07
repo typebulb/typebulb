@@ -4,7 +4,7 @@ import { ClaudeAdapter } from '../../agents/claude/server/adapter.js'
 import { PiAdapter } from '../../agents/pi/server/adapter.js'
 
 /**
- * Which harness bare `typebulb agent` should mirror (TB-Skill.md, TB-Harness.md). Historically bare
+ * Which harness bare `typebulb agent` should mirror (TB-Skill.md, TB-Agent-Harness.md). Historically bare
  * `agent` hardcoded `claude`; with a second harness (pi) that silently mirrored the wrong agent. This
  * resolves the harness instead — restoring the symmetry of the single universal instruction "run
  * `npx typebulb agent`", which now does the right thing under whichever harness invoked it.
@@ -12,7 +12,7 @@ import { PiAdapter } from '../../agents/pi/server/adapter.js'
  * Per-agent adapter constructors. Constructing an adapter is side-effect free, so the resolver can read
  * a harness's env marker + session dir WITHOUT importing its server *barrel* (which would boot the
  * Claude switcher on import — TB-Agent-Switcher.md). Static imports, like AGENT_SERVERS in serve.ts:
- * adding a harness adds an entry here too (TB-Harness.md "Adding a harness").
+ * adding a harness adds an entry here too (TB-Agent-Harness.md "Adding a harness").
  */
 const AGENT_ADAPTERS: Record<string, () => AgentAdapter> = {
   claude: () => new ClaudeAdapter(),
@@ -20,15 +20,16 @@ const AGENT_ADAPTERS: Record<string, () => AgentAdapter> = {
 }
 
 /**
- * Install every harness's CLI-side `wait`-support through the adapter contract (pi's background-wait
- * shim; harnesses that need none inherit the no-op default). Called on every CLI invocation — the
+ * Install every harness's CLI-side support through the adapter contract (pi's background-wait shim
+ * and bulb-authoring skill; harnesses that need none inherit the no-op default). Called on every CLI
+ * invocation — the
  * adapter guarantees each call is idempotent, gated, and non-throwing; the extra try/catch guards
- * construction. This is the ONLY way the CLI reaches harness `wait` behaviour — through `AgentAdapter`,
+ * construction. This is the ONLY way the CLI reaches harness-support behaviour — through `AgentAdapter`,
  * never a direct `agents/<name>` import (the boundary the adapter exists to manage, like `detectsSelf`).
  */
-export function ensureHarnessWaitSupport(): void {
+export function ensureHarnessSupport(): void {
   for (const make of Object.values(AGENT_ADAPTERS)) {
-    try { make().ensureWaitSupport() } catch {}
+    try { make().ensureHarnessSupport() } catch {}
   }
 }
 
@@ -54,8 +55,12 @@ export type AgentChoice = { name: string } | { ambiguous: string[] }
  *  1. **Caller identity** — the process that ran `typebulb agent` inherited its harness's env marker
  *     (`detectsSelf`). This is the agent path; a human in a terminal sets no marker and falls through.
  *  2. **Disk signal** — harnesses with sessions under this cwd: exactly one → it; none → the canonical
- *     default (nothing to show and no preference expressed, so don't nag); two or more → ambiguous,
- *     ask the user. All pure parse / `statSync`, no inference (Invariant 1).
+ *     next rung; two or more → ambiguous, ask the user.
+ *  3. **Machine signal** — no sessions here at all (a fresh project), so ask which harnesses are
+ *     *installed* on the machine (`detectsInstalled` — the harness home dir): exactly one → it;
+ *     two or more → ambiguous, ask the user (before this rung a fresh project silently defaulted,
+ *     and an installed-but-unused-here harness never made the picker); none → the canonical default.
+ *     All pure env reads / fs stats, no inference (Invariant 1).
  *
  * A live mirror already serving this cwd is deliberately NOT a resolution signal: reusing whatever
  * harness happens to be showing silently skipped the picker when a human had sessions for both, which
@@ -74,6 +79,11 @@ export function resolveAgent(cwd: string): AgentChoice {
   // 2. Which harnesses have sessions here.
   const withSessions = [...adapters].filter(([, a]) => a.listSessionFiles(cwd).length > 0).map(([n]) => n)
   if (withSessions.length === 1) return { name: withSessions[0] }
-  if (withSessions.length === 0) return { name: names[0] }   // canonical default (first registered)
-  return { ambiguous: withSessions }
+  if (withSessions.length >= 2) return { ambiguous: withSessions }
+
+  // 3. Nothing has sessions here — a fresh project. Which harnesses exist on the machine.
+  const installed = [...adapters].filter(([, a]) => a.detectsInstalled()).map(([n]) => n)
+  if (installed.length === 1) return { name: installed[0] }
+  if (installed.length >= 2) return { ambiguous: installed }
+  return { name: names[0] }   // canonical default (first registered)
 }

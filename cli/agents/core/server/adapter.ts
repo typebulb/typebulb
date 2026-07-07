@@ -1,4 +1,4 @@
-// The harness-neutral contract every agent mirror realizes (TB-Harness.md). The neutral engine
+// The harness-neutral contract every agent mirror realizes (TB-Agent-Harness.md). The neutral engine
 // (mirror.ts) tails an on-disk JSONL transcript, walks its parent-linked tree from the newest leaf to
 // the root, and renders the live chain — none of which reads a harness-specific field. Everything that
 // DOES read one (where the sessions live, the entry schema, the cleaning rules, liveness) is supplied
@@ -9,7 +9,62 @@
 // client also consumes (as `ServerEvent`). The adapter's job is to turn one raw JSONL entry into that
 // stream; the engine owns the tree walk, the locks, the poll buffer, and the RPC surface.
 
-import type { Event, SessionFile, TokenCounts } from '../events.js'
+import type { ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatus, Event, SessionFile, TokenCounts } from '../events.js'
+
+/**
+ * A harness the mirror can drive, through a process the mirror itself spawned and owns
+ * (TB-Agent-Composer.md). Optional capability: an adapter that implements `createDriver` gets the
+ * composer panel; one that doesn't (Claude Code — the billing footgun) never exposes any of this.
+ * The driver never renders conversation: the transcript tail stays the sole render path (Invariant
+ * C1); a driver only supplies the ephemeral `draft`/`streaming` that ride the poll response.
+ */
+export interface AgentDriver {
+  /** Route a user message: a fresh prompt when idle, a steer when mid-turn — or, with `followUp`,
+   *  queued until the turn ends (Alt+Enter; parity #2). Resolves once the harness accepts/queues
+   *  it — not when the turn ends (the tail renders that). */
+  send(text: string, opts?: { followUp?: boolean }): Promise<{ ok: boolean; error?: string }>
+  /** Abort the in-flight turn (the Stop button). Best-effort; never throws. */
+  stop(): Promise<void>
+  /** Mid-turn? Authoritative (from the harness's own event stream) — unlike the engine's
+   *  file-mtime heuristic, which goes stale during a long single-message stream. */
+  readonly streaming: boolean
+  /** The partial assistant message accumulated from stream deltas; null when there's nothing to
+   *  show. Retained after a message completes until the engine sees its durable row (below). */
+  readonly draft: { text: string; thinking: string } | null
+  /** Ambient one-line state (TB-Agent-Composer-Toolkit.md Piece 2): a retry/compaction in progress, an
+   *  extension notice, joined extension statuses. Ephemeral, rides the poll response like `draft`. */
+  readonly status: ComposerStatus | null
+  /** Pending steer/follow-up texts (the harness's queue_update; parity #2), null when empty.
+   *  Ephemeral, rides the poll response like `status`. */
+  readonly queue: ComposerQueue | null
+  /** The harness's own session totals (pi's get_session_stats: cost + context usage — parity #5),
+   *  refreshed at turn/compaction end. null until first fetched. Ephemeral, rides the poll. */
+  readonly stats: ComposerStats | null
+  /** The harness's currently CONFIGURED model id (pi's get_state at boot, set_model responses) —
+   *  what the next turn will use, unlike the disk-derived latestModel (last turn's resolution).
+   *  null until first fetched. Ephemeral, rides the poll. */
+  readonly model: string | null
+  /** The oldest unanswered blocking extension dialog (Piece 3), or null. Reading it may expire
+   *  stale requests (the poll is the expiry clock — deliberate, see the toolkit spec's gotchas). */
+  readonly dialog: ComposerDialogRequest | null
+  /** Answer (or cancel) a pending dialog by id. Unknown/expired ids are a soft error. */
+  respondUi(id: string, resp: { value?: string; confirmed?: boolean; cancelled?: boolean }): { ok: boolean; error?: string }
+  /** Forward one allowlisted harness command (TB-Agent-Composer-Toolkit.md Piece 4). The allowlist is the
+   *  driver's own — never `prompt`/`steer`/`follow_up` (messages go through `send`, the one door). */
+  rpc(cmd: { type: string } & Record<string, unknown>): Promise<{ ok: boolean; data?: unknown; error?: string }>
+  /** The session file this driver is appending to. Undefined until resolved (a driver spawned
+   *  sessionless creates its file on boot); the engine attaches to it once it appears. */
+  readonly sessionFile: string | undefined
+  /** Fatal driver error (spawn failure, process death), surfaced in the panel. A driver with an
+   *  error is dead — the engine disposes and replaces it on the next send. */
+  readonly error: string | undefined
+  /** Drop a COMPLETED draft (no message currently streaming into it). The engine calls this when
+   *  the drain emits a live-chain assistant event — the durable row has arrived, so the ephemeral
+   *  bubble hands off without a gap. A draft mid-accumulation is kept. */
+  clearCompletedDraft(): void
+  /** Kill the owned process (abort first if streaming, brief grace, then kill). Idempotent. */
+  dispose(): Promise<void>
+}
 
 /**
  * The contract a coding agent's transcript format realizes so the neutral mirror engine can render it.
@@ -33,16 +88,30 @@ export abstract class AgentAdapter<E = unknown> {
    */
   abstract detectsSelf(): boolean
 
+  /**
+   * Is this harness installed on the MACHINE, regardless of whether it has touched this project?
+   * The signal is the harness's home dir (CC `~/.claude/`, pi `~/.pi/agent/`) — created on the
+   * harness's first run anywhere, so a pure `existsSync`, no PATH scan, no process spawn. Bare
+   * `typebulb agent` uses this as the rung below the per-cwd session signal (resolveAgent): in a
+   * fresh project nothing has sessions yet, and without this every fresh project silently defaulted
+   * to the first registered harness — an installed-but-unused-here harness never even made the
+   * picker. Misses "installed via npm but never launched once" by design (the dir appears on first
+   * launch); that window closes itself.
+   */
+  abstract detectsInstalled(): boolean
+
   // ── CLI-side harness integration (called from agentViewer/resolve.ts, not the mirror engine — the
   //    same src→adapter direction detectsSelf uses) ──
   /**
-   * Install whatever this harness needs for typebulb's background-`wait` wake loop to work
-   * (TB-Wait.md). The default is a no-op — Claude Code's case, since
-   * `run_in_background` is native. Pi overrides it: it has no background bash, so typebulb ships a
-   * `wait`-intercepting extension into pi's config. Runs on the CLI hot path, so an override MUST be
-   * idempotent, gated (write nothing if the harness isn't present), and never throw.
+   * Install whatever CLI-side support this harness needs. The default is a no-op — Claude Code's
+   * case (`run_in_background` is native, and the skill stays emit-only per TB-Skill.md). Pi
+   * overrides it: the background-`wait` shim extension (TB-Wait.md — pi has no background bash),
+   * and the bulb-authoring skill into pi's global skills dir (TB-Skill.md's scoped pi exception —
+   * a composer-driven session has no cold-start command to learn from). Runs on the CLI hot path,
+   * so an override MUST be idempotent, gated (write nothing if the harness isn't present), and
+   * never throw.
    */
-  ensureWaitSupport(): void {}
+  ensureHarnessSupport(): void {}
 
   // ── discovery: where this agent stores the mirrored project's transcripts ──
   /** The directory holding `cwd`'s session files (e.g. `~/.claude/projects/<sanitized>/`). */
@@ -73,10 +142,11 @@ export abstract class AgentAdapter<E = unknown> {
    * assistant turn — the `usage` (the current window) and `model`. `sessionStartMs` is the engine's
    * one clock, used to set the assistant event's `live` flag (fresh-this-session edits) on both the
    * live chain and an orphan branch. A hidden/noise entry returns `{ events: [] }`. The engine applies
-   * `usage`/`model` only on the live chain (an orphaned branch takes `events` alone), so a dead branch
-   * never moves the token chip or the switcher watchdog.
+   * `usage`/`model`/`cost` only on the live chain (an orphaned branch takes `events` alone), so a dead
+   * branch never moves the token chip or the switcher watchdog. `cost` is the entry's harness-computed
+   * spend (pi's usage.cost.total; CC has none) — never a mirror-side calculation.
    */
-  abstract apply(e: E, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string }
+  abstract apply(e: E, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string; cost?: number }
 
   // ── status ──
   /**
@@ -93,4 +163,13 @@ export abstract class AgentAdapter<E = unknown> {
   abstract readPreview(file: string): string
   /** The display-cleaned searchable text of one entry (user/assistant), or '' to skip it. */
   abstract searchText(e: E): string
+
+  // ── driving (optional capability — TB-Agent-Composer.md) ──
+  /**
+   * Create a driver bound to `sessionFile` (undefined ⇒ the harness starts a new session in `cwd`).
+   * Absent ⇒ this harness has no composer: the RPCs error, the panel never renders. The engine owns
+   * the lifecycle — at most one driver per mirror, created lazily on the first send, disposed on
+   * session switch / shutdown; the adapter only supplies the transport.
+   */
+  createDriver?(cwd: string, sessionFile: string | undefined): AgentDriver
 }

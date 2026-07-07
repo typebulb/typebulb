@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/core/client/markdown.js'
+import { mdRenderToHtml, splitBulbSegments } from '../agents/core/client/markdown.js'
 
 /**
  * A markdown table chops onto its own row like an svg/bulb embed: the `table_open`/`table_close`
@@ -34,5 +34,17 @@ describe('markdown table embed', () => {
     const html = mdRenderToHtml(`${table}\n\nprose\n\n${table}`)
     expect(html.match(/table-embed/g)?.length).toBe(2)
     expect(html).toContain('prose')
+  })
+})
+
+// The streaming-draft code card (#draftBulbCard) rides on markdown-it reading an UNCLOSED trailing
+// fence as a fence-to-end-of-input — so a bulb mid-stream is detected by the same splitter the
+// durable path uses. If this regresses, a streaming bulb unrolls full-height as prose again.
+describe('splitBulbSegments — bulb still streaming (unclosed trailing fence)', () => {
+  it('detects the partial bulb, prose split off before it', () => {
+    const draft = 'Here you go:\n\n````bulb\n---\nformat: typebulb/v1\nname: demo\n---\n\n**app.tsx**\n```tsx\nconst x = 1'
+    const segs = splitBulbSegments(draft)
+    expect(segs.map(s => s.kind)).toEqual(['md', 'bulb'])
+    expect(segs[1].kind === 'bulb' && segs[1].source).toContain('const x = 1')
   })
 })

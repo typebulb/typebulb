@@ -33,7 +33,7 @@ import { runModels } from './commands/models.js'
 import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
-import { ensureHarnessWaitSupport } from './agentViewer/resolve.js'
+import { ensureHarnessSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
 import { runConsole } from './run/console.js'
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   // before any embed/turn wait (closing the activation gap — a just-placed shim isn't active until pi's
   // next session start). Gated on the harness being present (Claude-Code-only users get nothing
   // written) and never throws — at worst two stats on the hot path.
-  ensureHarnessWaitSupport()
+  ensureHarnessSupport()
 
   // Lifecycle / policy commands don't need a resolved (existing) bulb file — dispatch before file
   // resolution. (`trust` can pre-trust a path that doesn't exist yet; `logs`/`stop` query the registry.)

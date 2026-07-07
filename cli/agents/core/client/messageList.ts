@@ -1,10 +1,17 @@
-import { Component, div, span, a, pre, details, summary, svg, path, type HValues } from 'domeleon'
+import { Component, div, span, a, img, pre, details, summary, type HValues } from 'domeleon'
+import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
-import { renderMarkdown, userMarkdown, splitBulbSegments } from './markdown.js'
+import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
 import { CopyButton } from './copyButton.js'
 import { BulbEmbed } from './bulbEmbed.js'
+import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
 import { asStr, turnClassFor, displayPath } from './util.js'
+import { stuckToBottom } from './ui.js'
+import { PASTE_DIR, PASTE_IMAGE_MIME } from '../events.js'
+
+const PASTE_MENTION_RE = new RegExp(
+  `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
 
 function toolSummary(input: Record<string, unknown>): string {
   if (!input || typeof input !== 'object') return ''
@@ -17,14 +24,11 @@ function oneLine(s: string): string {
   return nl === -1 ? s : s.slice(0, nl).trimEnd() + ' …'
 }
 
-// The one disclosure triangle every collapsible renders. SVG, not a font glyph — glyphs centre
-// unpredictably (bulbsPill's icons hit the same thing); open is the same shape rotated by CSS.
-const caret = (open: boolean) => svg({ class: ['caret-tri', open ? 'open' : ''], viewBox: '0 0 16 16', width: '10', height: '10' },
-  path({ d: 'M4 1.5 L13 8 L4 14.5 Z', fill: 'currentColor' }))
-
-// The abandoned-branch fork mark — an SVG ⑂ (U+2442 renders tiny from fallback fonts).
-const forkIcon = () => svg({ class: 'fork-icon', viewBox: '0 0 16 16', width: '11', height: '11', fill: 'none' },
-  path({ d: 'M4 2 V8 H12 V2 M8 8 V14', stroke: 'currentColor', strokeWidth: '1.8', strokeLineCap: 'square' }))
+// The one disclosure triangle every collapsible renders (a custom icons.ts glyph — SVG, not a font
+// glyph: glyphs centre unpredictably); open is the same shape rotated by CSS.
+const caret = (open: boolean) => icon('caret', ['caret-tri', open ? 'open' : ''])
+// The abandoned-branch fork mark — icons.ts's custom ⑂.
+const forkIcon = () => icon('fork', 'fork-icon')
 
 // A unified diff riding in a string input (patcher's `diff`, a pasted git patch). Content-sniffed —
 // an @@ hunk header plus a +/- line — so any tool qualifies, no tool-name coupling; prose can't
@@ -34,7 +38,8 @@ function looksLikeUnifiedDiff(s: string): boolean {
 }
 
 // Only the ± lines, banded like the Edit diff view — file headers, @@ markers, and context lines
-// are patch protocol, not what changed. A ⋯ row separates hunks.
+// are patch protocol, not what changed. A ⋯ row separates hunks. The ± marker itself is stripped
+// here and re-drawn as a CSS ::before gutter glyph, so drag-select copies clean code.
 function udiffView(s: string) {
   const rows: ReturnType<typeof div>[] = []
   let pastFirstHunk = false
@@ -43,7 +48,7 @@ function udiffView(s: string) {
       if (pastFirstHunk) rows.push(div({ class: 'udiff-gap' }, '⋯'))
       pastFirstHunk = true
     } else if (/^[+-]/.test(line) && !line.startsWith('+++') && !line.startsWith('---')) {
-      rows.push(div({ class: ['udiff-line', line.startsWith('+') ? 'udiff-add' : 'udiff-del'] }, line))
+      rows.push(div({ class: ['udiff-line', line.startsWith('+') ? 'udiff-add' : 'udiff-del'] }, line.slice(1)))
     }
   }
   return div({ class: 'udiff' }, rows)
@@ -86,6 +91,7 @@ function toolDisplayName(name: string): string {
 function patchesOf(t: Tool): string[] {
   return Object.values(t.input ?? {}).filter((v): v is string => typeof v === 'string' && looksLikeUnifiedDiff(v))
 }
+
 
 // TodoWrite's checklist input, or undefined for every other tool.
 type TodoItem = { content?: string; status?: string; activeForm?: string }
@@ -134,6 +140,12 @@ export class MessageList extends Component {
   #embedSeq = 0
   #superseded = new Set<BulbEmbed>()               // recomputed per chain pass; drives fold-vs-live in #renderBody
   #stuckToBottom = true
+  #draftScroll = new Map<number, { top: number; stuck: boolean }>()  // per-card scroll state across draft remounts (see #draftBulbCard)
+  #draftLen = 0                                    // shrink detector: a new in-flight message resets the card scroll state
+  #draftThinkingOpen = false                       // the draft's <details> recreates on every growth tick; this carries its open state across
+  // Pasted-image thumbnails (TB-Agent-Composer-Toolkit.md Piece 6): data-URLs by filename, fetched
+  // once via composerPasteRead; dropped on clear() so a long-lived tab doesn't hoard image payloads.
+  #pasteThumbs = new Map<string, string | 'pending' | 'failed'>()
 
   get parent() { return this.ctx.parent as unknown as IRoot }
 
@@ -145,6 +157,7 @@ export class MessageList extends Component {
     this.expandedTurns.clear()
     this.expandedForks.clear()
     this.expandedEmbeds.clear()
+    this.#pasteThumbs.clear()
     this.#superseded = new Set()
     this.copyButtons = []
     this.bulbEmbeds = []
@@ -319,7 +332,7 @@ export class MessageList extends Component {
   onScroll() {
     const el = this.scrollEl
     if (!el) return
-    this.#stuckToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < 50
+    this.#stuckToBottom = stuckToBottom(el, 50)
   }
 
   // ===== Views =====
@@ -349,7 +362,74 @@ export class MessageList extends Component {
         groups[groups.length - 1]!.msgs.push(msg)
       }
     }
-    return groups.flatMap((g, gi) => this.renderTurn(g.msgs, g.idx, gi === groups.length - 1))
+    const out = groups.flatMap((g, gi) => this.renderTurn(g.msgs, g.idx, gi === groups.length - 1))
+    // The composer driver's in-flight assistant message (TB-Agent-Composer.md): one ephemeral bubble
+    // after the transcript, continuing the current turn's stripe. NOT a Msg — it never joins
+    // `messages`, search, or turn collapse (Invariant C1); the durable row replaces it when the
+    // entry lands off the tail.
+    const draft = this.parent.draft
+    if (draft) out.push(this.#draftBubble(draft, Math.max(0, turn)))
+    else { this.#draftScroll.clear(); this.#draftThinkingOpen = false }
+    return out
+  }
+
+  // Keyed by content length so growth remounts the node and re-renders the markdown — onMounted
+  // fires only on mount, and a draft is the one place bubble text changes after creation. An empty
+  // draft (message opened, no text yet) shows a shimmering ellipsis instead of a blank band.
+  #draftBubble(draft: { text: string; thinking: string }, turnIdx: number) {
+    const key = `draft-${draft.text.length}-${draft.thinking.length}`
+    if (draft.text.length < this.#draftLen) this.#draftScroll.clear()
+    this.#draftLen = draft.text.length
+    return div({ class: ['bubble', 'assistant', 'draft', turnClassFor(turnIdx)], key },
+      !this.parent.prose && draft.thinking
+        ? details({
+            class: 'thinking',
+            open: this.#draftThinkingOpen,
+            onToggle: (e: Event) => { this.#draftThinkingOpen = (e.currentTarget as HTMLDetailsElement).open },
+          }, summary('thinking'), pre(draft.thinking)) : null,
+      draft.text.trim()
+        ? this.#draftBody(key, draft.text)
+        : div({ class: 'draft-wait shimmer-text' }, '…'),
+    )
+  }
+
+  // Draft text with a bulb in it renders the bulb as a capped code card, not prose — an unclosed
+  // trailing fence parses as a fence-to-end-of-input, so splitBulbSegments catches a bulb
+  // mid-stream for free. The ephemeral draft never mounts a live embed; the durable row's
+  // BulbEmbed takes the same slot when the entry lands (the card "flips from code to run").
+  #draftBody(key: string, text: string) {
+    const segs = splitBulbSegments(text)
+    if (!segs.some(s => s.kind === 'bulb')) return this.#mdDiv(key, renderMarkdown(text))
+    return segs.map((s, i) => s.kind === 'md'
+      ? (s.text.trim() ? this.#mdDiv(`${key}-md-${i}`, renderMarkdown(s.text)) : null)
+      : this.#draftBulbCard(s.source, i))
+  }
+
+  // A streaming bulb's code card: shimmer header + ticking line count over the standard
+  // .bulb-code listing, height-capped, stuck to the bottom as it grows. The draft bubble
+  // remounts on every growth tick (the length key), so scroll state lives in #draftScroll
+  // keyed by segment index — a user scrolled up to peek keeps their place.
+  #draftBulbCard(source: string, i: number) {
+    const name = bulbName(source)
+    const lines = source.split('\n').length
+    return div({ class: 'md', key: `draft-bulb-${i}` },
+      div({ class: 'embed bulb-streaming' },
+        div({ class: 'bulb-streaming-head' },
+          span('💡 '),
+          span({ class: 'shimmer-text shimmer-slow' }, `${name ? `${name} — ` : ''}writing…`),
+          span({ class: 'bulb-streaming-count' }, `${lines} lines`)),
+        div({
+          class: ['bulb-code', 'md'],
+          onScroll: (e: Event) => {
+            const el = e.currentTarget as HTMLElement
+            this.#draftScroll.set(i, { top: el.scrollTop, stuck: stuckToBottom(el, 50) })
+          },
+          onMounted: (el: Element) => {
+            el.innerHTML = mdPlain.render(stripFrontmatter(source))
+            const st = this.#draftScroll.get(i)
+            ;(el as HTMLElement).scrollTop = st && !st.stuck ? st.top : el.scrollHeight
+          },
+        })))
   }
 
   // A completed turn collapses its intermediate assistant bubbles (everything
@@ -433,9 +513,35 @@ export class MessageList extends Component {
     return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
       !prose && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
+      msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       prose ? null : msg.tools.map(t => this.tool(t)),
       copy ? copy.view() : null,
     )
+  }
+
+  // A user message @-mentioning `.typebulb/paste/` images shows them beneath the text — the human's
+  // half of the path-reference pattern (the file itself is what the agent reads). Fetch-once cache;
+  // a mirror whose server lacks the RPC just caches the miss.
+  #pasteThumbView(msg: Msg) {
+    const names = [...msg.text.matchAll(PASTE_MENTION_RE)].map(m => m[1]!)
+    const srcs = names.map(n => this.#thumbSrc(n)).filter((s): s is string => !!s)
+    if (!srcs.length) return null
+    return div({ class: 'paste-thumbs' }, srcs.map(s => img({ class: 'paste-thumb', src: s, alt: 'pasted image' })))
+  }
+
+  #thumbSrc(name: string): string | undefined {
+    const hit = this.#pasteThumbs.get(name)
+    if (hit === 'pending' || hit === 'failed') return undefined
+    if (hit) return hit
+    this.#pasteThumbs.set(name, 'pending')
+    void (async () => {
+      try {
+        const r = await tb.server.composerPasteRead(name)
+        this.#pasteThumbs.set(name, r?.ok ? `data:${r.mime};base64,${r.base64}` : 'failed')
+        if (r?.ok) { this.update(); this.scrollSoon() }
+      } catch { this.#pasteThumbs.set(name, 'failed') }
+    })()
+    return undefined
   }
 
   // The message body. With live ````bulb```` embeds it's an ordered run of markdown chunks and
@@ -502,16 +608,17 @@ export class MessageList extends Component {
       ),
       // The OUT digest row, doubling as the toggle; '(no output)' keeps an empty result expandable.
       t.result !== undefined
-        ? div({ class: 'tool-digest', onClick: () => { toggleInSet(this.openTools, t.id); this.update() } },
+        ? div({ class: ['tool-digest', open ? 'open' : ''], onClick: () => { toggleInSet(this.openTools, t.id); this.update() } },
             caret(open),
             (todos ? todoDigest(todos) : t.digest) || '(no output)')
         : null,
       // open with no result = a live auto-expanded edit; its diff shows while the tool runs.
-      // Checklist/patch results are protocol boilerplate the digest already restates — show them
-      // only on error, where the result is the diagnostic.
+      // A patch result is suppressed only when the digest losslessly IS it (one line, uncapped) —
+      // the open digest row wraps to show it whole. Anything more (a multi-line diagnostic, a
+      // capped line) shows: patchers report failure as ordinary content, not is_error.
       open ? div({ class: 'tool-card' },
           this.toolBody(t),
-          t.result !== undefined && (!(todos || patchesOf(t).length) || t.isError)
+          t.result !== undefined && (t.isError || !(todos || (patchesOf(t).length && t.result.trim() === t.digest)))
             ? pre({ class: 'tool-out' }, t.result.slice(0, 4000)) : null,
         ) : null,
     )

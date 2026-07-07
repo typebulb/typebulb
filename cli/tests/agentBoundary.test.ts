@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
  * The agent mirror is no longer a bulb, so the bulb runtime no longer *physically* separates its
  * browser half from its node half, nor fences it off from the CLI's internals. This test re-imposes,
  * as a build-time check, the two boundaries the bulb format used to enforce for free
- * (TB-Agent-Mirror.md, TB-Harness.md) — across the neutral engine AND every agent's adapter:
+ * (TB-Agent-Mirror.md, TB-Agent-Harness.md) — across the neutral engine AND every agent's adapter:
  *
  *  - The mirror reaches the CLI ONLY through the two public entries — `render` (browser) and
  *    `servers` (node) — never a deep `src/**` internal.
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url'
  *  - Every server module (neutral `agents/server/` plus each `agents/<name>/server/` and the
  *    `agents/<name>/server.ts` barrel) imports `servers`, never `render`.
  *
- * Layout (TB-Harness.md): every dir under `agents/` is an impl — `core` (neutral), `claude`, `pi` — each
+ * Layout (TB-Agent-Harness.md): every dir under `agents/` is an impl — `core` (neutral), `claude`, `pi` — each
  * with a `client/` and a `server/` (and the providers a `server.ts` barrel). The depth varies
  * (`agents/core/client/foo.ts` → `../../../src/render.js`), so the public entries are matched by
  * suffix, not exact path. If a future edit reaches past the public surface, this fails — the

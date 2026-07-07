@@ -29,11 +29,13 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   // What the dropdown lists: server search results in full-text mode, the preview filter otherwise.
   rows(): SessionRow[] { return this.searchActive ? this.results : this.filtered() }
 
-  // Index of the currently-attached session in the filtered list (0 if it isn't listed yet).
+  // Index of the attached session in the listed rows; when it isn't listed (blank state, a session
+  // too fresh for the list), fall back to the newest row — rows run newest-at-bottom, so that's the
+  // one beside the anchored filter input (refreshList clamps the -1 of an empty list).
   currentIndex(): number {
     const list = this.rows()
     const i = list.findIndex(s => s.sessionId === this.parent.sessionId)
-    return i < 0 ? 0 : i
+    return i < 0 ? list.length - 1 : i
   }
 
   // Fetch + store in display order — newest-at-bottom, the transcript's own order — so every
@@ -78,10 +80,14 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
 
   view() : VElement {
     const p = this.parent
-    if (!p.sessionId) return div({ class: 'sid-wrap' })
-    const raw = this.currentPreview() || 'current'
+    // null = no session event yet — nothing to stand on. '' is different: the composer's deliberate
+    // blank state (detachToBlank), where the pill must stay — the menu is the only way back to an
+    // old session (hiding it here is how the pill "completely disappeared" on + new conversation).
+    if (p.sessionId === null) return div({ class: 'sid-wrap' })
+    const blank = p.sessionId === ''
+    const raw = blank ? 'new conversation' : this.currentPreview() || 'current'
     const label = truncate(raw, 25)
-    const tip = `${p.cwd}\nSession: ${p.sessionId}`   // cwd on hover, not in the bar
+    const tip = `${p.cwd}\n${blank ? 'New conversation — not saved yet' : `Session: ${p.sessionId}`}`   // cwd on hover, not in the bar
     return div({ class: 'sid-wrap' },
       button({
         class: 'pill',

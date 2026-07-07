@@ -1,12 +1,15 @@
 import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watchFile, unwatchFile, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmSync } from 'fs'
+import { stat } from 'fs/promises'
 import { join } from 'path'
+import { execFile } from 'child_process'
 import { errorMessage, projectCwd } from './context.js'
 import { EmbedStatusDedup } from './embedStatusLog.js'
 import { searchHits, type SearchTurn } from './search.js'
-import type { AgentAdapter } from './adapter.js'
-import type { Event, SessionFile, TokenCounts } from '../events.js'
+import { savePaste, readPaste, type PasteRequest } from './paste.js'
+import type { AgentAdapter, AgentDriver } from './adapter.js'
+import type { ComposerPoll, Event, SessionFile, TokenCounts } from '../events.js'
 
-// The mirror's harness-NEUTRAL core (TB-Agent-Mirror.md, TB-Harness.md). It tails an on-disk JSONL
+// The mirror's harness-NEUTRAL core (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails an on-disk JSONL
 // transcript and renders it; it drives nothing. Everything format-specific — where the sessions live,
 // the entry schema, the cleaning rules, liveness — is supplied by the `AgentAdapter` it's constructed
 // with (Claude Code is the first; Pi the second). The engine owns the parent-linked tree walk, the
@@ -68,6 +71,38 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     latestModel: null,
     everAttached: false,
     entries: new Map(),
+  }
+
+  // ── the composer's driver (TB-Agent-Composer.md) ──
+  // At most one per mirror (Invariant C2), created lazily on the first send, bound to the session
+  // attached at that moment. `driverFile` is that binding — undefined for a sessionless spawn until
+  // the driver's own file resolves. Lives beside `state`, not in it: attachTo resets per-session tail
+  // state, but a streaming driver deliberately survives an attach-away (the panel disables instead).
+  let driver: AgentDriver | undefined
+  let driverFile: string | undefined
+
+  async function disposeDriver() {
+    const d = driver
+    driver = undefined
+    driverFile = undefined
+    if (d) { try { await d.dispose() } catch (err: unknown) { console.error('[composer] dispose:', errorMessage(err)) } }
+  }
+
+  // Attach-on-new-session: a driver spawned sessionless has resolved its file — bind to it, and if
+  // the mirror is still blank, attach (the one case the mirror "creates" a session; it still only
+  // ever tails it). Resolution goes through the adapter's listing so locks/preview keep working.
+  // Called from poll() and composerSend() alike, so a send can never mistake a freshly-resolved
+  // driver for one bound elsewhere.
+  // The binding is one-shot, but the ATTACH must retry every call while the mirror is blank: pi
+  // reports its session file immediately, yet writes it only on the first entry — a lookup on the
+  // binding poll finds nothing, and giving up there left the draft stuck as a never-landing card.
+  function resolveDriverBinding() {
+    if (!driver?.sessionFile) return
+    if (!driverFile) driverFile = driver.sessionFile
+    if (!state.file) {
+      const sf = adapter.listSessionFiles(state.cwd).find(f => f.file === driverFile)
+      if (sf) attachTo(sf)
+    }
   }
 
   // ── per-session locks (neutral: about mirror instances, not the agent) ──
@@ -187,14 +222,12 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       .find(f => !isLockLive(cwd, f.sessionId) && extra(f))
   }
 
-  // Single chokepoint for committing to a session file: resets per-session tail state and starts
-  // watching. Every path to ATTACHED funnels through here.
-  function attachTo(found: { sessionId: string; file: string }) {
+  // Reset per-session tail state to a given binding (undefined file = the blank state).
+  function resetTail(file: string | undefined, sessionId: string) {
     const s = state
     if (s.file) { try { unwatchFile(s.file) } catch {} }
-    s.file = found.file
-    s.sessionId = found.sessionId
-    s.everAttached = true
+    s.file = file
+    s.sessionId = sessionId
     s.partial = ''
     s.offset = 0
     s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
@@ -202,11 +235,26 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     s.entries = new Map()
     s.chainLastId = undefined
     s.buffer.push({ type: 'cleared' })
-    s.buffer.push({ type: 'session', sessionId: found.sessionId })
+    s.buffer.push({ type: 'session', sessionId })
+  }
+
+  // Single chokepoint for committing to a session file. Every path to ATTACHED funnels through here.
+  function attachTo(found: { sessionId: string; file: string }) {
+    const s = state
+    resetTail(found.file, found.sessionId)
+    s.everAttached = true
     claimLock(s.cwd, found.sessionId)        // claim before the drain so siblings skip us
     drainFile()
     try { unwatchFile(found.file) } catch {}   // drop a stale watcher from a prior hot-reload import
     watchFile(found.file, { interval: 200 }, () => drainFile())
+  }
+
+  // The composer's "new conversation" (TB-Agent-Composer.md): back to the blank state — attached to
+  // nothing, view cleared. The next send spawns a sessionless driver, whose freshly-created file
+  // resolveDriverBinding attaches once its first entry lands. everAttached stays true, so the
+  // fresh-boot auto-attach can't steal the blank view back to the newest old session.
+  function detachToBlank() {
+    resetTail(undefined, '')
   }
 
   function drainFile() {
@@ -348,16 +396,18 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // Guarded: this runs inside the watchFile callback, so a malformed entry must not crash the process.
   function emitLive(entry: E) {
     try {
-      const { events, usage, model } = adapter.apply(entry, state.sessionStartMs)
+      const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
       for (const e of events) state.buffer.push(e)
+      // The durable row for a driver-streamed message just landed — drop the ephemeral draft so the
+      // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1).
+      if (driver && events.some(e => e.type === 'assistant')) driver.clearCompletedDraft()
       // The model this turn resolved to — overwrite, like usage: the latest resolution, not a history.
       if (model) state.latestModel = model
       // Overwrite, never accumulate: the chip shows the CURRENT context window (the last response's
-      // usage), not a session sum.
-      if (usage) {
-        state.latest = usage
-        state.buffer.push({ type: 'usage', ...state.latest })
-      }
+      // usage), not a session sum. `cost` is the exception — the client sums the per-entry costs; an
+      // entry with cost but no valid usage (an aborted turn) still ships one, riding the last counts.
+      if (usage) state.latest = usage
+      if (usage || cost) state.buffer.push({ type: 'usage', ...state.latest, cost })
     } catch (err) { console.error('[mirror] skipped malformed entry:', errorMessage(err)) }
   }
 
@@ -365,7 +415,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
 
   async function info() {
     // pid lets the breakouts UI exclude this host's own running server from the list.
-    return { cwd: state.cwd, pid: process.pid }
+    // `composer` is the capability flag the client gates the panel on — static per adapter
+    // (TB-Agent-Composer.md): a missing binary surfaces as a first-send error, not a probe here.
+    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver }
   }
 
   // The mirror host's embed-status forward (TB-Agent-Mirror-Embed.md, Iteration Invariant 7). The client
@@ -387,14 +439,166 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     try { return Date.now() - statSync(state.file).mtimeMs < 10_000 } catch { return false }
   }
 
+  // The attached session's chain is mid-turn and its owner looks alive — a (possibly foreign)
+  // harness working. Pass a materialized array, not entries.values(): an adapter may scan the
+  // chain more than once, and a one-shot MapIterator would be exhausted after the first pass.
+  function terminalTurnLive(): boolean {
+    return adapter.chainWorking([...state.entries.values()]) && sessionLive()
+  }
+
   async function poll(cursor: number) {
     const s = state
     refreshActive()
+    resolveDriverBinding()
     // latestModel rides the poll (not a menu open) so the switcher watchdog is live: the pill turns red
     // the instant a desynced turn lands on disk (TB-Agent-Switcher.md L1).
-    // Pass a materialized array (not s.entries.values()): an adapter scans `entries` more than once,
-    // and a one-shot MapIterator would be exhausted after the first pass.
-    return { events: s.buffer.slice(cursor), cursor: s.buffer.length, working: adapter.chainWorking([...s.entries.values()]) && sessionLive(), latestModel: s.latestModel }
+    // Driver slices ship only while the driver is bound to the session being VIEWED — a streaming
+    // driver deliberately survives an attach-away, but its draft/queue/status describe the OTHER
+    // session (Invariant C4). A blank view owns any live driver: it's the one being born there
+    // (composerNew disposes before blanking), including the window where pi has reported its file
+    // but hasn't written it yet — gating on driverFile alone would blank the draft mid-birth.
+    const mine = driver !== undefined && (!s.file || driverFile === s.file)
+    // Read dialog every poll even when unshipped — reading expires stale requests; the poll is the
+    // driver's expiry clock (TB-Agent-Composer-Toolkit.md Piece 3).
+    const dialog = driver?.dialog ?? null
+    const composer: ComposerPoll | undefined = adapter.createDriver
+      ? {
+          streaming: mine && !!driver!.streaming,
+          draft: mine ? driver!.draft : null,
+          status: mine ? driver!.status : null,
+          dialog: mine ? dialog : null,
+          queue: mine ? driver!.queue : null,
+          stats: mine ? driver!.stats : null,        // pi's own session totals (parity #5)
+          model: mine ? driver!.model : null,        // the driver's configured model (next turn's)
+          // A dead driver is dead regardless of the view — surface it anywhere.
+          error: driver?.error,
+        }
+      : undefined
+    return {
+      events: s.buffer.slice(cursor),
+      cursor: s.buffer.length,
+      // The driver's own streaming flag (when its session is the viewed one) covers the long
+      // single-message stream where the harness writes nothing to disk and the mtime fallback
+      // alone would flicker the shimmer off mid-turn (TB-Agent-Composer.md).
+      working: (mine && !!driver!.streaming) || terminalTurnLive(),
+      latestModel: s.latestModel,
+      composer,
+    }
+  }
+
+  // ── the composer RPCs (TB-Agent-Composer.md) ──
+
+  // Bind-or-create the driver for the session attached RIGHT NOW (Invariant C4: the user drives
+  // what they're looking at, decided at gesture time). Reuses a live driver bound here; replaces a
+  // dead or elsewhere-bound idle one; refuses when a foreign process owns the in-flight turn.
+  // Shared by composerSend and the spawn-permitted composerRpc path, so a recipe's fork/compact
+  // gets exactly the guards a message send does.
+  async function ensureDriver(): Promise<{ ok: true; d: AgentDriver } | { ok: false; error: string }> {
+    refreshActive()
+    resolveDriverBinding()
+    // A blank view owns the live driver — the one being born there, its reported file possibly
+    // unwritten yet (poll()'s `mine` rule). Gating on driverFile alone would refuse (streaming) or
+    // dispose (idle) the newborn in the window between pi reporting its file and the first entry.
+    const mine = !state.file || driverFile === state.file
+    if (driver?.streaming) {
+      if (!mine) return { ok: false, error: 'still working in another session — Stop first' }
+      return { ok: true, d: driver }
+    }
+    // An idle driver bound elsewhere (the user switched sessions), or a dead one — replace it.
+    if (driver && (driver.error || !mine)) await disposeDriver()
+    if (!driver) {
+      // Foreign-turn guard: the attached session's leaf is unresolved and its owner looks alive
+      // (a terminal harness mid-turn). Driving now would fork its in-flight turn — refuse.
+      if (terminalTurnLive()) {
+        return { ok: false, error: 'the agent is mid-turn in a terminal — watch only' }
+      }
+      driver = adapter.createDriver!(state.cwd, state.file)
+      driverFile = state.file
+    }
+    return { ok: true, d: driver }
+  }
+
+  // Route a typed message to the driver. The ONE door for conversation (Toolkit T2) — composerRpc
+  // cannot carry prompt/steer/follow_up. `followUp` = Alt+Enter: deliver after the turn ends.
+  async function composerSend(text: string, opts?: { followUp?: boolean }) {
+    if (!adapter.createDriver) return { ok: false, error: 'not supported' }
+    const t = String(text ?? '').trim()
+    if (!t) return { ok: false, error: 'empty message' }
+    const r = await ensureDriver()
+    if (!r.ok) return r
+    return r.d.send(t, opts)
+  }
+
+  // Answer a pending extension dialog (TB-Agent-Composer-Toolkit.md Piece 3).
+  async function composerUiRespond(id: string, resp: { value?: string; confirmed?: boolean; cancelled?: boolean }) {
+    if (!driver) return { ok: false, error: 'no dialog pending' }
+    return driver.respondUi(String(id ?? ''), resp ?? {})
+  }
+
+  // The allowlisted passthrough (TB-Agent-Composer-Toolkit.md Piece 4; the allowlist is the DRIVER's).
+  // `spawn: true` (a palette execution — a user pick) may create the driver with send's guards;
+  // `spawn: false` (a palette listing) never creates a process just to autocomplete.
+  async function composerRpc(cmd: { type: string } & Record<string, unknown>, opts?: { spawn?: boolean }) {
+    if (!adapter.createDriver) return { ok: false, error: 'not supported' }
+    if (!cmd || typeof cmd.type !== 'string') return { ok: false, error: 'bad command' }
+    if (opts?.spawn) {
+      const r = await ensureDriver()
+      if (!r.ok) return r
+      return r.d.rpc(cmd)
+    }
+    if (!driver || driver.error) return { ok: false, error: 'not running' }
+    return driver.rpc(cmd)
+  }
+
+  async function composerStop() {
+    if (!driver) return { ok: true }
+    try { await driver.stop() } catch (err: unknown) { console.error('[composer] stop:', errorMessage(err)) }
+    return { ok: true }
+  }
+
+  // Start a new conversation: dispose the (idle) driver, blank the view, and eagerly spawn the
+  // sessionless replacement. No agent turn — but its boot get_state resolves the configured model,
+  // so the model pill never blanks between + and the first send (which reuses the newborn via
+  // ensureDriver's blank-owns rule). Refused mid-turn — the running turn belongs to the current
+  // session; Stop first.
+  async function composerNew() {
+    if (!adapter.createDriver) return { ok: false, error: 'not supported' }
+    if (driver?.streaming) return { ok: false, error: 'still working — Stop first' }
+    await disposeDriver()
+    detachToBlank()
+    driver = adapter.createDriver(state.cwd, state.file)
+    driverFile = state.file
+    return { ok: true }
+  }
+
+  // Project file list for the composer's @-mention picker. `git ls-files` scopes to the repo and
+  // inherits gitignore for free; mtime-descending so the files just touched float to the top. A
+  // non-git cwd (or no git) returns [] — the picker shows "No matches".
+  async function composerFiles(): Promise<string[]> {
+    if (!adapter.createDriver) return []
+    const stdout = await new Promise<string>(resolve => {
+      execFile('git', ['ls-files'], { cwd: state.cwd, maxBuffer: 64 * 1024 * 1024 }, (err, out) => resolve(err ? '' : out))
+    })
+    const withMtime = await Promise.all(stdout.split('\n').filter(Boolean).map(async f => {
+      try { return { f, m: (await stat(join(state.cwd, f))).mtimeMs } } catch { return { f, m: 0 } }
+    }))
+    return withMtime.sort((a, b) => b.m - a.m).map(x => x.f)
+  }
+
+  // The serve.ts shutdown reap (same shape as the Claude switcher's shutdownSwitcher). Fire-and-forget safe.
+  function shutdownComposer() { void disposeDriver() }
+
+  // Clipboard capture (TB-Agent-Composer-Toolkit.md Piece 6): the pasted payload becomes a file under
+  // .typebulb/paste/ and the composer inserts its @-mention — never a wire-attached image.
+  async function composerPaste(req: PasteRequest) {
+    if (!adapter.createDriver) return { ok: false, error: 'not supported' }
+    return savePaste(state.cwd, req)
+  }
+
+  // A pasted image read back for the transcript thumbnail. Deliberately NOT composer-gated: any
+  // mirror can render a paste mention it encounters; readPaste refuses anything outside the dir.
+  async function composerPasteRead(name: string) {
+    return readPaste(state.cwd, String(name ?? ''))
   }
 
   // ── session picker ──
@@ -448,6 +652,11 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!sf) return { ok: false, error: 'session not found' }
     if (sf.file === s.file) return { ok: true }
     attachTo(sf)
+    // Switching away disposes an IDLE driver (the next send respawns against the new session). A
+    // streaming one is left running — the mirror stays free to look anywhere; poll() gates its
+    // slices off this view, and a send here is refused with "Stop first" until agent_end
+    // (TB-Agent-Composer.md).
+    if (driver && !driver.streaming && driverFile !== s.file) void disposeDriver()
     return { ok: true }
   }
 
@@ -456,5 +665,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logEmbedStatus, listSessions, searchSessions, attach }
+  return { info, poll, logEmbedStatus, listSessions, searchSessions, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer }
 }

@@ -5,9 +5,9 @@ import { BulbsPill } from './bulbsPill.js'
 import { ProsePill } from './prosePill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
-import type { ServerEvent, IRoot, TokenCounts, RootConfig, StatusPillLike } from './types.js'
+import type { ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
 
-// The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Harness.md). It tails the host's transcript via the
+// The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
 // `tb.server.poll` RPC and renders the neutral message list + status bar; everything harness-specific
 // arrives through `cfg` (the tab title, the injected pills, the overlay banners, the per-poll hook).
 // Claude's client entry passes its ModelPill as a pill, the switcher watchdog as an overlay, and
@@ -15,15 +15,18 @@ import type { ServerEvent, IRoot, TokenCounts, RootConfig, StatusPillLike } from
 export class Root extends Component implements IRoot {
   ready = false
   cwd = ''
-  sessionId = ''
+  sessionId: string | null = null           // null until the first session event; '' = the composer's blank state
   sessionPicker = new SessionPicker()
   tokenPill = new TokenPill()
   bulbsPill = new BulbsPill()
   prosePill = new ProsePill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
+  cost = 0                                  // session spend: summed per-entry harness costs (IRoot.cost)
+  stats: ComposerStats | null = null        // the driver's own totals (poll composer.stats); null when not driving
   working = false                           // the agent is mid-turn (live-chain leaf unresolved); from poll()
   latestModel: string | null = null         // model the last assistant turn resolved to; drives the switcher watchdog
+  driverModel: string | null = null         // the driver's configured model (poll composer.model); null when not driving
   prose = false                             // prose mode: hide tool/thinking rows (per-mirror, never persisted)
   ownPid = 0                                // this host server's pid; the bulbs pill excludes it
   // Injected agent-specific status pills (Claude's model switcher; none for Pi). MUST be a DIRECT
@@ -32,6 +35,12 @@ export class Root extends Component implements IRoot {
   // them — no ctx.parent gets set, so their popovers never open. The non-Component config (title,
   // overlays, onPollTick) stays in private #fields, which domeleon ignores.
   pills: StatusPillLike[]
+  // The prompt panel (TB-Agent-Composer.md) — same direct-field rule as `pills`, or its click
+  // handlers would find no parent. Optional: only a drivable harness (pi) passes one.
+  composer?: ComposerLike
+  // The driver's in-flight assistant message (IRoot.draft) — MessageList renders it as one ephemeral
+  // trailing bubble; replaced by the durable transcript row when the entry lands (Invariant C1).
+  draft: { text: string; thinking: string } | null = null
 
   #cursor = 0
   #polling = false
@@ -43,6 +52,7 @@ export class Root extends Component implements IRoot {
   constructor(cfg: RootConfig) {
     super()
     this.pills = cfg.pills
+    this.composer = cfg.composer
     this.#title = cfg.title
     this.#overlays = cfg.overlays ?? []
     this.#onPollTick = cfg.onPollTick
@@ -68,6 +78,7 @@ export class Root extends Component implements IRoot {
     const i = await tb.server.info()
     this.cwd = i.cwd
     this.ownPid = i.pid ?? 0
+    if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.ready = true
     this.updateTitle()
     this.update()
@@ -93,7 +104,7 @@ export class Root extends Component implements IRoot {
     this.#polling = true
     const tick = async () => {
       try {
-        const { events, cursor, working, latestModel } = await tb.server.poll(this.#cursor)
+        const { events, cursor, working, latestModel, composer } = await tb.server.poll(this.#cursor)
         this.#cursor = cursor
         for (const e of events) this.apply(e)
         const workingChanged = working !== this.working
@@ -102,8 +113,12 @@ export class Root extends Component implements IRoot {
         // pill turns red the turn a desynced model lands, not only when the menu is next opened.
         const modelChanged = latestModel !== this.latestModel
         this.latestModel = latestModel ?? null
-        if (events.length || workingChanged || modelChanged) this.update()
-        if (events.length) this.messageList.scrollSoon()
+        // The composer slice: the panel owns ALL of its change detection (syncFromPoll), including
+        // the draft/stats it publishes onto IRoot for MessageList and the token pill. A growing
+        // draft re-renders and keeps the sticky-bottom scroll pinned, exactly like a landed event.
+        const composerChanged = this.composer && composer ? this.composer.syncFromPoll(composer) : false
+        if (events.length || workingChanged || modelChanged || composerChanged) this.update()
+        if (events.length || composerChanged) this.messageList.scrollSoon()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()
@@ -120,22 +135,32 @@ export class Root extends Component implements IRoot {
       case 'cleared':
         this.messageList.clear()
         this.tokens = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
+        this.cost = 0
         break
       case 'session': this.sessionId = e.sessionId; this.updateTitle(); break
       case 'user': this.messageList.applyUser(e); break
       case 'assistant': this.messageList.applyAssistant(e); break
       case 'tool_result': this.messageList.applyToolResult(e); break
       case 'fork': this.messageList.applyFork(e); break
-      case 'usage': this.tokens = { in: e.in, out: e.out, cached: e.cached, cacheCreate: e.cacheCreate }; break
+      case 'usage':
+        this.tokens = { in: e.in, out: e.out, cached: e.cached, cacheCreate: e.cacheCreate }
+        this.cost += e.cost ?? 0
+        break
     }
   }
 
   view() {
     return div({ class: 'app' },
-      this.messageList.view(),
-      // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.
-      ...this.#overlays.map(o => o()),
-      this.statusbar(),
+      // .chat is the statusbar/banner positioning context (they overlay the transcript's bottom), so
+      // the composer below sits in flow under them — without it the absolute statusbar would anchor to
+      // the app box and land on top of the panel. Identical geometry when there is no composer.
+      div({ class: 'chat' },
+        this.messageList.view(),
+        // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.
+        ...this.#overlays.map(o => o()),
+        this.statusbar(),
+      ),
+      this.composer?.enabled ? this.composer.view() : null,
     )
   }
 

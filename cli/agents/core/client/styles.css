@@ -70,8 +70,11 @@ body {
   line-height: 1.55;
 }
 
-/* position:relative anchors the overlaid (absolute) statusbar to the viewport box. */
-.app { position: relative; display: flex; flex-direction: column; height: 100vh; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+/* The transcript region. position:relative anchors the overlaid (absolute) statusbar and banners to
+   THIS box, not the app: with a composer below the pills stay over the transcript's bottom edge
+   instead of landing on the input panel. */
+.chat { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* Bottom status strip, overlaid (not in flow) on the chat — which runs
    full-height to the very bottom. The strip itself has NO fill, so the message
@@ -235,6 +238,154 @@ body {
    blends with --panel, not transparent like the launch buttons': statusbar pills must
    stay opaque over the message text the strip lets through. */
 .token.busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
+
+/* ── The composer (TB-Agent-Composer.md): the prompt panel under the transcript. In flow (not
+   overlaid like the statusbar) — it owns real height and must never cover content. ── */
+.composer { position: relative; flex: none; background: var(--bg); }
+/* A 4px drag zone centered on the composer's top border; z-index lifts it above the input-wrap
+   border so the line itself is grabbable. */
+.splitter {
+  position: relative;
+  height: 4px;
+  margin-top: -2px;
+  margin-bottom: -2px;
+  z-index: 5;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+}
+.splitter:hover { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+.input-wrap { position: relative; border-top: 1px solid var(--border); }
+.composer-input {
+  width: 100%;
+  display: block;
+  resize: none;               /* height is splitter-driven (inline style), not the native handle */
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: .9rem;
+  line-height: 1.45;
+  /* Right padding clears the three overlaid 28px buttons: .5rem inset + 3×28px + 2×.15rem gaps. */
+  padding: .5rem 6.2rem .5rem .75rem;
+}
+.composer-input:focus { outline: none; }
+.composer-input:disabled { opacity: .6; }
+.composer-input::placeholder { color: var(--muted); }
+/* The icons.ts shell: one span, sized HERE (never by svg attrs), the material/custom svg filling
+   it. 14px default; context classes (.btn-icon, .caret-tri, …) override. */
+.icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: none; }
+.icon svg { width: 100%; height: 100%; display: block; }
+/* The overlay row, bottom-anchored to the textarea's right edge: send/stop is the primary CTA;
+   + (new conversation) and the clipboard clip are the quiet secondaries to its left. */
+.composer-act, .composer-new, .composer-clip {
+  position: absolute;
+  bottom: .5rem;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  appearance: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background .15s, color .15s, transform .08s;
+}
+/* Send/stop are CIRCLE GLYPHS (play_circle / stop_circle — typebulb.com's play look): the icon IS
+   the button, no painted disc. One size for all three — the circles' diameter and the paperclip's
+   ink height are both 800/960 of the material viewBox, so equal boxes = equal visual height. */
+.composer-act .icon, .composer-new .icon, .composer-clip .icon { width: 24px; height: 24px; }
+.composer-act { right: .5rem; background: transparent; }
+.composer-act.send { color: var(--accent); }
+.composer-act.send:hover:not(:disabled) { color: color-mix(in srgb, var(--accent) 80%, white); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.composer-act.stop { color: var(--err); }
+.composer-act.stop:hover { color: color-mix(in srgb, var(--err) 80%, white); background: color-mix(in srgb, var(--err) 10%, transparent); }
+.composer-act:active, .composer-new:active, .composer-clip:active { transform: scale(.94); }
+.composer-act:disabled, .composer-new:disabled, .composer-clip:disabled { opacity: .5; cursor: default; }
+.composer-new {
+  /* offset = act's right inset (.5rem) + act width (28px) + gap (.15rem) */
+  right: calc(.5rem + 28px + .15rem);
+  background: transparent;
+  color: var(--muted);
+}
+.composer-new:hover:not(:disabled) { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.composer-clip {
+  /* one more button-width left of .composer-new */
+  right: calc(.5rem + 2 * (28px + .15rem));
+  background: transparent;
+  color: var(--muted);
+}
+.composer-clip:hover:not(:disabled) { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.composer-err { padding: .3rem .75rem; color: var(--err); font-size: .78rem; }
+/* The ambient status line (TB-Agent-Composer-Toolkit.md Piece 2): one slim kind-tinted row above the
+   input — a retry/compaction in progress, an extension notice, a recipe's transient result. */
+.composer-status { padding: .3rem .75rem; font-size: .78rem; color: var(--muted); }
+.composer-status.warning { color: color-mix(in srgb, var(--err) 55%, var(--fg)); }
+.composer-status.error { color: var(--err); }
+/* The pending-queue strip (parity #2): queued steer/follow-up texts above the input. Block rows,
+   not a flex column — .queue-row's overflow:hidden would zero flex min-heights (the .dlg-opts
+   lesson). */
+.composer-queue { padding: .15rem .75rem 0; }
+.queue-row { font-size: .78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queue-tag { color: var(--accent); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; margin-right: .5rem; }
+/* The @-file-mention popup, anchored above the composer. */
+.at-popup {
+  position: absolute;
+  bottom: calc(100% + .25rem);
+  left: 1rem;
+  right: 1rem;
+  max-width: 600px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .35);
+  padding: .25rem;
+  z-index: 10;
+}
+.at-row {
+  padding: .35rem .55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: .82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.at-row.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.at-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* The '/' palette rides the same popup chrome; its rows pair a command with a muted description. */
+.slash-desc { color: var(--muted); font-size: .74rem; margin-left: .6rem; }
+/* The composer's dialog modal (TB-Agent-Composer-Toolkit.md Piece 3) rides the trust-modal chrome; these
+   are only its extra fields. Select options reuse .at-row inside a bordered scroll box. */
+/* Block, NOT flex: .at-row's overflow:hidden zeroes flex min-heights, squashing a long option
+   list (pi can return the whole OpenRouter catalog); block rows keep their natural height and
+   the box scrolls. */
+.composer-dlg .dlg-opts {
+  max-height: 40vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px; padding: .25rem;
+}
+.composer-dlg .dlg-input, .composer-dlg .dlg-editor {
+  font: inherit; font-size: .85rem; color: var(--fg); background: transparent;
+  border: 1px solid var(--border); border-radius: 7px; padding: .4rem .6rem; width: 100%;
+}
+.composer-dlg .dlg-input:focus, .composer-dlg .dlg-editor:focus { outline: none; border-color: var(--accent); }
+.composer-dlg .dlg-editor { min-height: 8rem; resize: vertical; }
+.composer-dlg .dlg-filter { margin-top: .4rem; }
+.at-empty { padding: .6rem; color: var(--muted); font-size: .85rem; text-align: center; }
+/* The driver's in-flight assistant message — visibly provisional next to landed bubbles; the
+   durable row replaces it when the entry hits the transcript. */
+.bubble.draft { opacity: .9; }
+.draft-wait { color: var(--muted); }
+/* Pasted-image thumbnails under a user message that @-mentions .typebulb/paste files. */
+.paste-thumbs { margin-top: .4rem; }
+.paste-thumb { display: block; max-width: min(360px, 100%); max-height: 240px; margin-top: .3rem; border: 1px solid var(--border); border-radius: 8px; }
 
 /* Session list — shares the popover chrome (.picker above); these are
    just its own dimensions. */
@@ -601,13 +752,16 @@ a.server-port:hover { text-decoration: underline; }
 .trust-toggle { font-size: .76rem; height: 1.45rem; padding: 0 .5rem; color: var(--muted); justify-self: center; }
 .trust-toggle:hover, .trust-toggle.on { color: var(--accent); border-color: var(--accent); }
 .server-stop, .bulb-launch { width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
-.btn-icon { display: block; }
+.btn-icon { width: 16px; height: 16px; }
 /* A stopped bulb's play button is dormant — the title is the primary launch target — so it's
    hidden until the row is hovered or keyboard-selected. visibility (not display) reserves its slot,
    so the name column doesn't shift when it appears. Painted the fold-marker green, matching the
    :port link: green is the live-app axis (play to launch → :port to open it), distinct from the
    blue source/name. The green even travels left→right as a bulb goes stopped→running. */
 .bulb-launch { color: var(--fold-marker); visibility: hidden; }
+/* A right triangle's visual mass sits left of its bounding box, so geometric centring reads
+   too-far-left in a round button — shift the play glyph. */
+.bulb-launch .icon svg { transform: translateX(1px); }
 .server-row:hover .bulb-launch, .server-row.active .bulb-launch { visibility: visible; }
 .bulb-launch:hover { border-color: var(--fold-marker); background: color-mix(in srgb, var(--fold-marker) 12%, transparent); }
 /* Launching: stays visible (hover-independent) and shimmers until the row flips to a stop button,
@@ -1118,6 +1272,23 @@ a.server-port:hover { text-decoration: underline; }
   color: var(--fg); font-weight: 600;
 }
 .bulb-code .hljs-symbol, .bulb-code .hljs-bullet, .bulb-code .hljs-punctuation { color: var(--muted); }
+/* Draft-streaming bulb card (#draftBulbCard): the code view wearing a progress header — never a
+   live mount; the durable row's BulbEmbed takes this slot when the entry lands. Cap tighter than
+   .bulb-code's resting 480px: ambient progress, not reading material. */
+.md .bulb-streaming { flex-direction: column; }
+.md .bulb-streaming > .bulb-code { max-height: 220px; border-radius: 0 0 8px 8px; }
+.bulb-streaming-head {
+  display: flex;
+  align-items: baseline;
+  gap: .45rem;
+  padding: .3rem .85rem;
+  border-radius: 8px 8px 0 0;
+  /* A notch above the file-label bars inside the listing, so the header owns the card. */
+  background: color-mix(in srgb, var(--fg) 10%, var(--tool-bg));
+  font-size: .78rem;
+  color: var(--muted);
+}
+.bulb-streaming-count { margin-left: auto; font-variant-numeric: tabular-nums; }
 .md .bulb-embed.err {
   padding: .6rem .8rem;
   font-family: ui-monospace, monospace;
@@ -1167,7 +1338,7 @@ a.server-port:hover { text-decoration: underline; }
 }
 /* The shared disclosure triangle (caret() in messageList.ts). flex:none so a squeezed row can't
    crush it; the digest row has no flex gap, so its spacing rides the marker. */
-.caret-tri { flex: none; transition: transform .15s ease; }
+.caret-tri { width: 10px; height: 10px; transition: transform .15s ease; }
 .caret-tri.open { transform: rotate(90deg); }
 .tool-digest .caret-tri { margin-right: .5rem; }
 /* Plain bold — an accent verb reads as a hyperlink; accent is reserved for the file-path link. */
@@ -1180,7 +1351,7 @@ a.server-port:hover { text-decoration: underline; }
    answer). Same caret/row shape as a tool head, italic muted label. */
 .turn-summary { color: var(--muted); font-size: .85rem; }
 .turn-summary-text { font-style: italic; }
-.fork-icon { vertical-align: -1px; margin-right: .15rem; }
+.fork-icon { width: 11px; height: 11px; vertical-align: -1px; margin-right: .15rem; }
 .turn-summary:hover .turn-summary-text { color: var(--fg); }
 
 /* An expanded abandoned-branch (fork) stub renders its orphan messages here — set apart from the live
@@ -1258,6 +1429,9 @@ a.server-port:hover { text-decoration: underline; }
   user-select: text;
 }
 .tool-digest:hover { color: var(--fg); }
+/* Expanded = nothing readable hidden: the digest wraps to its full text (it may be the whole
+   result — suppressed patch one-liners rely on this). */
+.tool-digest.open { white-space: normal; }
 
 /* Expanded input/output card beneath the digest row — additive only, the rows above keep their
    collapsed look. First child sheds its top divider (nothing above it inside the card). */
@@ -1304,9 +1478,15 @@ a.server-port:hover { text-decoration: underline; }
 .tool-key { color: var(--muted); margin-right: .6rem; user-select: text; }
 .tool-val { display: inline; margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
 /* Line-banded unified-diff view (± lines only): the same add/remove band colors as
-   .diff-new/.diff-old; a muted ⋯ row separates hunks. */
+   .diff-new/.diff-old; a muted ⋯ row separates hunks. The ± marker is ::before content in a
+   reserved gutter — visible (the non-color cue colorblind readers need) but outside the DOM
+   text, so selection-copy grabs only the code. min-height keeps blank changed lines from
+   collapsing now that they carry no marker char. */
 .udiff { white-space: pre-wrap; word-break: break-word; }
-.udiff-line { padding: 0 .2rem; }
+.udiff-line { position: relative; padding: 0 .2rem 0 1.05rem; min-height: 1lh; }
+.udiff-line::before { position: absolute; left: .25rem; }
+.udiff-add::before { content: '+'; }
+.udiff-del::before { content: '-'; }
 .udiff-add { background: color-mix(in srgb, var(--diff-add) 24%, transparent); }
 .udiff-del { background: color-mix(in srgb, var(--err) 24%, transparent); }
 .udiff-gap { color: var(--muted); user-select: none; }

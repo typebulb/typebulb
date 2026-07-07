@@ -13,7 +13,7 @@ import { buildAgentHtml, clientBundleUrl } from './page.js'
 
 // Each agent mirror's server module, keyed by agent name. The values are *static* `import()` literals
 // so esbuild inlines every agent's `server.ts` into `dist/index.js` (a `import(variable)` would not
-// bundle). Adding an agent (TB-Harness.md) is a line here plus its `agents/<name>/` code and a registry
+// bundle). Adding an agent (TB-Agent-Harness.md) is a line here plus its `agents/<name>/` code and a registry
 // entry. Each module's shape is the RPC surface startServer hosts, plus a `displayName` const.
 const AGENT_SERVERS: Record<string, () => Promise<Record<string, unknown>>> = {
   claude: () => import('../../agents/claude/server.js'),
@@ -181,6 +181,9 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     // Fail-safe: the agent switcher removes its OpenRouter route on a clean shutdown so a closed mirror
     // never leaves CC pointed at a dead proxy port (TB-Agent-Switcher.md — Lifecycle).
     try { (agentServer as { shutdownSwitcher?: () => void }).shutdownSwitcher?.() } catch { /* best-effort */ }
+    // Same shape for the composer's driver: reap the mirror-owned pi process (TB-Agent-Composer.md,
+    // Invariant C2). Absent on agents without a composer (Claude) — optional-chained like the switcher.
+    try { (agentServer as { shutdownComposer?: () => void }).shutdownComposer?.() } catch { /* best-effort */ }
     server.close()
     cleanupWatcher?.()
     stopLog()

@@ -1,4 +1,4 @@
-import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync } from 'fs'
+import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
@@ -6,7 +6,7 @@ import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
 
-// The Claude Code realization of the AgentAdapter contract (TB-Harness.md, TB-Agent-Mirror.md): everything
+// The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
 // schema-specific about CC's on-disk transcript — the `uuid`/`parentUuid` tree, the `isSidechain`/
 // `isMeta`/`isApiErrorMessage` flags, the content-block shapes, `~/.claude/projects/…` layout, the
 // harness-envelope cleaning, the `~/.claude/sessions` liveness store. The neutral engine (mirror.ts)
@@ -271,6 +271,9 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   // CC sets CLAUDECODE=1 in every shell it spawns (also CLAUDE_CODE_ENTRYPOINT, and the cross-tool
   // AI_AGENT=claude-code_<ver>); CLAUDECODE is the narrowest, most stable signal.
   detectsSelf() { return process.env.CLAUDECODE === '1' }
+
+  // CC creates ~/.claude on first run (settings, projects, sessions all live under it).
+  detectsInstalled() { return existsSync(join(homedir(), '.claude')) }
 
   sessionsDir(cwd: string) { return projectDir(cwd) }
   listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(cwd)) }

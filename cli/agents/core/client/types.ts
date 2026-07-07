@@ -3,8 +3,8 @@ import type { CopyButton } from './copyButton.js'
 import type { BulbEmbed } from './bulbEmbed.js'
 // The poll() event union + token shape are the server↔client wire contract — one canonical definition
 // in core/events.ts (no more "keep in sync" copy). `ServerEvent` is the client's name for `Event`.
-import type { Event as ServerEvent, TokenCounts } from '../events.js'
-export type { ServerEvent, TokenCounts }
+import type { ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, Event as ServerEvent, TokenCounts } from '../events.js'
+export type { ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, ServerEvent, TokenCounts }
 
 // An agent-specific status-bar pill injected into the neutral Root (e.g. Claude's model switcher).
 // Root renders `view()` in its status bar — which wires the pill's `ctx.parent` to Root (IRoot), the
@@ -24,7 +24,42 @@ export interface RootConfig {
   pills: StatusPillLike[]
   overlays?: (() => VElement | null)[]
   onPollTick?: () => void
+  // The prompt panel, only for a harness whose adapter implements createDriver (TB-Agent-Composer.md):
+  // pi passes one, Claude passes none. Root hoists it to a direct field (domeleon child discovery —
+  // same invariant as `pills`).
+  composer?: ComposerLike
 }
+
+// Structural twin of StatusPillLike for the composer, so the neutral Root/types never import the
+// concrete component. `enabled` mirrors info().composer; `syncFromPoll` returns "visibly changed".
+export interface ComposerLike {
+  enabled: boolean
+  view(): VElement
+  syncFromPoll(c: ComposerPoll): boolean
+}
+
+// A dialog's answer — the wire shape composerUiRespond takes, and what a recipe primitive resolves
+// with (TB-Agent-Composer-Toolkit.md Piece 3).
+export interface DialogResponse { value?: string; confirmed?: boolean; cancelled?: boolean }
+
+// The palette's recipe contract (TB-Agent-Composer-Toolkit.md Piece 5). The interpreter + primitives are
+// neutral (Composer); the TABLE is the harness's (pi supplies agents/pi/client/recipes.ts via the
+// Composer constructor — the same neutral-shell/harness-config split as RootConfig.pills). A recipe
+// only sequences allowlisted RPCs and dialogs (T4); anything durable renders from the tail.
+export interface RecipeCtx {
+  /** composerRpc with spawn:true — a palette pick is the user gesture that may create the driver. */
+  rpc(cmd: { type: string } & Record<string, unknown>): Promise<{ ok: boolean; data?: unknown; error?: string }>
+  /** Modal pick from a list; `selected` preselects the current value's row; null = cancelled. */
+  select(title: string, options: string[], selected?: string): Promise<string | null>
+  /** Modal one-line text; null = cancelled ('' is a real answer). */
+  input(title: string, placeholder?: string, prefill?: string): Promise<string | null>
+  confirm(title: string, message?: string): Promise<boolean>
+  /** Put text in the composer editor (fork's restored prompt). */
+  setInput(text: string): void
+}
+// `hidden` keeps a row out of the palette listing (its only entry point) while the code stays —
+// for shipped-but-not-yet-live-verified commands; it still shadows a same-named pass-through row.
+export interface ComposerRecipe { name: string; description: string; hidden?: boolean; run(ctx: RecipeCtx): Promise<string | void> }
 
 // The slice of MessageList the status-bar pills reach through IRoot. Declared here so the pills never
 // import the concrete component (which would re-introduce a child→host cycle).
@@ -38,14 +73,31 @@ export interface IMessageList {
 export interface IRoot {
   ready: boolean
   cwd: string
-  sessionId: string
+  // null = no session event yet (boot moment, or a project with no sessions); '' = deliberately
+  // attached to nothing (the composer's "+ new conversation" blank state, mirror.ts detachToBlank).
+  // The session pill hides only on null — in the blank state the menu is the way back.
+  sessionId: string | null
   ownPid: number
   prose: boolean
   working: boolean
   // The model the last assistant turn resolved to (from poll) — the agent switcher's live watchdog
   // reads it to catch an Anthropic model riding the OpenRouter route (TB-Agent-Switcher.md L1).
   latestModel: string | null
+  // The driver's CONFIGURED model (poll composer.model) — what the next turn will use. The pi model
+  // pill prefers it over latestModel so a fresh conversation isn't pill-less until its first turn.
+  // null when not driving (foreign session, Claude mirror).
+  driverModel: string | null
+  // The composer driver's in-flight assistant message (poll's composer.draft) — rendered by
+  // MessageList as one ephemeral bubble after the transcript, replaced by the durable row when the
+  // entry lands on disk (TB-Agent-Composer.md, Invariant C1). null when idle or no composer.
+  draft: { text: string; thinking: string } | null
   tokens: TokenCounts
+  // Session cost so far: the sum of the usage events' per-entry harness-computed costs (pi writes
+  // usage.cost.total; CC writes none, so this stays 0 there). Reset by `cleared` like tokens.
+  cost: number
+  // The harness's own live totals from the driver (poll composer.stats) — preferred by the token
+  // chip over tokens/cost when present; null when not driving (foreign session, Claude mirror).
+  stats: ComposerStats | null
   messageList: IMessageList
   closePopups(except?: unknown): void
   updateTitle(): void

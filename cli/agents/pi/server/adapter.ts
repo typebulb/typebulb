@@ -1,13 +1,15 @@
-import { statSync, openSync, readSync, closeSync } from 'fs'
+import { statSync, openSync, readSync, closeSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
-import { AgentAdapter } from '../../core/server/adapter.js'
+import { AgentAdapter, type AgentDriver } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
-import { ensurePiShim } from './piShim.js'
+import { ensurePiExtension } from './piExtension.js'
+import { PiRpcDriver } from './driver.js'
+import { trustNotice } from './trust.js'
 
-// The pi realization of the AgentAdapter contract (TB-Harness.md). pi stores a conversation as the same
+// The pi realization of the AgentAdapter contract (TB-Agent-Harness.md). pi stores a conversation as the same
 // kind of parent-linked JSONL tree Claude Code does — so the neutral engine (../../server/mirror.ts)
 // drives it unchanged; only the schema differs. Grounded in pi's shipped docs/session-format.md and
 // the real transcripts under ~/.pi/agent/sessions/.
@@ -33,7 +35,8 @@ interface PiMessage {
   role: string                              // user | assistant | toolResult | bashExecution | custom | …
   content?: string | PiContent[]
   model?: string
-  usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
+  usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } }
+  stopReason?: string                       // assistant — 'aborted'/'error' carry no valid window usage
   toolCallId?: string                       // toolResult → the toolCall it answers
   isError?: boolean
   command?: string                          // bashExecution (`!cmd`) — the shell command
@@ -79,10 +82,22 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   // subprocess it spawns inherits it. pi does NOT set the cross-tool AI_AGENT var — this marker only.
   detectsSelf() { return process.env.PI_CODING_AGENT === 'true' }
 
-  // pi has no background bash / external re-invoke, so typebulb ships a `wait`-intercepting extension
-  // into pi's config (TB-Wait.md). Placement is gated on pi being present and
-  // never throws. See ./piShim.ts.
-  ensureWaitSupport() { ensurePiShim() }
+  // pi creates ~/.pi/agent on first run — the same presence gate ensurePiExtension trusts.
+  detectsInstalled() { return existsSync(join(homedir(), '.pi', 'agent')) }
+
+  // pi's CLI-side support: the typebulb extension (wait interception + mirror orientation —
+  // TB-Wait.md; see ./piExtension.ts). Gated on pi being present, never throws.
+  ensureHarnessSupport() { ensurePiExtension() }
+
+  // The composer capability (TB-Agent-Composer.md): pi is drivable because `pi --mode rpc` exists and
+  // bills on the user's own keys. Claude Code deliberately does not implement this.
+  createDriver(cwd: string, sessionFile: string | undefined): AgentDriver {
+    const driver = new PiRpcDriver(cwd, sessionFile)
+    // Parity #12: RPC pi silently runs an undecided project untrusted — say so once, at spawn.
+    const trust = trustNotice(cwd)
+    if (trust) driver.notice(trust, 'warning')
+    return driver
+  }
 
   sessionsDir(cwd: string) { return join(PI_SESSIONS, piDirName(cwd)) }
 
@@ -105,7 +120,7 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   isLeafType(raw: PiEntry) { return isConversational(raw) }
   isRecoveryNoise(_raw: PiEntry) { return false }               // no api-error sibling concept observed
 
-  apply(raw: PiEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
+  apply(raw: PiEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string; cost?: number } {
     const events: Event[] = []
     // An extension-injected message shown in the chat (display !== false) — render as a user turn.
     if (raw.type === 'custom_message') {
@@ -145,11 +160,16 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
         const live = !isNaN(ts) && ts >= sessionStartMs
         events.push({ type: 'assistant', text, thinking, tools, live })
       }
+      // pi's own context rule (compaction.ts getAssistantUsage): an aborted/error/zero-usage response
+      // carries no valid window count — skip it so the chip doesn't zero out or go stale. Cost still
+      // bubbles up regardless (pi's getSessionStats sums every message's usage.cost.total).
       const u = m.usage
-      const usage: TokenCounts | undefined = u && {
-        in: u.input ?? 0, out: u.output ?? 0, cached: u.cacheRead ?? 0, cacheCreate: u.cacheWrite ?? 0,
-      }
-      return { events, usage, model: m.model }
+      const total = u ? (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) : 0
+      const usage: TokenCounts | undefined =
+        u && total > 0 && m.stopReason !== 'aborted' && m.stopReason !== 'error'
+          ? { in: u.input ?? 0, out: u.output ?? 0, cached: u.cacheRead ?? 0, cacheCreate: u.cacheWrite ?? 0 }
+          : undefined
+      return { events, usage, model: m.model, cost: u?.cost?.total }
     }
     return { events }   // custom (state) / branchSummary / compactionSummary — structural, not shown
   }

@@ -42,4 +42,11 @@ describe('buildSkill', () => {
     const md = '# Title\n\nintro\n\n## Body\ncontent'
     expect(buildSkill(md, '1.2.3')).toBe(`${skillFrontmatter('1.2.3')}\n\n${freshnessNote('1.2.3')}\n\n${md}\n`)
   })
+
+  it('quotes the description so the frontmatter is valid YAML (the prose contains `: `)', () => {
+    const line = skillFrontmatter('1.2.3').split('\n').find(l => l.startsWith('description: '))!
+    const description = JSON.parse(line.slice('description: '.length))
+    expect(description).toContain('full power: filesystem')   // the very `: ` that broke unquoted parsing
+    expect(description).not.toContain('\n')
+  })
 })

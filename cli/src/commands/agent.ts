@@ -30,11 +30,16 @@ function palette(tty: boolean) {
  * command that approval never covered. It always exits 0: this is a status report, and even a launch
  * that failed is reported (with the manual command), never signalled as an error exit.
  *
+ * The pi extension's TB_MIRROR_BLOCK (agents/pi/server/piExtension.ts) re-delivers this block's lines into
+ * mirror-driven (composer) sessions via the system prompt. The wording here is hard-won — if a line
+ * changes, change it there too; don't let the two drift into paraphrase.
+ *
  * The harness is RESOLVED, not hardcoded (resolveAgent): the agent that ran the command is detected
  * from its env marker, so a pi agent gets the pi mirror and a Claude agent the Claude mirror off the
- * one universal command. Only when the caller is a human AND two harnesses have sessions here is there
- * nothing to go on — on an interactive terminal that asks (then launches the pick like any resolved
- * run); off a TTY it prints a pick-one message (still exit 0) instead of launching.
+ * one universal command. Only when the caller is a human AND more than one harness has a claim — two
+ * with sessions here, or (a fresh project) two installed on the machine — is there nothing to go on:
+ * on an interactive terminal that asks (then launches the pick like any resolved run); off a TTY it
+ * prints a pick-one message (still exit 0) instead of launching.
  */
 export async function runAgent(version: string): Promise<void> {
   const choice = resolveAgent(process.cwd())
@@ -117,7 +122,7 @@ async function promptHarness(version: string, names: string[]): Promise<string |
   const { lit, brand } = palette(true)   // reached only on a TTY (guarded above)
   const menu = [
     `  ${brand(`typebulb v${version}`)}`,
-    `  This project has sessions for more than one agent harness.`,
+    `  More than one agent harness is available here.`,
     ...names.map((n, i) => `      ${lit(String(i + 1))}) ${n}`),
     '',
   ]
@@ -136,7 +141,7 @@ async function promptHarness(version: string, names: string[]): Promise<string |
 
 /**
  * The non-TTY fallback for the one branch where bare `agent` can't resolve a harness: a human (no env
- * marker) in a project with sessions for more than one harness, no mirror yet running, and no terminal
+ * marker) with more than one harness in play (sessions here, or installed on a fresh project), and no terminal
  * to prompt on (`promptHarness` returned undefined). Nothing to guess from, so name the explicit commands
  * and let the user choose. Still exit 0 — like the rest of `runAgent`, this is a status report, not a
  * failure. (An agent caller never reaches here: it's detected by its env marker.)
@@ -145,7 +150,7 @@ function printAmbiguous(version: string, names: string[]): void {
   const { lit, brand } = palette(process.stdout.isTTY === true)
   const lines = [
     `  ${brand(`typebulb v${version}`)}`,
-    `  This project has sessions for more than one agent harness.`,
+    `  More than one agent harness is available here.`,
     `    Open the mirror for the one you want:`,
     ...names.map(n => `      • ${lit(`npx typebulb agent:${n}`)}`),
     '',

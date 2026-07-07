@@ -1,5 +1,5 @@
 import { Component, div, button, span, type UpdateEvent } from 'domeleon'
-import { armOutsideClose, searchFilter } from './ui.js'
+import { armOutsideClose, searchFilter, stuckToBottom } from './ui.js'
 import type { IRoot } from './types.js'
 
 // ---- status-bar pill base classes ----
@@ -102,7 +102,7 @@ export abstract class ComboboxPill<R> extends StatusPill {
   // user scrolling, or a moveHighlight scrollIntoView that happens to land near the bottom.
   protected onListScroll() {
     const el = this.listEl()
-    if (el) this.#stuck = el.scrollHeight - (el.scrollTop + el.clientHeight) < 24
+    if (el) this.#stuck = stuckToBottom(el, 24)
   }
 
   #scrollToEnd() { this.#pinPending = true }

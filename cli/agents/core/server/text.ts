@@ -18,7 +18,8 @@ export function firstLineDigest(text: string): string {
   const lines = text.replace(ANSI_CODES, '').split('\n').map(l => l.trim()).filter(Boolean)
   const first = lines[0]
   if (!first) return ''
-  const capped = first.length > 96 ? first.slice(0, 96).trimEnd() + '…' : first
+  // Payload bound only — visual fit is the client's CSS ellipsis, which knows the actual width.
+  const capped = first.length > 300 ? first.slice(0, 300).trimEnd() + '…' : first
   const rest = lines.length - 1
   return rest > 0 ? `${capped} (+${rest} line${rest === 1 ? '' : 's'})` : capped
 }
