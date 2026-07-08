@@ -4,10 +4,15 @@
  * esbuild-bundled (lib inlined, `typebox` external — pi ships it) to `dist/agents/pi/matchu-patchu.ts`;
  * `ensurePiExtension()` copies that into `~/.pi/agent/extensions/` next to typebulb.ts on every CLI run.
  * Registers `patch` and removes the built-in `edit` from the active tool set — replacement, not
- * compensation. Removal uses `pi.setActiveTools()` on session_start: the verified route to the real
- * API tool list (agent-session.js setActiveToolsByName sets agent.state.tools AND rebuilds the
- * prompt); it throws during extension load, hence the handler. Registered tools auto-activate, so
- * `patch` needs no explicit enable.
+ * compensation. Both happen on session_start, not at load: pi's post-load conflict scan exits 1
+ * when two extensions register the same tool name — detected outside any extension's try/catch —
+ * so the shim registers late and yields when `getAllTools()` shows another extension already
+ * provides `patch`; a project's own patcher must never kill pi's boot (P3). Post-load registerTool
+ * is supported (refreshTools → _refreshToolRegistry auto-activates new names and rebuilds the
+ * prompt). Removal uses `pi.setActiveTools()`: the verified route to the real API tool list
+ * (setActiveToolsByName sets agent.state.tools AND rebuilds the prompt); action methods throw
+ * during extension load, hence the handler. session_start re-fires on new/resume/fork/reload, so
+ * the ownership check and the `edit` removal both re-apply.
  *
  * Error channel: pi tools THROW on failure (the runtime renders it as an isError tool result), so
  * the apply helpers return `{ ok, message }` and execute throws the message. Semantics port the
@@ -137,6 +142,7 @@ interface PiApi {
   registerTool(tool: unknown): void
   on(event: string, handler: (event: unknown, ctx: { cwd: string }) => void): void
   getActiveTools(): string[]
+  getAllTools(): { name: string; sourceInfo?: { path?: string } }[]
   setActiveTools(names: string[]): void
 }
 
@@ -144,40 +150,62 @@ function logErr(...a: unknown[]) {
   try { console.error('[matchu-patchu]', ...a) } catch {}
 }
 
+/**
+ * How session_start should treat `patch`: register it (absent), re-apply ours (ours), or stand
+ * down to another extension's registration (foreign) — never colliding, so pi always boots (P3).
+ * The flag covers same-process re-fires; the sourceInfo path covers lifecycles that reset it.
+ */
+export function patchOwnership(
+  tools: { name: string; sourceInfo?: { path?: string } }[],
+  registeredByUs: boolean,
+): 'absent' | 'ours' | 'foreign' {
+  const patch = tools.find(t => t.name === 'patch')
+  if (!patch) return 'absent'
+  return registeredByUs || /matchu-patchu/i.test(patch.sourceInfo?.path ?? '') ? 'ours' : 'foreign'
+}
+
+const PATCH_TOOL = {
+  name: 'patch',
+  label: 'Patch',
+  description: DESCRIPTION,
+  promptSnippet: 'Modify one or more existing files by applying a unified diff',
+  promptGuidelines: [
+    'Use patch for every edit to an existing file; write is only for creating new files or full rewrites.',
+    "patch accepts lenient unified diffs: line numbers are optional and hunks anchor by context lines. One diff may target several files via ---/+++ headers; pass filePath instead for a headerless single-file diff.",
+  ],
+  parameters: Type.Object({
+    diff: Type.String({ description: 'Unified diff content to apply' }),
+    filePath: Type.Optional(Type.String({
+      description: "Path of the single file to patch (absolute or relative to the project root); the diff's headers are then ignored. Omit to target the file(s) named by the diff's ---/+++ headers.",
+    })),
+    dryRun: Type.Optional(Type.Boolean({ description: 'If true, return the patched content without writing to disk' })),
+  }),
+  async execute(_id: string, params: PatchArgs, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) {
+    const { ok, message } = applyPatch(ctx.cwd, params)
+    if (!ok) throw new Error(message)
+    return { content: [{ type: 'text' as const, text: message }], details: {} }
+  },
+}
+
 // Everything is wrapped so a throw can never break pi's startup — a failure degrades to stock pi (P3).
 export default function (pi: PiApi) {
+  let registeredPatch = false
   try {
-    pi.registerTool({
-      name: 'patch',
-      label: 'Patch',
-      description: DESCRIPTION,
-      promptSnippet: 'Modify one or more existing files by applying a unified diff',
-      promptGuidelines: [
-        'Use patch for every edit to an existing file; write is only for creating new files or full rewrites.',
-        "patch accepts lenient unified diffs: line numbers are optional and hunks anchor by context lines. One diff may target several files via ---/+++ headers; pass filePath instead for a headerless single-file diff.",
-      ],
-      parameters: Type.Object({
-        diff: Type.String({ description: 'Unified diff content to apply' }),
-        filePath: Type.Optional(Type.String({
-          description: "Path of the single file to patch (absolute or relative to the project root); the diff's headers are then ignored. Omit to target the file(s) named by the diff's ---/+++ headers.",
-        })),
-        dryRun: Type.Optional(Type.Boolean({ description: 'If true, return the patched content without writing to disk' })),
-      }),
-      async execute(_id: string, params: PatchArgs, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) {
-        const { ok, message } = applyPatch(ctx.cwd, params)
-        if (!ok) throw new Error(message)
-        return { content: [{ type: 'text' as const, text: message }], details: {} }
-      },
-    })
-
-    // P1 — replace, not compensate: the built-in edit leaves the model's toolbox entirely.
-    // setActiveTools throws during load; session_start re-fires on new/resume/fork/reload, so the
-    // removal re-applies across session replacement.
     pi.on('session_start', () => {
       try {
+        const owner = patchOwnership(pi.getAllTools(), registeredPatch)
+        if (owner === 'foreign') {
+          logErr('another extension already provides "patch" — typebulb patcher standing down (built-in edit kept)')
+          return
+        }
+        if (owner === 'absent') {
+          pi.registerTool(PATCH_TOOL)
+          registeredPatch = true
+        }
+        // P1 — replace, not compensate: the built-in edit leaves the model's toolbox entirely.
         const active = pi.getActiveTools()
         if (active.includes('edit')) pi.setActiveTools(active.filter(n => n !== 'edit'))
-      } catch (e) { logErr('remove edit', e) }
+      } catch (e) { logErr('session_start', e) }
     })
   } catch (e) { logErr('load', e) }
 }

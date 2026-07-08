@@ -9,7 +9,7 @@ import type { ChildProcess } from 'child_process'
 import { PiRpcDriver } from '../agents/pi/server/driver.js'
 import { trustNotice } from '../agents/pi/server/trust.js'
 import { piExtensionSource } from '../agents/pi/server/piExtension.js'
-import { applyPatch, discoverDiffKeys } from '../agents/pi/server/piPatcherExtension.js'
+import { applyPatch, discoverDiffKeys, patchOwnership } from '../agents/pi/server/piPatcherExtension.js'
 import { createMirror } from '../agents/core/server/mirror.js'
 import { AgentAdapter, type AgentDriver } from '../agents/core/server/adapter.js'
 import type { SessionFile } from '../agents/core/events.js'
@@ -407,6 +407,27 @@ describe('piPatcherExtension applyPatch', () => {
     expect(r.message).toContain('--- patched output ---')
     expect(r.message).toContain('ALPHA\nkeep\n')
     expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('alpha\nkeep\n')
+  })
+})
+
+// The session_start ownership check that keeps a foreign `patch` extension from ever colliding
+// with the shim (P3): register when absent, stand down when foreign, re-apply when ours.
+describe('piPatcherExtension patchOwnership', () => {
+  const ours = { name: 'patch', sourceInfo: { path: 'C:\\Users\\t\\.pi\\agent\\extensions\\matchu-patchu.ts' } }
+  const foreign = { name: 'patch', sourceInfo: { path: 'C:\\proj\\.pi\\extensions\\patcher\\index.ts' } }
+
+  it('no patch registered → absent (we register)', () => {
+    expect(patchOwnership([{ name: 'read' }, { name: 'edit' }], false)).toBe('absent')
+  })
+
+  it('a foreign patch → stand down, never collide', () => {
+    expect(patchOwnership([foreign], false)).toBe('foreign')
+    expect(patchOwnership([{ name: 'patch' }], false)).toBe('foreign')  // no sourceInfo at all
+  })
+
+  it('ours by path, or by the same-process flag on a re-fire', () => {
+    expect(patchOwnership([ours], false)).toBe('ours')
+    expect(patchOwnership([foreign], true)).toBe('ours')
   })
 })
 

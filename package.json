@@ -1,6 +1,6 @@
 {
   "name": "typebulb",
-  "version": "0.21.3",
+  "version": "0.21.4",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
   "license": "MIT",
   "repository": {
