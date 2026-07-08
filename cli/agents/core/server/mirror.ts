@@ -446,10 +446,25 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return adapter.chainWorking([...state.entries.values()]) && sessionLive()
   }
 
+  // Pre-warm the driver so the model pill shows what the composer WILL use, before the first send.
+  // The pill reads driverModel ?? latestModel; a fresh/empty session has no assistant turn on disk,
+  // so both are null and the pill blanks until a send spawns the driver. composerNew already spawns
+  // eagerly for exactly this reason (its boot get_state resolves the model) — the boot/attach path
+  // did not. Gated so we never spawn needlessly: only when nothing shows from disk (latestModel is
+  // null — a session with turns already has it) and no live (possibly foreign) turn we'd fork. A
+  // no-spend get_state probe, one owned process, disposed on switch like any other idle driver.
+  function prewarmDriver() {
+    if (!adapter.createDriver || driver) return
+    if (state.latestModel || terminalTurnLive()) return
+    driver = adapter.createDriver(state.cwd, state.file)
+    driverFile = state.file
+  }
+
   async function poll(cursor: number) {
     const s = state
     refreshActive()
     resolveDriverBinding()
+    prewarmDriver()
     // latestModel rides the poll (not a menu open) so the switcher watchdog is live: the pill turns red
     // the instant a desynced turn lands on disk (TB-Agent-Switcher.md L1).
     // Driver slices ship only while the driver is bound to the session being VIEWED — a streaming
