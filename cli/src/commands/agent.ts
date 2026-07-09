@@ -92,7 +92,10 @@ async function launchAndReport(version: string, name: string): Promise<void> {
         `  Agents:`,
         `    Reusable app/tool → write a ${lit('.bulb.md')}`,
         `    Show something inline → embed a bulb`,
-        `      background a wait for its render verdict:`,
+        // "background" told pi agents to shell-'&' the wait, decoupling the wake (TB-Wait.md).
+        name === 'pi'
+          ? `      arm a wait for its render verdict — run it plainly:`
+          : `      background a wait for its render verdict:`,
         `      • ${lit('typebulb wait agent --match "[embed <name>"')}`,
         ...skill,
         `    End your reply with the mirror link above`,

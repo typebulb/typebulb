@@ -112,7 +112,7 @@ var TB_MIRROR_BLOCK = [
   "  • no need to end your reply with a mirror link",
   "  Reusable app/tool → write a .bulb.md",
   "  Show something inline → embed a bulb",
-  "    background a wait for its render verdict:",
+  "    arm a wait for its render verdict — run it plainly:",
   '    • typebulb wait agent --match "[embed <name>"',
   "  Read the authoring skill before writing a bulb:",
   "    • npx typebulb skill — assembles one SKILL.md",
@@ -143,12 +143,18 @@ export default function (pi) {
         // is a shim-backgrounded (non-blocking) wait, so it runs as a pure subscription: no give-up clock,
         // it waits for the event however long (bounded by the session-shutdown reap below) — an embed's
         // first paint OR a running bulb's next event line alike.
+        // The agent may self-background ("… &") — the generic-shell reading of "arm it in the
+        // background", but here the SHIM is the backgrounder: bash would exit 0 instantly with empty
+        // output, firing the wake before the event while the detached wait delivers to nobody
+        // (field: Toroidal Life, '> /tmp/x.log 2>&1 &'). Strip a trailing "&" so the wait runs
+        // foreground inside the shim's already-backgrounded child.
+        const cmd = String(command).replace(/(?<!&)\s*&\s*$/, "");
         const bash = resolveBash();
         const opts = {
           stdio: ["ignore", "pipe", "pipe"],
           env: { ...process.env, TYPEBULB_WAIT_SHIM: "1" },
         };
-        const child = bash ? spawn(bash, ["-c", command], opts) : spawn(command, { ...opts, shell: true });
+        const child = bash ? spawn(bash, ["-c", cmd], opts) : spawn(cmd, { ...opts, shell: true });
         pending.add(child);
         let out = "";
         let errOut = "";
@@ -183,6 +189,11 @@ export default function (pi) {
             const embedOk = code === 0 && waitLines.length > 0 && waitLines.every(function (l) { return /^\[embed .*\] ok$/.test(l); });
             if (code === 0 && text && !embedOk) {
               pi.sendUserMessage("typebulb wait result:\n" + text, { deliverAs: "followUp" });
+            } else if (code === 0 && !text) {
+              // A successful wait always prints its matched line(s), so exit 0 with nothing captured
+              // means the agent redirected stdout (e.g. '> /tmp/x.log 2>&1') — the verdict landed in a
+              // file nobody reads. The line is still in the mirror's log; point the agent there.
+              pi.sendUserMessage("typebulb wait ended (exit 0) but its output was redirected away — read the verdict with: typebulb logs agent\nNext time run the wait plainly: no output redirect, no trailing &.", { deliverAs: "followUp" });
             } else if (code !== null && code !== 0 && code !== 2 && code !== 3) {
               var diag = (text + "\n" + errOut.trim()).trim();
               pi.sendUserMessage("typebulb wait FAILED (exit " + code + ")" + (diag ? ":\n" + diag : " with no output.") + "\nThe wait never armed — nothing is watching. Fix the command and re-arm it.", { deliverAs: "followUp" });

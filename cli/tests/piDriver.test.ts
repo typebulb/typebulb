@@ -735,9 +735,9 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     const src = piExtensionSource()
     // Resolution mirrors pi's own getShellConfig: Git Bash in ProgramFiles, PATH fallback, /bin/bash on POSIX.
     expect(src).toContain('function resolveBash()')
-    expect(src).toContain('spawn(bash, ["-c", command]')
+    expect(src).toContain('spawn(bash, ["-c", cmd]')
     // shell:true survives only as the no-bash fallback, never the primary path.
-    expect(src).toContain('spawn(command, { ...opts, shell: true })')
+    expect(src).toContain('spawn(cmd, { ...opts, shell: true })')
   })
 
   it('wakes on a failed arm (exit ∉ {0,2,3}) with the diagnostic — a silently dead wait is a deadlock', () => {
@@ -746,5 +746,22 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     expect(src).toContain('typebulb wait FAILED (exit " + code + ")')
     // The diagnostic carries the child output the old notify path discarded ("No running server for …").
     expect(src).toContain('errOut')
+  })
+
+  it('absorbs agent self-backgrounding — trailing "&" stripped, redirected-away verdict wakes with a pointer', () => {
+    const src = piExtensionSource()
+    // The strip regex, as written into the extension (the shim is the backgrounder; "&" decouples the wake).
+    const m = src.match(/String\(command\)\.replace\((\/.+?\/), ""\)/)
+    expect(m).not.toBeNull()
+    const re = new Function(`return ${m![1]}`)() as RegExp
+    const strip = (c: string) => c.replace(re, '')
+    // The Toroidal Life field command: & stripped, redirect kept (bash then blocks until the match).
+    expect(strip('npx typebulb wait agent --match "[embed Toroidal Life" > /tmp/x.log 2>&1 &'))
+      .toBe('npx typebulb wait agent --match "[embed Toroidal Life" > /tmp/x.log 2>&1')
+    expect(strip('npx typebulb wait agent --match "[embed X" &')).toBe('npx typebulb wait agent --match "[embed X"')
+    expect(strip('npx typebulb wait agent --match "[embed X"')).toBe('npx typebulb wait agent --match "[embed X"')  // no-op without &
+    // Exit 0 with empty stdout = the verdict was redirected away; the wake points at the mirror log.
+    expect(src).toContain('code === 0 && !text')
+    expect(src).toContain('typebulb logs agent')
   })
 })
