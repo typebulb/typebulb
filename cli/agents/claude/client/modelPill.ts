@@ -94,13 +94,13 @@ export class ModelPill extends ComboboxPill<never> {
   async refresh() {
     try {
       const [list, st] = await Promise.all([
-        tb.server.listSwitchModels() as Promise<{ hasKey: boolean; models: ModelOpt[] }>,
+        tb.server.listSwitchModels() as Promise<{ hasKey: boolean; models: ModelOpt[]; error?: string }>,
         tb.server.switchState() as Promise<SwitchState>,
       ])
       this.models = list.models
       this.hasKey = list.hasKey
       this.current = st
-      this.err = null
+      this.err = list.error ?? null   // a fetch failure that emptied the menu → the "Couldn't load" empty state
     } catch (err) {
       this.err = errMsg(err)
       console.error('[mirror] switcher refresh failed', err)

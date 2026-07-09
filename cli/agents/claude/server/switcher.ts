@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from '
 import { join, dirname } from 'path'
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'http'
 import { type AddressInfo } from 'net'
-import { getFilteredModels } from '../../../src/servers.js'
+import { getFilteredModels, catalogFetchError } from '../../../src/servers.js'
 import { errorMessage, projectCwd } from '../../core/server/context.js'
 
 // ---- agent switcher: which model backs each `claude` launch (TB-Agent-Switcher.md) ----
@@ -437,7 +437,10 @@ export async function listSwitchModels() {
       .filter(m => m.provider === 'openrouter' && !isAnthropicSlug(m.name))
       .map(m => ({ id: m.name, label: m.friendlyName || m.name }))
   } catch (err) { console.error('[switcher] model list failed', errorMessage(err)) }
-  return { hasKey, models }
+  // Surface a fetch failure only when it left the menu empty, so it reads as "couldn't load" rather
+  // than a bare "no models"; a populated (stale-cache) list needs no warning.
+  const error = models.length ? undefined : catalogFetchError() ?? undefined
+  return { hasKey, models, error }
 }
 
 // The authoritative live state — read from the proxy itself (module state), not inferred from a stale
@@ -594,7 +597,10 @@ export async function probeModel({ model }: { model: string }) {
     'content-type': 'application/json', authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01',
   }
   const baseReq = {
-    model, max_tokens: 8,
+    // OpenAI requires max_output_tokens >= 16; OpenRouter's Anthropic-skin maps max_tokens straight
+    // through, so a smaller value 400s every GPT slug ("Provider returned error") while other providers
+    // accept it. 64 clears the floor and leaves a reasoning model room to still emit the "ok" sample.
+    model, max_tokens: 64,
     system: [{ type: 'text', text: FILLER, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
   }

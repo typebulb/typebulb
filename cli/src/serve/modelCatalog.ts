@@ -27,9 +27,16 @@ export function normalizeOllamaHost(host: string): string {
 
 const CATALOG_URL = 'https://api.typebulb.com/api/models'
 const CATALOG_TTL = 24 * 60 * 60 * 1000 // 24 hours
+const CATALOG_TIMEOUT = 5000 // bound a single fetch so a hung upstream can't stall the menu
 const OLLAMA_TTL = 60 * 1000 // local models change rarely; cache so repeated menu opens don't re-probe
 let catalogCache: { models: TbModelDto[]; fetchedAt: number } | null = null
 let ollamaCache: { models: TbModelDto[]; fetchedAt: number } | null = null
+// The last catalog-fetch failure, or null after any success — lets a caller tell an empty list from
+// a failed fetch (both otherwise yield no models).
+let lastCatalogError: string | null = null
+
+/** The most recent catalog-fetch failure message, or null if the last fetch succeeded. */
+export function catalogFetchError(): string | null { return lastCatalogError }
 
 /** The key-filtered cloud catalog plus locally-discovered Ollama models. The two are independent
  *  I/O (remote catalog vs local probe), so they run concurrently. Degrades gracefully: a stale
@@ -39,14 +46,27 @@ export async function getFilteredModels(): Promise<TbModelDto[]> {
   return [...filterByLocalKeys(catalog), ...ollama]
 }
 
-/** The admin catalog, in-memory cached with a TTL. Returns the stale cache (or `[]`) on a failed
- *  refresh so a transient network blip doesn't empty the list. */
+/** One bounded catalog fetch. Returns the parsed models, or null on any failure — network, non-2xx,
+ *  or a 200 whose body isn't valid JSON (a redeploy can serve an HTML error page, so guard the
+ *  parse). Records the reason in `lastCatalogError`. */
+async function fetchCatalogOnce(): Promise<TbModelDto[] | null> {
+  let resp: Response
+  try {
+    resp = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(CATALOG_TIMEOUT) })
+  } catch (e) { lastCatalogError = `catalog fetch failed: ${(e as Error)?.message ?? e}`; return null }
+  if (!resp.ok) { lastCatalogError = `catalog fetch failed: HTTP ${resp.status}`; return null }
+  try { return await resp.json() as TbModelDto[] }
+  catch (e) { lastCatalogError = `catalog returned an unreadable body: ${(e as Error)?.message ?? e}`; return null }
+}
+
+/** The admin catalog, in-memory cached with a TTL. Bounded fetch + one quick retry rides out a
+ *  deploy blip; on hard failure returns the stale cache (or `[]`) so a transient outage doesn't
+ *  empty the list, leaving `lastCatalogError` set for the caller to surface. */
 async function getCatalogModels(): Promise<TbModelDto[]> {
   if (catalogCache && Date.now() - catalogCache.fetchedAt <= CATALOG_TTL) return catalogCache.models
-  const resp = await fetch(CATALOG_URL).catch(() => null)
-  if (!resp || !resp.ok) return catalogCache?.models ?? []
-  catalogCache = { models: await resp.json(), fetchedAt: Date.now() }
-  return catalogCache.models
+  const models = (await fetchCatalogOnce()) ?? (await fetchCatalogOnce())
+  if (models) { catalogCache = { models, fetchedAt: Date.now() }; lastCatalogError = null; return models }
+  return catalogCache?.models ?? []
 }
 
 /** Probe a local Ollama server for its installed models (CLI-only, best-effort), cached with a
