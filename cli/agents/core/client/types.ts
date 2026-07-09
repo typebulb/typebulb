@@ -87,6 +87,9 @@ export interface IRoot {
   // pill prefers it over latestModel so a fresh conversation isn't pill-less until its first turn.
   // null when not driving (foreign session, Claude mirror).
   driverModel: string | null
+  // Sessions with a driven turn currently streaming (poll's `busy`) — the one cross-conversation
+  // signal (TB-Agent-Composer.md C4); the session picker badges these rows with the working shimmer.
+  busy: string[]
   // The composer driver's in-flight assistant message (poll's composer.draft) — rendered by
   // MessageList as one ephemeral bubble after the transcript, replaced by the durable row when the
   // entry lands on disk (TB-Agent-Composer.md, Invariant C1). null when idle or no composer.

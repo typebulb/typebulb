@@ -110,6 +110,9 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
 
   pickerRow(s: SessionRow, i: number) {
     const current = s.sessionId === this.parent.sessionId
+    // A driven turn streaming in this conversation (poll's busy set) — the working shimmer badges
+    // background work without flipping there; render-only, rows still come from listSessions.
+    const busy = this.parent.busy.includes(s.sessionId)
     return div({
       // `.active` is the keyboard cursor; `.current` marks the attached session so it stays
       // identifiable when the cursor moves off it.
@@ -119,7 +122,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     },
       div({ class: 'picker-row-main' },
         span({ class: 'picker-dot' }),
-        span({ class: 'picker-preview' }, s.preview || '(no preview)'),
+        span({ class: ['picker-preview', busy ? 'shimmer-text shimmer-slow' : ''] }, s.preview || '(no preview)'),
         hitsBadge(s.hitCount),
         span({ class: 'picker-time' }, relTime(s.mtime)),
       ),

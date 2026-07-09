@@ -168,8 +168,8 @@ export abstract class AgentAdapter<E = unknown> {
   /**
    * Create a driver bound to `sessionFile` (undefined ⇒ the harness starts a new session in `cwd`).
    * Absent ⇒ this harness has no composer: the RPCs error, the panel never renders. The engine owns
-   * the lifecycle — at most one driver per mirror, created lazily on the first send, disposed on
-   * session switch / shutdown; the adapter only supplies the transport.
+   * the lifecycle — one driver per conversation, pinned to its session at spawn, reaped when idle
+   * and not viewed (TB-Agent-Composer.md C2); the adapter only supplies the transport.
    */
   createDriver?(cwd: string, sessionFile: string | undefined): AgentDriver
 }

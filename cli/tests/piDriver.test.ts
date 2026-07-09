@@ -431,10 +431,10 @@ describe('piPatcherExtension patchOwnership', () => {
   })
 })
 
-// poll()'s composer slices are view-scoped (TB-Agent-Composer.md Invariant C4): a streaming driver
-// survives an attach-away, but its draft/queue/status/dialog/stats must never render under the
-// session now being viewed. Engine-level, so a fake adapter + fake driver — no pi, no session files
-// (drain/watch on nonexistent paths are safe no-ops).
+// The engine's per-conversation driver lifecycle (TB-Agent-Composer.md v2 — C2/C4/C5/C6): slices are
+// view-scoped, ownership is identity (the blank pointer), navigation never aborts, idle/finished
+// background drivers are reaped. Engine-level, so a fake adapter + fake driver — no pi, no session
+// files (drain/watch on nonexistent paths are safe no-ops).
 class FakeMirrorDriver implements AgentDriver {
   streaming = false
   draft: AgentDriver['draft'] = null
@@ -446,9 +446,11 @@ class FakeMirrorDriver implements AgentDriver {
   sessionFile: string | undefined
   error: string | undefined
   disposed = false
+  stopped = false
+  sent: string[] = []
   constructor(sessionFile: string | undefined) { this.sessionFile = sessionFile }
-  async send() { return { ok: true } }
-  async stop() {}
+  async send(text: string) { this.sent.push(text); return { ok: true } }
+  async stop() { this.stopped = true }
   respondUi() { return { ok: true } }
   async rpc() { return { ok: true } }
   clearCompletedDraft() {}
@@ -458,7 +460,8 @@ class FakeMirrorDriver implements AgentDriver {
 class FakeMirrorAdapter extends AgentAdapter<never> {
   displayName = 'Fake Mirror'
   sessions: SessionFile[] = []
-  driver: FakeMirrorDriver | undefined
+  created: FakeMirrorDriver[] = []
+  get driver() { return this.created[this.created.length - 1] }
   detectsSelf() { return false }
   detectsInstalled() { return false }
   sessionsDir() { return 'C:\\tb-gate-nowhere' }
@@ -476,12 +479,13 @@ class FakeMirrorAdapter extends AgentAdapter<never> {
   readPreview() { return '' }
   searchText() { return '' }
   createDriver = (_cwd: string, sessionFile: string | undefined) => {
-    this.driver = new FakeMirrorDriver(sessionFile)
-    return this.driver
+    const d = new FakeMirrorDriver(sessionFile)
+    this.created.push(d)
+    return d
   }
 }
 
-describe('mirror poll gating (composer slices are view-scoped)', () => {
+describe('mirror driver lifecycle (per-conversation drivers, view-scoped slices)', () => {
   const A: SessionFile = { sessionId: 'tb-gate-a', file: 'C:\\tb-gate-fake\\a.jsonl', mtime: 2000 }
   const B: SessionFile = { sessionId: 'tb-gate-b', file: 'C:\\tb-gate-fake\\b.jsonl', mtime: 1000 }
   const NEW: SessionFile = { sessionId: 'tb-gate-new', file: 'C:\\tb-gate-fake\\new.jsonl', mtime: 3000 }
@@ -495,7 +499,7 @@ describe('mirror poll gating (composer slices are view-scoped)', () => {
     }
   })
 
-  it('a streaming driver surviving an attach-away ships nothing under the other session; error still surfaces', async () => {
+  it('a streaming driver surviving an attach-away ships nothing under the other session; its error stays its own (C4)', async () => {
     const adapter = new FakeMirrorAdapter()
     adapter.sessions = [A, B]
     const m = createMirror(adapter)                            // boot auto-attaches the newest (A)
@@ -514,13 +518,22 @@ describe('mirror poll gating (composer slices are view-scoped)', () => {
     p = await m.poll(0)
     expect(p.working).toBe(false)
     expect(p.composer).toMatchObject({ streaming: false, draft: null, status: null, dialog: null, queue: null, stats: null })
-    // A dead driver surfaces regardless of the view.
+    expect(d.disposed).toBe(false)                             // navigation never aborts (C6)
+    // A's streaming turn badges B's picker via the busy set — the one cross-conversation signal.
+    expect(p.busy).toEqual([A.sessionId])
+    // A dead driver's error is its conversation's alone — nothing shows under B (C4).
     d.error = 'pi exited (code 1)'
+    d.streaming = false
+    p = await m.poll(0)
+    expect(p.composer!.error).toBeUndefined()
+    // Back on A the error surfaces; the flip reaps the idle pre-warm driver B's view spawned.
+    const bPrewarm = adapter.created.find(c => c.sessionFile === B.file)
+    expect((await m.attach(A.sessionId)).ok).toBe(true)
     p = await m.poll(0)
     expect(p.composer!.error).toBe('pi exited (code 1)')
+    expect(bPrewarm?.disposed).toBe(true)
     d.error = undefined
-    // Back on A everything reappears.
-    expect((await m.attach(A.sessionId)).ok).toBe(true)
+    d.streaming = true
     p = await m.poll(0)
     expect(p.working).toBe(true)
     expect(p.composer).toMatchObject({ streaming: true, draft: { text: 'partial' }, status: { kind: 'info' }, stats: { cost: 0.1 } })
@@ -563,6 +576,101 @@ describe('mirror poll gating (composer slices are view-scoped)', () => {
     expect((await m.composerSend('hi')).ok).toBe(true)
     expect(adapter.driver).toBe(d)
     expect(d.disposed).toBe(false)
+  })
+
+  it('conversations are independent (C2/C4): a send in B never waits on A\'s streaming turn', async () => {
+    const adapter = new FakeMirrorAdapter()
+    adapter.sessions = [A, B]
+    const m = createMirror(adapter)                            // boot auto-attaches A
+    expect((await m.composerSend('work on A')).ok).toBe(true)
+    const dA = adapter.created[0]!
+    dA.streaming = true
+    dA.draft = { text: 'A partial', thinking: '' }
+    // Flip to B and send while A streams: a SECOND driver, pinned to B — never a steer into A.
+    expect((await m.attach(B.sessionId)).ok).toBe(true)
+    expect((await m.composerSend('work on B')).ok).toBe(true)
+    const dB = adapter.created[1]!
+    expect(dB).not.toBe(dA)
+    expect(dB.sessionFile).toBe(B.file)
+    expect(dB.sent).toEqual(['work on B'])
+    expect(dA.sent).toEqual(['work on A'])                     // A's turn untouched
+    expect(dA.disposed).toBe(false)
+    // Two turns streaming at once: both badge busy; B's view renders only B's state.
+    dB.streaming = true
+    dB.draft = { text: 'B partial', thinking: '' }
+    const p = await m.poll(0)
+    expect(p.composer).toMatchObject({ streaming: true, draft: { text: 'B partial' } })
+    expect(p.busy.sort()).toEqual([A.sessionId, B.sessionId].sort())
+    // Stop is view-scoped (C6): it aborts B's turn, deliberately aimed at what the user sees.
+    await m.composerStop()
+    expect(dB.stopped).toBe(true)
+    expect(dA.stopped).toBe(false)
+  })
+
+  it('composerNew mid-turn detaches without aborting; the blank never snaps back to the old session (C5/C6)', async () => {
+    const adapter = new FakeMirrorAdapter()
+    adapter.sessions = [A]
+    const m = createMirror(adapter)
+    expect((await m.composerSend('go')).ok).toBe(true)
+    const dA = adapter.created[0]!
+    dA.streaming = true
+    dA.draft = { text: 'A partial', thinking: '' }
+    // + mid-turn: never refused, never destructive — A keeps streaming in the background.
+    expect((await m.composerNew()).ok).toBe(true)
+    expect(dA.disposed).toBe(false)
+    const newborn = adapter.created[1]!
+    expect(newborn.sessionFile).toBeUndefined()                // the blank's own sessionless spawn
+    // The blank renders none of A's draft/shimmer, badges A as busy, and — the v1 snap-back bug —
+    // stays blank even though A's driver holds a resolved file that IS in the listing.
+    let p = await m.poll(0)
+    expect(p.working).toBe(false)
+    expect(p.composer).toMatchObject({ streaming: false, draft: null })
+    expect(p.busy).toEqual([A.sessionId])
+    const lastSession = p.events.filter(e => e.type === 'session').pop() as { sessionId: string }
+    expect(lastSession.sessionId).toBe('')                     // still the blank view, no snap-back
+    // The first send goes to the newborn — never a steer into A's in-flight turn.
+    expect((await m.composerSend('fresh start')).ok).toBe(true)
+    expect(newborn.sent).toEqual(['fresh start'])
+    expect(dA.sent).toEqual(['go'])
+    // A's turn ends: the background driver is reaped at agent_end (C2), the badge clears —
+    // but a queued follow-up holds the reap until pi finishes the turns it promised.
+    dA.streaming = false
+    dA.queue = { steering: [], followUp: ['then also X'] }
+    p = await m.poll(0)
+    expect(dA.disposed).toBe(false)
+    expect(p.busy).toEqual([])                                 // not streaming ⇒ no badge
+    dA.queue = null
+    p = await m.poll(0)
+    expect(dA.disposed).toBe(true)
+    expect(p.busy).toEqual([])
+  })
+
+  it('composerNew is idempotent on a blank view with a live newborn; a streaming newborn is abandoned and a fresh one minted', async () => {
+    const adapter = new FakeMirrorAdapter()
+    const m = createMirror(adapter)                            // no sessions: boots blank
+    expect((await m.composerNew()).ok).toBe(true)
+    const first = adapter.created[adapter.created.length - 1]!
+    expect((await m.composerNew()).ok).toBe(true)              // idle newborn: reused, not stacked
+    expect(adapter.driver).toBe(first)
+    expect(first.disposed).toBe(false)
+    // A streaming newborn drops to the background; + mints a fresh one.
+    first.streaming = true
+    expect((await m.composerNew()).ok).toBe(true)
+    const second = adapter.driver!
+    expect(second).not.toBe(first)
+    expect(first.disposed).toBe(false)
+  })
+
+  it('shutdownComposer reaps every driver, streaming or not', async () => {
+    const adapter = new FakeMirrorAdapter()
+    adapter.sessions = [A, B]
+    const m = createMirror(adapter)
+    expect((await m.composerSend('a')).ok).toBe(true)
+    adapter.created[0]!.streaming = true
+    expect((await m.attach(B.sessionId)).ok).toBe(true)
+    expect((await m.composerSend('b')).ok).toBe(true)
+    m.shutdownComposer()
+    expect(adapter.created.every(d => d.disposed)).toBe(true)
   })
 })
 

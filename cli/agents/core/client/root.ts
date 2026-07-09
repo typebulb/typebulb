@@ -27,6 +27,7 @@ export class Root extends Component implements IRoot {
   working = false                           // the agent is mid-turn (live-chain leaf unresolved); from poll()
   latestModel: string | null = null         // model the last assistant turn resolved to; drives the switcher watchdog
   driverModel: string | null = null         // the driver's configured model (poll composer.model); null when not driving
+  busy: string[] = []                       // sessionIds with a driven turn streaming (poll busy); picker badges
   prose = false                             // prose mode: hide tool/thinking rows (per-mirror, never persisted)
   ownPid = 0                                // this host server's pid; the bulbs pill excludes it
   // Injected agent-specific status pills (Claude's model switcher; none for Pi). MUST be a DIRECT
@@ -104,11 +105,16 @@ export class Root extends Component implements IRoot {
     this.#polling = true
     const tick = async () => {
       try {
-        const { events, cursor, working, latestModel, composer } = await tb.server.poll(this.#cursor)
+        const { events, cursor, working, latestModel, composer, busy } = await tb.server.poll(this.#cursor)
         this.#cursor = cursor
         for (const e of events) this.apply(e)
         const workingChanged = working !== this.working
         this.working = working
+        // The busy set (background driven turns) — re-render on change so an open picker's badges
+        // track the turns, and a clearing badge doubles as the completion signal.
+        const nextBusy: string[] = Array.isArray(busy) ? busy : []
+        const busyChanged = nextBusy.join('\n') !== this.busy.join('\n')
+        this.busy = nextBusy
         // The watchdog (modelPill) reads latestModel through IRoot; re-render when it changes so the
         // pill turns red the turn a desynced model lands, not only when the menu is next opened.
         const modelChanged = latestModel !== this.latestModel
@@ -117,7 +123,7 @@ export class Root extends Component implements IRoot {
         // the draft/stats it publishes onto IRoot for MessageList and the token pill. A growing
         // draft re-renders and keeps the sticky-bottom scroll pinned, exactly like a landed event.
         const composerChanged = this.composer && composer ? this.composer.syncFromPoll(composer) : false
-        if (events.length || workingChanged || modelChanged || composerChanged) this.update()
+        if (events.length || workingChanged || modelChanged || composerChanged || busyChanged) this.update()
         if (events.length || composerChanged) this.messageList.scrollSoon()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).

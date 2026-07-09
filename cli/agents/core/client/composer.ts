@@ -352,8 +352,9 @@ export class Composer extends Component {
     return true
   }
 
-  // Blank the view and drop the idle driver; the next send starts a fresh pi session
-  // (TB-Agent-Composer.md — the one case the mirror "creates" a session). Refused mid-turn.
+  // Blank the view; a running turn keeps streaming as a background conversation (C6), and the
+  // server eagerly spawns the blank's own newborn (TB-Agent-Composer.md — the one case the mirror
+  // "creates" a session, once the first send's entry lands).
   async newConversation() {
     if (this.#sending) return
     await this.#withSending('could not start a new conversation — mirror unreachable', async () => {
@@ -577,8 +578,10 @@ export class Composer extends Component {
         button({ class: 'composer-clip', type: 'button', title: 'Capture clipboard to a file (Ctrl+;)', ariaLabel: 'Capture clipboard',
           ...disabled,
           onClick: () => void this.captureClipboard() }, icon('attach')),
+        // Always live, mid-turn included (C6): + detaches to a fresh conversation while the
+        // running turn continues in the background — it never aborts anything.
         button({ class: 'composer-new', type: 'button', title: 'New conversation', ariaLabel: 'New conversation',
-          ...(this.streaming || this.#sending ? { disabled: true } : {}),
+          ...(this.#sending ? { disabled: true } : {}),
           onClick: () => void this.newConversation() }, icon('addCircle')),
         this.streaming
           ? button({ class: 'composer-act stop', type: 'button', title: 'Stop the current turn', ariaLabel: 'Stop',

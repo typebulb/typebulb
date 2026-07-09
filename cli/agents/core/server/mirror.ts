@@ -73,35 +73,69 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     entries: new Map(),
   }
 
-  // ── the composer's driver (TB-Agent-Composer.md) ──
-  // At most one per mirror (Invariant C2), created lazily on the first send, bound to the session
-  // attached at that moment. `driverFile` is that binding — undefined for a sessionless spawn until
-  // the driver's own file resolves. Lives beside `state`, not in it: attachTo resets per-session tail
-  // state, but a streaming driver deliberately survives an attach-away (the panel disables instead).
-  let driver: AgentDriver | undefined
-  let driverFile: string | undefined
+  // ── the composer's drivers (TB-Agent-Composer.md — v2, concurrent conversations) ──
+  // One driver PER CONVERSATION (Invariant C2), each pinned at spawn to the session it drives — a
+  // driver never follows the mirror's attachment. Ownership is identity, never inference (C5): a
+  // bound rec is found by its session file, and the one unresolved newborn a blank view can hold is
+  // reached only through the `blank` pointer, held from spawn until attach or abandonment to the
+  // background. Lives beside `state`, not in it: attachTo resets per-session tail state, but a
+  // streaming driver deliberately survives an attach-away as a background conversation (C6).
+  interface DriverRec { d: AgentDriver; file: string | undefined }
+  const drivers = new Set<DriverRec>()
+  let blank: DriverRec | undefined
 
-  async function disposeDriver() {
-    const d = driver
-    driver = undefined
-    driverFile = undefined
-    if (d) { try { await d.dispose() } catch (err: unknown) { console.error('[composer] dispose:', errorMessage(err)) } }
+  // The VIEWED conversation's driver: by file for an attached view, the newborn — by identity —
+  // for the blank one. Never a shape rule: under concurrency several drivers hold resolved files
+  // at once, and a shape guess re-attaches the blank to the wrong conversation (the v1 snap-back).
+  function viewedRec(): DriverRec | undefined {
+    if (state.file) {
+      for (const r of drivers) if (r.file === state.file) return r
+      return undefined
+    }
+    return blank
   }
 
-  // Attach-on-new-session: a driver spawned sessionless has resolved its file — bind to it, and if
-  // the mirror is still blank, attach (the one case the mirror "creates" a session; it still only
-  // ever tails it). Resolution goes through the adapter's listing so locks/preview keep working.
-  // Called from poll() and composerSend() alike, so a send can never mistake a freshly-resolved
-  // driver for one bound elsewhere.
-  // The binding is one-shot, but the ATTACH must retry every call while the mirror is blank: pi
-  // reports its session file immediately, yet writes it only on the first entry — a lookup on the
-  // binding poll finds nothing, and giving up there left the draft stuck as a never-landing card.
-  function resolveDriverBinding() {
-    if (!driver?.sessionFile) return
-    if (!driverFile) driverFile = driver.sessionFile
-    if (!state.file) {
-      const sf = adapter.listSessionFiles(state.cwd).find(f => f.file === driverFile)
-      if (sf) attachTo(sf)
+  // Spawn a driver rec against `file` (undefined ⇒ a sessionless newborn). A rec minted while the
+  // view is blank becomes the blank's own pointer — the C5 identity the attach path keys off.
+  function mintRec(file: string | undefined): DriverRec {
+    const rec: DriverRec = { d: adapter.createDriver!(state.cwd, file), file }
+    drivers.add(rec)
+    if (!state.file) blank = rec
+    return rec
+  }
+
+  async function disposeRec(rec: DriverRec) {
+    drivers.delete(rec)
+    if (blank === rec) blank = undefined
+    try { await rec.d.dispose() } catch (err: unknown) { console.error('[composer] dispose:', errorMessage(err)) }
+  }
+
+  // Reap-at-agent_end (C2): the engine learns a background turn ended only from the driver's own
+  // flags (no drain runs for unviewed files), so the sweep runs per poll. A non-viewed rec that is
+  // neither streaming nor holding a queued follow-up buys nothing — the transcript already has
+  // everything (C1) — so it's disposed; the same sweep reaps the idle driver a flip leaves behind
+  // and abandoned newborns. Never a streaming rec (C6). A dead rec (error) is kept: it holds no
+  // process, and its error must surface when its conversation is next viewed (C4).
+  function sweepIdle() {
+    const viewed = viewedRec()
+    for (const rec of [...drivers]) {
+      if (rec === viewed) continue
+      if (rec.d.streaming || rec.d.queue || rec.d.error) continue
+      void disposeRec(rec)
+    }
+  }
+
+  // Bind freshly-resolved session files onto their recs, and — the one case the mirror "creates" a
+  // session — attach the blank view to its OWN newborn's file once the first entry lands on disk.
+  // The gate is the blank pointer (C5), never "the view is blank and some driver has a resolved
+  // file". Resolution goes through the adapter's listing so locks/preview keep working; pi reports
+  // its file immediately but writes it only on the first entry, so the attach retries every call
+  // while the view is blank (giving up on the first miss left the draft as a never-landing card).
+  function resolveBindings() {
+    for (const r of drivers) if (!r.file && r.d.sessionFile) r.file = r.d.sessionFile
+    if (blank && !state.file && blank.file) {
+      const sf = adapter.listSessionFiles(state.cwd).find(f => f.file === blank!.file)
+      if (sf) attachTo(sf)                 // clears the blank pointer; the rec stays, now file-keyed
     }
   }
 
@@ -241,6 +275,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // Single chokepoint for committing to a session file. Every path to ATTACHED funnels through here.
   function attachTo(found: { sessionId: string; file: string }) {
     const s = state
+    // The view is no longer blank, so no rec is reachable through the blank pointer: the newborn is
+    // either the very rec being attached (found by file from here on) or abandoned to the sweep.
+    blank = undefined
     resetTail(found.file, found.sessionId)
     s.everAttached = true
     claimLock(s.cwd, found.sessionId)        // claim before the drain so siblings skip us
@@ -251,7 +288,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
 
   // The composer's "new conversation" (TB-Agent-Composer.md): back to the blank state — attached to
   // nothing, view cleared. The next send spawns a sessionless driver, whose freshly-created file
-  // resolveDriverBinding attaches once its first entry lands. everAttached stays true, so the
+  // resolveBindings attaches once its first entry lands. everAttached stays true, so the
   // fresh-boot auto-attach can't steal the blank view back to the newest old session.
   function detachToBlank() {
     resetTail(undefined, '')
@@ -399,8 +436,10 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
       for (const e of events) state.buffer.push(e)
       // The durable row for a driver-streamed message just landed — drop the ephemeral draft so the
-      // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1).
-      if (driver && events.some(e => e.type === 'assistant')) driver.clearCompletedDraft()
+      // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1). The
+      // drain only ever runs for the viewed file, so this targets the viewed rec alone — background
+      // drafts die with their reap, and a flip-to drains before rendering, preserving the order.
+      if (events.some(e => e.type === 'assistant')) viewedRec()?.d.clearCompletedDraft()
       // The model this turn resolved to — overwrite, like usage: the latest resolution, not a history.
       if (model) state.latestModel = model
       // Overwrite, never accumulate: the chip shows the CURRENT context window (the last response's
@@ -446,47 +485,52 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return adapter.chainWorking([...state.entries.values()]) && sessionLive()
   }
 
-  // Pre-warm the driver so the model pill shows what the composer WILL use, before the first send.
+  // Pre-warm the viewed conversation's driver so the model pill shows what the composer WILL use,
+  // before the first send.
   // The pill reads driverModel ?? latestModel; a fresh/empty session has no assistant turn on disk,
   // so both are null and the pill blanks until a send spawns the driver. composerNew already spawns
   // eagerly for exactly this reason (its boot get_state resolves the model) — the boot/attach path
   // did not. Gated so we never spawn needlessly: only when nothing shows from disk (latestModel is
   // null — a session with turns already has it) and no live (possibly foreign) turn we'd fork. A
-  // no-spend get_state probe, one owned process, disposed on switch like any other idle driver.
+  // no-spend get_state probe, one owned process, reaped on flip-away like any other idle driver.
   function prewarmDriver() {
-    if (!adapter.createDriver || driver) return
+    if (!adapter.createDriver || viewedRec()) return
     if (state.latestModel || terminalTurnLive()) return
-    driver = adapter.createDriver(state.cwd, state.file)
-    driverFile = state.file
+    mintRec(state.file)
   }
 
   async function poll(cursor: number) {
     const s = state
     refreshActive()
-    resolveDriverBinding()
+    resolveBindings()
     prewarmDriver()
+    sweepIdle()
     // latestModel rides the poll (not a menu open) so the switcher watchdog is live: the pill turns red
     // the instant a desynced turn lands on disk (TB-Agent-Switcher.md L1).
-    // Driver slices ship only while the driver is bound to the session being VIEWED — a streaming
-    // driver deliberately survives an attach-away, but its draft/queue/status describe the OTHER
-    // session (Invariant C4). A blank view owns any live driver: it's the one being born there
-    // (composerNew disposes before blanking), including the window where pi has reported its file
-    // but hasn't written it yet — gating on driverFile alone would blank the draft mid-birth.
-    const mine = driver !== undefined && (!s.file || driverFile === s.file)
-    // Read dialog every poll even when unshipped — reading expires stale requests; the poll is the
-    // driver's expiry clock (TB-Agent-Composer-Toolkit.md Piece 3).
-    const dialog = driver?.dialog ?? null
+    // Driver slices are the VIEWED conversation's only (Invariant C4): every driver's ephemeral
+    // state renders under its own session's view — the blank's newborn included, by identity (C5).
+    const rec = viewedRec()
+    // Reading a driver's dialog getter expires its stale requests — the poll is the expiry clock
+    // (TB-Agent-Composer-Toolkit.md Piece 3) — so tick the background drivers' too; the viewed
+    // one's clock is its read in the slice below.
+    for (const r of drivers) if (r !== rec) void r.d.dialog
+    // The one cross-conversation signal (C4): which sessions have a turn streaming, so the picker
+    // can badge background work. Nothing else about a background driver leaves its conversation.
+    const streamingFiles = new Set([...drivers].filter(r => r.d.streaming && r.file).map(r => r.file!))
+    const busy = streamingFiles.size
+      ? adapter.listSessionFiles(s.cwd).filter(f => streamingFiles.has(f.file)).map(f => f.sessionId)
+      : []
     const composer: ComposerPoll | undefined = adapter.createDriver
       ? {
-          streaming: mine && !!driver!.streaming,
-          draft: mine ? driver!.draft : null,
-          status: mine ? driver!.status : null,
-          dialog: mine ? dialog : null,
-          queue: mine ? driver!.queue : null,
-          stats: mine ? driver!.stats : null,        // pi's own session totals (parity #5)
-          model: mine ? driver!.model : null,        // the driver's configured model (next turn's)
-          // A dead driver is dead regardless of the view — surface it anywhere.
-          error: driver?.error,
+          streaming: !!rec?.d.streaming,
+          draft: rec?.d.draft ?? null,
+          status: rec?.d.status ?? null,
+          dialog: rec?.d.dialog ?? null,
+          queue: rec?.d.queue ?? null,
+          stats: rec?.d.stats ?? null,        // pi's own session totals (parity #5)
+          model: rec?.d.model ?? null,        // the driver's configured model (next turn's)
+          // A dead driver's error stays its conversation's too (C4) — it surfaces when viewed.
+          error: rec?.d.error,
         }
       : undefined
     return {
@@ -495,42 +539,35 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       // The driver's own streaming flag (when its session is the viewed one) covers the long
       // single-message stream where the harness writes nothing to disk and the mtime fallback
       // alone would flicker the shimmer off mid-turn (TB-Agent-Composer.md).
-      working: (mine && !!driver!.streaming) || terminalTurnLive(),
+      working: !!rec?.d.streaming || terminalTurnLive(),
       latestModel: s.latestModel,
       composer,
+      busy,
     }
   }
 
   // ── the composer RPCs (TB-Agent-Composer.md) ──
 
-  // Bind-or-create the driver for the session attached RIGHT NOW (Invariant C4: the user drives
-  // what they're looking at, decided at gesture time). Reuses a live driver bound here; replaces a
-  // dead or elsewhere-bound idle one; refuses when a foreign process owns the in-flight turn.
+  // Bind-or-create the VIEWED conversation's driver (Invariant C4: the user drives what they're
+  // looking at, decided at gesture time — a turn streaming in another conversation is irrelevant;
+  // conversations are independent). Reuses the live rec; replaces a dead one; refuses only when a
+  // foreign terminal process owns the viewed session's in-flight turn.
   // Shared by composerSend and the spawn-permitted composerRpc path, so a recipe's fork/compact
   // gets exactly the guards a message send does.
   async function ensureDriver(): Promise<{ ok: true; d: AgentDriver } | { ok: false; error: string }> {
     refreshActive()
-    resolveDriverBinding()
-    // A blank view owns the live driver — the one being born there, its reported file possibly
-    // unwritten yet (poll()'s `mine` rule). Gating on driverFile alone would refuse (streaming) or
-    // dispose (idle) the newborn in the window between pi reporting its file and the first entry.
-    const mine = !state.file || driverFile === state.file
-    if (driver?.streaming) {
-      if (!mine) return { ok: false, error: 'still working in another session — Stop first' }
-      return { ok: true, d: driver }
-    }
-    // An idle driver bound elsewhere (the user switched sessions), or a dead one — replace it.
-    if (driver && (driver.error || !mine)) await disposeDriver()
-    if (!driver) {
+    resolveBindings()
+    let rec = viewedRec()
+    if (rec?.d.error && !rec.d.streaming) { await disposeRec(rec); rec = undefined }   // dead — replace
+    if (!rec) {
       // Foreign-turn guard: the attached session's leaf is unresolved and its owner looks alive
       // (a terminal harness mid-turn). Driving now would fork its in-flight turn — refuse.
       if (terminalTurnLive()) {
         return { ok: false, error: 'the agent is mid-turn in a terminal — watch only' }
       }
-      driver = adapter.createDriver!(state.cwd, state.file)
-      driverFile = state.file
+      rec = mintRec(state.file)
     }
-    return { ok: true, d: driver }
+    return { ok: true, d: rec.d }
   }
 
   // Route a typed message to the driver. The ONE door for conversation (Toolkit T2) — composerRpc
@@ -544,10 +581,12 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return r.d.send(t, opts)
   }
 
-  // Answer a pending extension dialog (TB-Agent-Composer-Toolkit.md Piece 3).
+  // Answer a pending extension dialog (TB-Agent-Composer-Toolkit.md Piece 3). Dialogs ship only for
+  // the viewed conversation (C4), so the answer targets its driver.
   async function composerUiRespond(id: string, resp: { value?: string; confirmed?: boolean; cancelled?: boolean }) {
-    if (!driver) return { ok: false, error: 'no dialog pending' }
-    return driver.respondUi(String(id ?? ''), resp ?? {})
+    const rec = viewedRec()
+    if (!rec) return { ok: false, error: 'no dialog pending' }
+    return rec.d.respondUi(String(id ?? ''), resp ?? {})
   }
 
   // The allowlisted passthrough (TB-Agent-Composer-Toolkit.md Piece 4; the allowlist is the DRIVER's).
@@ -561,28 +600,35 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       if (!r.ok) return r
       return r.d.rpc(cmd)
     }
-    if (!driver || driver.error) return { ok: false, error: 'not running' }
-    return driver.rpc(cmd)
+    const rec = viewedRec()
+    if (!rec || rec.d.error) return { ok: false, error: 'not running' }
+    return rec.d.rpc(cmd)
   }
 
+  // Stop is view-scoped (C6): it aborts the VIEWED conversation's turn — deliberately aimed at what
+  // the user is looking at; a background turn is stopped by flipping to it first.
   async function composerStop() {
-    if (!driver) return { ok: true }
-    try { await driver.stop() } catch (err: unknown) { console.error('[composer] stop:', errorMessage(err)) }
+    const rec = viewedRec()
+    if (rec) { try { await rec.d.stop() } catch (err: unknown) { console.error('[composer] stop:', errorMessage(err)) } }
     return { ok: true }
   }
 
-  // Start a new conversation: dispose the (idle) driver, blank the view, and eagerly spawn the
-  // sessionless replacement. No agent turn — but its boot get_state resolves the configured model,
-  // so the model pill never blanks between + and the first send (which reuses the newborn via
-  // ensureDriver's blank-owns rule). Refused mid-turn — the running turn belongs to the current
-  // session; Stop first.
+  // New conversation — always available, never destructive (C6): blank the view and eagerly spawn
+  // its own sessionless newborn. No agent turn — but the boot get_state resolves the configured
+  // model, so the pill never blanks between + and the first send (which reuses the newborn, held
+  // by identity — C5). Whatever was running keeps running: a streaming driver becomes a background
+  // conversation (busy badge; reaped at agent_end — C2), an idle one is reaped by the flip-away
+  // sweep. Idempotent on an already-blank view with a live idle newborn (reuse, don't stack
+  // spawns); a streaming newborn is abandoned to the background and a fresh one minted.
   async function composerNew() {
     if (!adapter.createDriver) return { ok: false, error: 'not supported' }
-    if (driver?.streaming) return { ok: false, error: 'still working — Stop first' }
-    await disposeDriver()
-    detachToBlank()
-    driver = adapter.createDriver(state.cwd, state.file)
-    driverFile = state.file
+    resolveBindings()
+    if (!state.file && blank && !blank.d.streaming && !blank.d.error) return { ok: true }
+    if (blank?.d.error) await disposeRec(blank)   // dead newborn: replace, don't reuse
+    blank = undefined                             // a streaming one drops to background
+    if (state.file) detachToBlank()
+    mintRec(undefined)
+    sweepIdle()                          // the flip-away reap of the old view's idle driver
     return { ok: true }
   }
 
@@ -600,8 +646,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return withMtime.sort((a, b) => b.m - a.m).map(x => x.f)
   }
 
-  // The serve.ts shutdown reap (same shape as the Claude switcher's shutdownSwitcher). Fire-and-forget safe.
-  function shutdownComposer() { void disposeDriver() }
+  // The serve.ts shutdown reap (same shape as the Claude switcher's shutdownSwitcher): every owned
+  // process, streaming or not. Fire-and-forget safe; the driver's process-exit hook backstops.
+  function shutdownComposer() { for (const rec of [...drivers]) void disposeRec(rec) }
 
   // Clipboard capture (TB-Agent-Composer-Toolkit.md Piece 6): the pasted payload becomes a file under
   // .typebulb/paste/ and the composer inserts its @-mention — never a wire-attached image.
@@ -667,11 +714,11 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!sf) return { ok: false, error: 'session not found' }
     if (sf.file === s.file) return { ok: true }
     attachTo(sf)
-    // Switching away disposes an IDLE driver (the next send respawns against the new session). A
-    // streaming one is left running — the mirror stays free to look anywhere; poll() gates its
-    // slices off this view, and a send here is refused with "Stop first" until agent_end
-    // (TB-Agent-Composer.md).
-    if (driver && !driver.streaming && driverFile !== s.file) void disposeDriver()
+    // Navigation is never destructive (C6): a streaming driver keeps running as a background
+    // conversation — flipping to it shows its live draft, and the composer there steers. Idle
+    // drivers the flip leaves behind are reaped (C2); the next send there respawns, a cheap
+    // spawn + get_state probe.
+    sweepIdle()
     return { ok: true }
   }
 
