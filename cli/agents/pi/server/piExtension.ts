@@ -147,11 +147,22 @@ export default function (pi) {
             // the user already sees the bulb and the skill orders silence on ok, so a wake would spend
             // a whole turn saying nothing and render a noise message. Silence IS the ok. Anything else
             // (an embed error, a turn-based loop event) still wakes; an unrecognized shape wakes too.
-            const embedOk = code === 0 && /^\[embed [^\n]*\] ok$/.test(text);
+            // Checked PER LINE, not over the whole blob: wait lingers 10s and bursts every matching line
+            // into one payload, and a version-agnostic --match ("[embed <name>") replays v1+v2+... from
+            // log start, so an all-ok payload is routinely multi-line. Suppress iff EVERY line is an ok;
+            // one error line among oks still wakes.
+            var waitLines = text.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+            const embedOk = code === 0 && waitLines.length > 0 && waitLines.every(function (l) { return /^\[embed .*\] ok$/.test(l); });
             if (code === 0 && text && !embedOk) {
               pi.sendUserMessage("typebulb wait result:\n" + text, { deliverAs: "followUp" });
             } else if (ctx.ui && typeof ctx.ui.notify === "function") {
-              ctx.ui.notify("typebulb wait: " + (embedOk ? text : code === 2 ? "timed out, nothing to report" : "ended (code " + code + ")"), "info");
+              // INVARIANT: this notify must never quote the "[embed <name>" tag verbatim. In a
+              // composer-driven session the mirror's driver echoes extension notifies into the
+              // mirror's own log (driver.ts) — the very log wait watches by substring — so a
+              // verbatim tag re-fires the next same-match wait with a non-ok line: a self-
+              // sustaining wake loop that defeats this suppression (TB-Wait.md). Stripping the
+              // brackets kills the matchable substring while keeping the verdict readable.
+              ctx.ui.notify("typebulb wait: " + (embedOk ? text.replace(/[\[\]]/g, "") : code === 2 ? "timed out, nothing to report" : "ended (code " + code + ")"), "info");
             }
           } catch (e) { logErr("exit", e && e.message); }
         });

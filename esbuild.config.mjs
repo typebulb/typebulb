@@ -79,7 +79,7 @@ for (const agent of MIRROR_AGENTS) {
     minify: true,
   })
   mkdirSync(new URL(`./dist/agents/${agent}/`, import.meta.url), { recursive: true })
-  for (const asset of ['styles.css', 'index.html']) {
+  for (const asset of ['styles.css', 'index.html', 'typebulb.png', 'typebulb-inv.png']) {
     copyFileSync(
       new URL(`./cli/agents/core/client/${asset}`, import.meta.url),
       new URL(`./dist/agents/${agent}/${asset}`, import.meta.url),

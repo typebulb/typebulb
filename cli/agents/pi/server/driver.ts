@@ -391,6 +391,10 @@ export class PiRpcDriver {
         } else if (method === 'notify') {
           const kind = e.notifyType === 'warning' ? 'warning' : e.notifyType === 'error' ? 'error' : 'info'
           this.#setNotice(String(e.message ?? ''), kind)
+          // This echo lands in the mirror's <pid>.log — the wake bus `typebulb wait agent` matches by
+          // substring — so nothing echoed here may quote a watched line verbatim: a quoted
+          // "[embed <name>" tag re-fires the next same-match wait and loops (the wait shim defangs
+          // its embed-ok notify for exactly this reason — TB-Wait.md, the shim invariants).
           console.log(`[composer] pi extension: ${String(e.message ?? '')}`)
         } else if (method === 'setStatus') {
           const key = String(e.statusKey ?? '')

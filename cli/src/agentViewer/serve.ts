@@ -144,7 +144,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
       outfile: path.join(assetDir, 'client.js'),
       // No minify in dev — faster rebuilds; the browser reloads when the build finishes.
     })
-    for (const asset of ['styles.css', 'index.html']) {
+    for (const asset of ['styles.css', 'index.html', 'typebulb.png', 'typebulb-inv.png']) {
       copyFileSync(path.join(sharedClientDir, asset), path.join(assetDir, asset))
     }
   }

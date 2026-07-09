@@ -589,14 +589,37 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
 
   it('suppresses the wake on a clean embed-ok verdict — silence is the ok; errors still wake', () => {
     const src = piExtensionSource()
-    // The predicate, as written into the extension: exit 0 + the exact success line shape.
-    const m = src.match(/const embedOk = code === 0 && (\/.+\/)\.test\(text\);/)
+    // The per-line predicate, as written into the extension.
+    const m = src.match(/return (\/.+\/)\.test\(l\);/)
     expect(m).not.toBeNull()
     const re = new Function(`return ${m![1]}`)() as RegExp
-    expect(re.test('[embed Japan v1] ok')).toBe(true)
-    expect(re.test('[embed Japan v2] compile error: x is not defined')).toBe(false)
-    expect(re.test('[embed Japan v1] malformed: no code block')).toBe(false)
-    expect(re.test('MOVE e2e4')).toBe(false)                      // a turn-based loop event must wake
+    // Mirror the shim's blob→lines→every classification (wait bursts multiple lines into one payload).
+    const embedOk = (text: string) => {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+      return lines.length > 0 && lines.every(l => re.test(l))
+    }
+    expect(embedOk('[embed Japan v1] ok')).toBe(true)
+    // The bug this fixes: a version-agnostic --match replays v1+v2 into one multi-line payload — still all ok.
+    expect(embedOk('[embed Japan v1] ok\n[embed Japan v2] ok')).toBe(true)
+    expect(embedOk('[embed Japan v2] compile error: x is not defined')).toBe(false)
+    expect(embedOk('[embed Japan v1] ok\n[embed Japan v2] runtime error: boom')).toBe(false)  // one error still wakes
+    expect(embedOk('[embed Japan v1] malformed: no code block')).toBe(false)
+    expect(embedOk('MOVE e2e4')).toBe(false)                      // a turn-based loop event must wake
+    expect(embedOk('')).toBe(false)
     expect(src).toContain('text && !embedOk')                     // ok never reaches sendUserMessage
+  })
+
+  it('defangs the suppression notify — a quoted "[embed <name>" tag would echo into the watched log and loop', () => {
+    const src = piExtensionSource()
+    // The composer driver echoes extension notifies into the mirror's log (driver.ts), which wait
+    // matches by substring — so the ok text is bracket-stripped before notifying, or every
+    // suppressed ok wakes the NEXT same-match wait via its own echo (the grok 4.3 field failure).
+    expect(src).toContain('embedOk ? text.replace(/[\\[\\]]/g, "")')
+    const defang = (t: string) => t.replace(/[\[\]]/g, '')
+    expect(defang('[embed Color Perception v1] ok')).not.toContain('[embed Color Perception')
+    // And the echo line itself, delivered in a later burst, must classify as a wake, never an ok.
+    const m = src.match(/return (\/.+\/)\.test\(l\);/)
+    const re = new Function(`return ${m![1]}`)() as RegExp
+    expect(re.test('[composer] pi extension: typebulb wait: [embed Japan v1] ok')).toBe(false)
   })
 })

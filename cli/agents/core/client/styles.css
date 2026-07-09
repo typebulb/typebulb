@@ -856,6 +856,34 @@ a.server-port:hover { text-decoration: underline; }
   width: 100%;
   margin: 0 auto;
 }
+/* Top-of-transcript wordmark + tagline (messageList.ts #masthead). Centred on the prose column,
+   scrolls with the conversation. Both logos render; theme picks which shows. */
+.masthead {
+  max-width: var(--content-max);
+  width: 100%;
+  margin: 0 auto 1rem auto;
+  padding: .35rem 0 .35rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .5rem;
+  text-align: left;
+  user-select: none;
+}
+.masthead-logo {
+  width: 170px;
+  max-width: 55%;
+  height: auto;
+  opacity: .92;
+}
+.masthead-tagline {
+  color: var(--muted);
+  font-size: .85rem;
+}
+/* Black wordmark on light, outline on dark. */
+.masthead-logo.dark { display: none; }
+html[data-theme="dark"] .masthead-logo.light { display: none; }
+html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .bubble {
   position: relative;
   max-width: var(--content-max);

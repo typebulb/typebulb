@@ -13,6 +13,12 @@ import { PASTE_DIR, PASTE_IMAGE_MIME } from '../events.js'
 const PASTE_MENTION_RE = new RegExp(
   `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
 
+// The wordmark assets, copied beside the client bundle (dist/agents/<agent>/). Resolved off
+// import.meta.url so the agent-scoped mount path falls out with no hardcoded agent name. Both are
+// rendered; CSS picks one by the host theme (light → black wordmark, dark → outline).
+const LOGO_LIGHT = new URL('typebulb.png', import.meta.url).href
+const LOGO_DARK = new URL('typebulb-inv.png', import.meta.url).href
+
 function toolSummary(input: Record<string, unknown>): string {
   if (!input || typeof input !== 'object') return ''
   return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
@@ -363,6 +369,10 @@ export class MessageList extends Component {
       }
     }
     const out = groups.flatMap((g, gi) => this.renderTurn(g.msgs, g.idx, gi === groups.length - 1))
+    // A little branding at the top of every conversation — synthetic content that scrolls with the
+    // transcript (fills the emptiness of a fresh chat, sits above the history on a long one). Not a
+    // Msg: it stays out of turn-grouping, search, and prose/trace filtering.
+    out.unshift(this.#masthead())
     // The composer driver's in-flight assistant message (TB-Agent-Composer.md): one ephemeral bubble
     // after the transcript, continuing the current turn's stripe. NOT a Msg — it never joins
     // `messages`, search, or turn collapse (Invariant C1); the durable row replaces it when the
@@ -371,6 +381,16 @@ export class MessageList extends Component {
     if (draft) out.push(this.#draftBubble(draft, Math.max(0, turn)))
     else { this.#draftScroll.clear(); this.#draftThinkingOpen = false }
     return out
+  }
+
+  // Top-of-transcript wordmark + tagline. Both logos render; CSS shows the one matching the host
+  // theme (no JS, so a live theme flip needs no re-render).
+  #masthead() {
+    return div({ class: 'masthead', key: 'masthead' },
+      img({ class: 'masthead-logo light', src: LOGO_LIGHT, alt: 'typebulb' }),
+      img({ class: 'masthead-logo dark', src: LOGO_DARK, alt: 'typebulb' }),
+      div({ class: 'masthead-tagline' }, 'a live mirror of your agent’s session, with embedded bulbs, latex, svg, mermaid and more'),
+    )
   }
 
   // Keyed by content length so growth remounts the node and re-renders the markdown — onMounted
