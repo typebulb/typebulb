@@ -7,10 +7,10 @@ import { join } from 'path'
 /**
  * Bare `typebulb agent` resolves which harness to mirror instead of hardcoding claude (TB-Agent-Harness.md,
  * resolve.ts). Step 1 — the caller's env marker — is the pure, decisive part and is what these cover:
- * a pi agent must get pi, a Claude agent claude, off the one universal command. Step 2 (the disk-session
- * signal) touches the real `~/.claude`/`~/.pi` dirs, so it's left to live verification rather than mocked
- * here; step 3 (the machine-install signal) is testable — see below. NOTE: this test process itself inherits CLAUDECODE=1 when run
- * under Claude Code, so each case sets the env explicitly rather than trusting the ambient value.
+ * a pi agent must get pi, a Claude agent claude, off the one universal command. Step 2 (the machine-install
+ * signal, `detectsInstalled`) is testable by faking the home dir — see below; per-cwd sessions no longer
+ * gate resolution, they only order the picker. NOTE: this test process itself inherits CLAUDECODE=1 when
+ * run under Claude Code, so each case sets the env explicitly rather than trusting the ambient value.
  */
 describe('resolveAgent — caller env marker (step 1)', () => {
   const saved = { c: process.env.CLAUDECODE, p: process.env.PI_CODING_AGENT }
@@ -39,14 +39,15 @@ describe('resolveAgent — caller env marker (step 1)', () => {
 })
 
 /**
- * Step 3 — the machine-install signal (detectsInstalled): a fresh project has no sessions for anything,
- * and before this rung it silently defaulted to claude even when only pi (or both) was installed.
- * detectsInstalled reads the harness home dir via `homedir()` AT CALL TIME, and Node's homedir() reads
- * USERPROFILE (win) / HOME (posix) per call — so pointing both at a temp dir fakes the machine state.
- * Step 2 stays inert: the fresh temp cwd has never had sessions under the REAL home's session dirs
- * (those module-level constants keep the import-time home — fine, they list nothing for this cwd).
+ * Step 2 — the machine-install signal (detectsInstalled): installed is the full claim set, so two
+ * installed harnesses always produce the picker even when only one has touched this cwd (the fresh3 bug
+ * — a folder with claude history but no pi turns must still offer pi). detectsInstalled reads the harness
+ * home dir via `homedir()` AT CALL TIME, and Node's homedir() reads USERPROFILE (win) / HOME (posix) per
+ * call — so pointing both at a temp dir fakes the machine state. Sessions (which only order the picker)
+ * are also read off that faked home, so a fresh temp cwd lists none for either harness — a tie that keeps
+ * registry order; the ordering-by-sessions path itself is left to live verification.
  */
-describe('resolveAgent — machine-install signal (step 3)', () => {
+describe('resolveAgent — machine-install signal (step 2)', () => {
   const saved = {
     c: process.env.CLAUDECODE, p: process.env.PI_CODING_AGENT,
     up: process.env.USERPROFILE, h: process.env.HOME,
@@ -83,7 +84,7 @@ describe('resolveAgent — machine-install signal (step 3)', () => {
     expect(resolveAgent(cwd)).toEqual({ name: 'pi' })
   })
 
-  it('both installed ⇒ ambiguous (the picker, not a silent claude)', () => {
+  it('both installed ⇒ ambiguous (the picker, not a silent claude — even with single-harness history here)', () => {
     const cwd = freshProject(['.claude', join('.pi', 'agent')])
     expect(resolveAgent(cwd)).toEqual({ ambiguous: ['claude', 'pi'] })
   })

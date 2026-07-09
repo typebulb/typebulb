@@ -45,8 +45,9 @@ export function detectCallerHarness(): string | undefined {
   return undefined
 }
 
-/** Launch/reuse the `{ name }` mirror, or `{ ambiguous }`: multiple harnesses have sessions and there's
- *  no other signal, so the user must pick (`agent:claude` / `agent:pi`). */
+/** Launch/reuse the `{ name }` mirror, or `{ ambiguous }`: more than one harness is installed and the
+ *  caller is a human, so the user must pick (`agent:claude` / `agent:pi`). The order is the picker's
+ *  order — this cwd's active harness first (the Enter default). */
 export type AgentChoice = { name: string } | { ambiguous: string[] }
 
 /**
@@ -54,13 +55,13 @@ export type AgentChoice = { name: string } | { ambiguous: string[] }
  *
  *  1. **Caller identity** — the process that ran `typebulb agent` inherited its harness's env marker
  *     (`detectsSelf`). This is the agent path; a human in a terminal sets no marker and falls through.
- *  2. **Disk signal** — harnesses with sessions under this cwd: exactly one → it; none → the canonical
- *     next rung; two or more → ambiguous, ask the user.
- *  3. **Machine signal** — no sessions here at all (a fresh project), so ask which harnesses are
- *     *installed* on the machine (`detectsInstalled` — the harness home dir): exactly one → it;
- *     two or more → ambiguous, ask the user (before this rung a fresh project silently defaulted,
- *     and an installed-but-unused-here harness never made the picker); none → the canonical default.
- *     All pure env reads / fs stats, no inference (Invariant 1).
+ *  2. **Machine signal** — which harnesses are *installed* on the machine (`detectsInstalled` — the
+ *     harness home dir): none → the canonical default; exactly one → it; two or more → ambiguous, ask
+ *     the user. Installed is the full claim set: a harness can't have sessions without being installed
+ *     (sessions live under its home dir), so gating on per-cwd sessions only ever *narrowed* this — and
+ *     that was the bug (a folder with claude history but no pi turns silently launched claude and never
+ *     offered installed-but-unused-here pi). Per-cwd sessions now only **order** the picker, never gate
+ *     it (below). All pure env reads / fs stats, no inference (Invariant 1).
  *
  * A live mirror already serving this cwd is deliberately NOT a resolution signal: reusing whatever
  * harness happens to be showing silently skipped the picker when a human had sessions for both, which
@@ -76,14 +77,14 @@ export function resolveAgent(cwd: string): AgentChoice {
     if (adapter.detectsSelf()) return { name }
   }
 
-  // 2. Which harnesses have sessions here.
-  const withSessions = [...adapters].filter(([, a]) => a.listSessionFiles(cwd).length > 0).map(([n]) => n)
-  if (withSessions.length === 1) return { name: withSessions[0] }
-  if (withSessions.length >= 2) return { ambiguous: withSessions }
-
-  // 3. Nothing has sessions here — a fresh project. Which harnesses exist on the machine.
+  // 2. Which harnesses are installed on the machine (sessions ⊂ installed, so this is the full claim set).
   const installed = [...adapters].filter(([, a]) => a.detectsInstalled()).map(([n]) => n)
+  if (installed.length === 0) return { name: names[0] }   // canonical default (first registered)
   if (installed.length === 1) return { name: installed[0] }
-  if (installed.length >= 2) return { ambiguous: installed }
-  return { name: names[0] }   // canonical default (first registered)
+
+  // Two or more installed → the user picks. Order by local session presence so this cwd's active
+  // harness is the default (first), without ever hiding an installed-but-unused-here one. sort() is
+  // stable, so a tie (both or neither have sessions) keeps registry order.
+  const hasSessions = (n: string) => adapters.get(n)!.listSessionFiles(cwd).length > 0
+  return { ambiguous: [...installed].sort((a, b) => Number(hasSessions(b)) - Number(hasSessions(a))) }
 }

@@ -36,10 +36,10 @@ function palette(tty: boolean) {
  *
  * The harness is RESOLVED, not hardcoded (resolveAgent): the agent that ran the command is detected
  * from its env marker, so a pi agent gets the pi mirror and a Claude agent the Claude mirror off the
- * one universal command. Only when the caller is a human AND more than one harness has a claim — two
- * with sessions here, or (a fresh project) two installed on the machine — is there nothing to go on:
- * on an interactive terminal that asks (then launches the pick like any resolved run); off a TTY it
- * prints a pick-one message (still exit 0) instead of launching.
+ * one universal command. Only when the caller is a human AND more than one harness is installed on the
+ * machine is there nothing decisive to go on: on an interactive terminal that asks (then launches the
+ * pick like any resolved run), the picker ordered so this cwd's active harness is the Enter default;
+ * off a TTY it prints a pick-one message (still exit 0) instead of launching.
  */
 export async function runAgent(version: string): Promise<void> {
   const choice = resolveAgent(process.cwd())

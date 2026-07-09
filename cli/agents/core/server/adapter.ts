@@ -92,11 +92,11 @@ export abstract class AgentAdapter<E = unknown> {
    * Is this harness installed on the MACHINE, regardless of whether it has touched this project?
    * The signal is the harness's home dir (CC `~/.claude/`, pi `~/.pi/agent/`) — created on the
    * harness's first run anywhere, so a pure `existsSync`, no PATH scan, no process spawn. Bare
-   * `typebulb agent` uses this as the rung below the per-cwd session signal (resolveAgent): in a
-   * fresh project nothing has sessions yet, and without this every fresh project silently defaulted
-   * to the first registered harness — an installed-but-unused-here harness never even made the
-   * picker. Misses "installed via npm but never launched once" by design (the dir appears on first
-   * launch); that window closes itself.
+   * `typebulb agent` resolves the harness off THIS (resolveAgent): installed is the full claim set
+   * (sessions ⊂ installed), so two installed harnesses always make the picker and per-cwd sessions
+   * only order it. A harness installed but unused HERE is therefore still offered — the fix for a
+   * folder with claude history but no pi turns silently launching claude. Misses "installed via npm
+   * but never launched once" by design (the dir appears on first launch); that window closes itself.
    */
   abstract detectsInstalled(): boolean
 
