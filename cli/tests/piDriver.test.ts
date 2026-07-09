@@ -730,4 +730,21 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     const re = new Function(`return ${m![1]}`)() as RegExp
     expect(re.test('[composer] pi extension: typebulb wait: [embed Japan v1] ok')).toBe(false)
   })
+
+  it('re-runs the intercepted command under bash, never node shell:true cmd.exe (POSIX ";" as args field failure)', () => {
+    const src = piExtensionSource()
+    // Resolution mirrors pi's own getShellConfig: Git Bash in ProgramFiles, PATH fallback, /bin/bash on POSIX.
+    expect(src).toContain('function resolveBash()')
+    expect(src).toContain('spawn(bash, ["-c", command]')
+    // shell:true survives only as the no-bash fallback, never the primary path.
+    expect(src).toContain('spawn(command, { ...opts, shell: true })')
+  })
+
+  it('wakes on a failed arm (exit ∉ {0,2,3}) with the diagnostic — a silently dead wait is a deadlock', () => {
+    const src = piExtensionSource()
+    expect(src).toContain('code !== null && code !== 0 && code !== 2 && code !== 3')
+    expect(src).toContain('typebulb wait FAILED (exit " + code + ")')
+    // The diagnostic carries the child output the old notify path discarded ("No running server for …").
+    expect(src).toContain('errOut')
+  })
 })
