@@ -405,22 +405,31 @@ body {
 .at-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* The '/' palette rides the same popup chrome; its rows pair a command with a muted description. */
 .slash-desc { color: var(--muted); font-size: .74rem; margin-left: .6rem; }
-/* The composer's dialog modal (TB-Agent-Composer-Toolkit.md Piece 3) rides the trust-modal chrome; these
-   are only its extra fields. Select options reuse .at-row inside a bordered scroll box. */
+/* The composer's dialog fields (TB-Agent-Composer-Toolkit.md Piece 3), shared by both homes: the
+   trust-modal chrome (server dialogs, confirms) and the anchored .dlg-popup (local select/input).
+   Select options reuse .at-row inside a scroll box. */
 /* Block, NOT flex: .at-row's overflow:hidden zeroes flex min-heights, squashing a long option
    list (pi can return the whole OpenRouter catalog); block rows keep their natural height and
    the box scrolls. */
-.composer-dlg .dlg-opts {
+.dlg-opts {
   max-height: 40vh; overflow-y: auto;
   border: 1px solid var(--border); border-radius: 8px; padding: .25rem;
 }
-.composer-dlg .dlg-input, .composer-dlg .dlg-editor {
+.dlg-input, .dlg-editor {
   font: inherit; font-size: .85rem; color: var(--fg); background: transparent;
   border: 1px solid var(--border); border-radius: 7px; padding: .4rem .6rem; width: 100%;
 }
-.composer-dlg .dlg-input:focus, .composer-dlg .dlg-editor:focus { outline: none; border-color: var(--accent); }
-.composer-dlg .dlg-editor { min-height: 8rem; resize: vertical; }
-.composer-dlg .dlg-filter { margin-top: .4rem; }
+.dlg-input:focus, .dlg-editor:focus { outline: none; border-color: var(--accent); }
+.dlg-editor { min-height: 8rem; resize: vertical; }
+.dlg-filter { margin-top: .4rem; }
+/* A local (recipe) select/input rides the @-popup shell — the gesture register, not the modal's
+   (composer.ts #dlgAnchored). The popup itself stops scrolling (its .dlg-opts scrolls instead, so
+   the filter stays pinned at the anchored bottom edge); the opts box drops its border, the popup
+   frame already provides one. The catcher is the invisible click-away target under the popup. */
+.dlg-popup { max-height: none; overflow: visible; }
+.dlg-popup .dlg-opts { border: none; padding: 0; }
+.dlg-label { font-size: .78rem; color: var(--muted); padding: .1rem .25rem .3rem; }
+.dlg-catcher { position: fixed; inset: 0; z-index: 9; }
 .at-empty { padding: .6rem; color: var(--muted); font-size: .85rem; text-align: center; }
 /* The driver's in-flight assistant message — visibly provisional next to landed bubbles; the
    durable row replaces it when the entry hits the transcript. */

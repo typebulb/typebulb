@@ -9,6 +9,7 @@ import type { ChildProcess } from 'child_process'
 import { PiRpcDriver } from '../agents/pi/server/driver.js'
 import { trustNotice } from '../agents/pi/server/trust.js'
 import { piExtensionSource } from '../agents/pi/server/piExtension.js'
+import { writeOllamaProvider } from '../agents/pi/server/ollama.js'
 import { applyPatch, discoverDiffKeys, patchOwnership } from '../agents/pi/server/piPatcherExtension.js'
 import { createMirror } from '../agents/core/server/mirror.js'
 import { AgentAdapter, type AgentDriver } from '../agents/core/server/adapter.js'
@@ -792,5 +793,62 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     // Exit 0 with empty stdout = the verdict was redirected away; the wake points at the mirror log.
     expect(src).toContain('code === 0 && !text')
     expect(src).toContain('typebulb logs agent')
+  })
+})
+
+// The /model local-Ollama assist's file half (agents/pi/server/ollama.ts): set the ollama provider
+// to pi's documented block — sync = clobber THAT BLOCK ONLY; every other provider and top-level
+// key survives — create-when-absent, refuse what a strict parse can't round-trip.
+describe('writeOllamaProvider', () => {
+  let dir: string
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'tb-ollama-')) })
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
+  const file = () => join(dir, 'agent', 'models.json')   // one dir deep: covers the mkdirSync
+
+  it('creates a fresh models.json with the documented block (placeholder apiKey included)', async () => {
+    const r = writeOllamaProvider(file(), ['llama3.1:8b', 'qwen2.5-coder:7b'], 'http://localhost:11434')
+    expect(r).toEqual({ ok: true, count: 2 })
+    const json = JSON.parse(await readFile(file(), 'utf-8'))
+    expect(json.providers.ollama).toEqual({
+      baseUrl: 'http://localhost:11434/v1',
+      api: 'openai-completions',
+      apiKey: 'ollama',   // pi hides auth-less providers from /model; Ollama ignores the value
+      models: [{ id: 'llama3.1:8b' }, { id: 'qwen2.5-coder:7b' }],
+    })
+  })
+
+  it('merges beside existing providers and top-level keys, preserving them', async () => {
+    await mkdir(dirname(file()), { recursive: true })
+    await writeFile(file(), JSON.stringify({ defaults: { model: 'x' }, providers: { groq: { baseUrl: 'https://g/v1' } } }))
+    const r = writeOllamaProvider(file(), ['m1'], 'http://localhost:11434')
+    expect(r.ok).toBe(true)
+    const json = JSON.parse(await readFile(file(), 'utf-8'))
+    expect(json.defaults).toEqual({ model: 'x' })
+    expect(json.providers.groq).toEqual({ baseUrl: 'https://g/v1' })
+    expect(json.providers.ollama.models).toEqual([{ id: 'm1' }])
+  })
+
+  it('sync clobbers only the ollama block — stale ids drop, a sibling provider survives verbatim', async () => {
+    await mkdir(dirname(file()), { recursive: true })
+    await writeFile(file(), JSON.stringify({ providers: {
+      openrouter: { models: [{ id: 'x-ai/grok-4.5' }] },
+      ollama: { baseUrl: 'http://other:1/v1', api: 'openai-completions', apiKey: 'ollama', models: [{ id: 'uninstalled:old' }, { id: 'kept:7b' }] },
+    } }))
+    const r = writeOllamaProvider(file(), ['kept:7b', 'new:12b'], 'http://localhost:11434')
+    expect(r).toEqual({ ok: true, count: 2 })
+    const json = JSON.parse(await readFile(file(), 'utf-8'))
+    expect(json.providers.openrouter).toEqual({ models: [{ id: 'x-ai/grok-4.5' }] })   // not ours, untouched
+    expect(json.providers.ollama.models).toEqual([{ id: 'kept:7b' }, { id: 'new:12b' }])   // exactly what's installed
+    expect(json.providers.ollama.baseUrl).toBe('http://localhost:11434/v1')   // the whole block is rewritten
+  })
+
+  it('refuses a file it cannot round-trip (comments are pi-legal but a strict parse fails)', async () => {
+    await mkdir(dirname(file()), { recursive: true })
+    const original = '{\n  // my hand-tuned providers\n  "providers": {}\n}\n'
+    await writeFile(file(), original)
+    const r = writeOllamaProvider(file(), ['m1'], 'http://localhost:11434')
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('could not parse')
+    expect(await readFile(file(), 'utf-8')).toBe(original)
   })
 })

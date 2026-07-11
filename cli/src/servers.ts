@@ -23,6 +23,9 @@ export { isBulbTrusted, setBulbTrusted, listTrustedBulbs } from './serve/trustSt
 // Model discovery (the same key-filtered catalog + local Ollama probe tb.models() uses), so a mirror
 // host can populate a model switcher through this public entry rather than a deep serve/ internal.
 export { getFilteredModels, catalogFetchError } from './serve/modelCatalog.js'
+// OLLAMA_HOST normalization (scheme + trailing-slash rules), so the pi mirror's local-model assist
+// (agents/pi/server/ollama.ts) probes the same host tb.ai resolves — one convention, one function.
+export { normalizeOllamaHost } from './serve/modelCatalog.js'
 // The tb.ai primitives (env-cascade provider resolution + one streamed chat request), so a mirror
 // feature (the composer's paste naming) makes its cheap model call through this public entry.
 export { resolveLocalProvider, sendTbAi } from './serve/localProvider.js'

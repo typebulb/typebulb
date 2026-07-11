@@ -543,7 +543,7 @@ export class Composer extends Component {
         ? 'Steer — Enter queues for after this step, Alt+Enter for after the turn'
         : 'Message the agent… (Enter to send, Shift+Enter for newline, @ files, / commands, ! bash)'
     return div({ class: 'composer' },
-      this.dlg ? this.dialogView() : null,
+      this.dlg ? (this.#dlgAnchored() ? this.dialogPopup() : this.dialogView()) : null,
       this.atQuery !== null ? this.atPopup() : null,
       this.slashQuery !== null ? this.slashPopup() : null,
       // The resize splitter straddles the composer's top border — the drag zone IS the separator
@@ -636,8 +636,39 @@ export class Composer extends Component {
         }, row(r)))
   }
 
+  // The dialog's register (TB-Agent-Composer-Toolkit.md Piece 3): a LOCAL select/input continues a
+  // gesture the user just made in the composer (a palette pick), so it renders as a popup anchored
+  // there — no title, no backdrop, no Cancel button; ESC and click-away close, like the palette
+  // itself. Server (extension) dialogs are unsolicited interruptions and confirms are real
+  // decisions — both keep the modal's interruption chrome. (A local `editor` never occurs — no
+  // recipe asks for one — and would fall through to the modal.)
+  #dlgAnchored(): boolean {
+    return !!this.dlg && this.dlg.local && (this.dlg.req.method === 'select' || this.dlg.req.method === 'input')
+  }
+
+  // The anchored form: the @-popup's shell around the same select/input bodies the modal renders —
+  // one field implementation, two homes. The catcher is an invisible full-screen mousedown target
+  // under the popup (dropdown semantics: clicking anywhere else dismisses).
+  dialogPopup() {
+    const { req } = this.dlg!
+    return div({ key: 'composer-dlg' },
+      div({ class: 'dlg-catcher', onMouseDown: (e: MouseEvent) => { e.preventDefault(); this.answerDialog({ cancelled: true }) } }, ''),
+      div({ class: 'at-popup dlg-popup', key: 'dlg-popup' },
+        req.method === 'select'
+          ? this.selectBody()
+          : [
+              req.title ? div({ class: 'dlg-label' }, req.title) : null,
+              inputText({
+                target: this, prop: () => this.dlgInput,
+                attrs: { class: 'dlg-input', placeholder: req.placeholder ?? '', onMounted: this.#focusOnMount, onKeyDown: (e: KeyboardEvent) => this.#dlgKey(e) },
+              }),
+            ]),
+    )
+  }
+
   // The modal for a blocking dialog — trust-modal chrome, four methods (Toolkit Piece 3). Buttons
-  // answer; the input/editor fields also take Enter (input only) and Escape.
+  // answer; the input/editor fields also take Enter (input only) and Escape. Local select/input
+  // render as dialogPopup instead (#dlgAnchored) — this is the server-dialog/confirm register.
   dialogView() {
     const { req } = this.dlg!
     const fallbackTitle = req.method === 'confirm' ? 'Confirm' : req.method === 'select' ? 'Choose' : 'Input'

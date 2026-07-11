@@ -24,18 +24,69 @@ async function state(ctx: RecipeCtx) {
     { model?: { provider?: string; id?: string }; thinkingLevel?: string } | undefined
 }
 
+// ── /model's local-Ollama assist (agents/pi/server/ollama.ts) ──
+// The LIVE pi can't see a models.json change: RPC-mode pi reads the file at boot only (verified
+// 0.80.3 — the TUI refreshes per /model open, RPC never does). So both flows below end at the same
+// place: a fresh pi process, via composerNew (non-destructive, TB-Agent-Composer.md C6) — the
+// answer delivered at the gesture, not in a notice nobody reads.
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// Hand off to a new conversation: its newborn pi boots on the current models.json.
+async function newConversationHandoff(): Promise<string> {
+  const r = await (tb.server.composerNew() as Promise<{ ok: boolean; error?: string }>)
+  if (!r?.ok) throw new Error(r?.error ?? 'could not start a new conversation')
+  return 'new conversation — /model now lists your local models'
+}
+
+// Sync = CLOBBER the ollama block to what's installed (setup is just the no-block-yet case): one
+// operation, no add/remove bookkeeping. A user curating the list by hand simply cancels — and the
+// row only ever triggers on installed-but-unconfigured models, so pruning alone never re-offers.
+async function syncOllama(ctx: RecipeCtx, firstTime: boolean, freshCount: number): Promise<string | void> {
+  const ok = await ctx.confirm(
+    firstTime ? 'Add local Ollama models?' : `Sync ${plural(freshCount, 'new Ollama model')}?`,
+    "Rewrites the ollama provider in pi's models.json to exactly what's installed. Prefer a hand-curated list? Cancel — the file is yours.")
+  if (!ok) return
+  const r = await (tb.server.ollamaSync() as Promise<{ ok: boolean; count?: number; error?: string }>)
+  if (!r?.ok) throw new Error(r?.error ?? 'Ollama sync failed')
+  if (await ctx.confirm(`${plural(r.count ?? 0, 'Ollama model')} configured`,
+    'Pi loads models.json when it boots — start a new conversation now to use them?'))
+    return newConversationHandoff()
+  return `${plural(r.count ?? 0, 'Ollama model')} configured — new conversations (+) and terminal pi will list them`
+}
+
 export const piRecipes: ComposerRecipe[] = [
   {
     name: 'model',
     description: 'Switch the model',
     async run(ctx) {
-      const data = await call(ctx, { type: 'get_available_models' }, 'could not list models')
+      // The Ollama offer is typebulb's side (a mirror RPC riding tb.server, not a pi passthrough),
+      // concurrent with the model list; ~free when Ollama is absent.
+      const [data, offer] = await Promise.all([
+        call(ctx, { type: 'get_available_models' }, 'could not list models'),
+        (tb.server.ollamaOffer() as Promise<{ installed: string[]; configured: string[] | null }>).catch(() => null),
+      ])
       const models = ((data as { models?: { provider: string; id: string }[] })?.models) ?? []
-      if (!models.length) return 'no models configured'
       const labels = models.map(m => `${m.provider}/${m.id}`)
+      // Sync row: installed models the file's ollama block lacks. Pending row: the block's models
+      // the LIVE pi isn't listing yet (it read models.json at boot) — the moment of "where are my
+      // models?", answered in the picker itself.
+      const { installed, configured } = offer ?? { installed: [], configured: null }
+      const fresh = installed.filter(id => !configured?.includes(id))
+      const syncRow = fresh.length
+        ? (configured === null ? `+ add ${plural(fresh.length, 'local Ollama model')}…` : `⟳ sync ${plural(fresh.length, 'new local Ollama model')}…`)
+        : null
+      const liveOllama = new Set(models.filter(m => m.provider === 'ollama').map(m => m.id))
+      const pending = (configured ?? []).filter(id => !liveOllama.has(id)).length
+      const pendingRow = pending ? `⟳ ${plural(pending, 'Ollama model')} pending — new conversation loads them` : null
+      if (syncRow) labels.push(syncRow)
+      if (pendingRow) labels.push(pendingRow)
+      if (!labels.length) return 'no models configured'
       const cur = (await state(ctx))?.model
       const pick = await ctx.select('Switch model', labels, cur ? `${cur.provider}/${cur.id}` : undefined)
       if (pick === null) return
+      if (syncRow !== null && pick === syncRow) return syncOllama(ctx, configured === null, fresh.length)
+      if (pendingRow !== null && pick === pendingRow) return newConversationHandoff()
       const m = models[labels.indexOf(pick)]!
       await call(ctx, { type: 'set_model', provider: m.provider, modelId: m.id }, 'set_model failed')
       return `model: ${pick}`
