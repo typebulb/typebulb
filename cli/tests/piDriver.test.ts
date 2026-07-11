@@ -181,6 +181,33 @@ describe('PiRpcDriver', () => {
     expect(driver.draft).toBeNull()
   })
 
+  it('echoes an idle prompt until clearEcho; not steers, not slash commands', async () => {
+    const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl')
+    const p = driver.send('hello there')
+    await settle()
+    emit({ type: 'response', id: sent.find(c => c.type === 'prompt')!.id, success: true })
+    expect(await p).toEqual({ ok: true })
+    expect(driver.echo).toBe('hello there')                    // held until the durable row drains
+    driver.clearEcho()
+    expect(driver.echo).toBeNull()
+
+    emit({ type: 'agent_start' })
+    await settle()
+    const p2 = driver.send('steer this')                       // mid-turn: the queue strip shows it
+    await settle()
+    emit({ type: 'response', id: sent.find(c => c.type === 'steer')!.id, success: true })
+    expect(await p2).toEqual({ ok: true })
+    expect(driver.echo).toBeNull()
+    emit({ type: 'agent_end' })
+    await settle()
+
+    const p3 = driver.send('/model')                           // may run no turn — nothing to hand off to
+    await settle()
+    emit({ type: 'response', id: sent.filter(c => c.type === 'prompt')[1]!.id, success: true })
+    expect(await p3).toEqual({ ok: true })
+    expect(driver.echo).toBeNull()
+  })
+
   it('queues blocking extension dialogs and answers them via respondUi', async () => {
     const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl')
     emit({ type: 'extension_ui_request', id: 'u1', method: 'select', title: 'Allow?', options: ['Allow', 'Block'] })
@@ -438,6 +465,7 @@ describe('piPatcherExtension patchOwnership', () => {
 class FakeMirrorDriver implements AgentDriver {
   streaming = false
   draft: AgentDriver['draft'] = null
+  echo: AgentDriver['echo'] = null
   status: AgentDriver['status'] = null
   queue: AgentDriver['queue'] = null
   stats: AgentDriver['stats'] = null
@@ -454,6 +482,7 @@ class FakeMirrorDriver implements AgentDriver {
   respondUi() { return { ok: true } }
   async rpc() { return { ok: true } }
   clearCompletedDraft() {}
+  clearEcho() { this.echo = null }
   async dispose() { this.disposed = true }
 }
 

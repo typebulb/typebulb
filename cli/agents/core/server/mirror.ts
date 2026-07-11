@@ -440,6 +440,8 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       // drain only ever runs for the viewed file, so this targets the viewed rec alone — background
       // drafts die with their reap, and a flip-to drains before rendering, preserving the order.
       if (events.some(e => e.type === 'assistant')) viewedRec()?.d.clearCompletedDraft()
+      // The same handoff for the user side: the echoed prompt drops when its durable row lands.
+      if (events.some(e => e.type === 'user')) viewedRec()?.d.clearEcho()
       // The model this turn resolved to — overwrite, like usage: the latest resolution, not a history.
       if (model) state.latestModel = model
       // Overwrite, never accumulate: the chip shows the CURRENT context window (the last response's
@@ -524,6 +526,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       ? {
           streaming: !!rec?.d.streaming,
           draft: rec?.d.draft ?? null,
+          echo: rec?.d.echo ?? null,
           status: rec?.d.status ?? null,
           dialog: rec?.d.dialog ?? null,
           queue: rec?.d.queue ?? null,
@@ -632,13 +635,13 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return { ok: true }
   }
 
-  // Project file list for the composer's @-mention picker. `git ls-files` scopes to the repo and
-  // inherits gitignore for free; mtime-descending so the files just touched float to the top. A
-  // non-git cwd (or no git) returns [] — the picker shows "No matches".
+  // Project file list for the composer's @-mention picker: tracked + untracked (--others, so files
+  // the agent just created appear), gitignore respected (--exclude-standard); mtime-descending so
+  // the files just touched float to the top. A non-git cwd (or no git) returns [] — "No matches".
   async function composerFiles(): Promise<string[]> {
     if (!adapter.createDriver) return []
     const stdout = await new Promise<string>(resolve => {
-      execFile('git', ['ls-files'], { cwd: state.cwd, maxBuffer: 64 * 1024 * 1024 }, (err, out) => resolve(err ? '' : out))
+      execFile('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: state.cwd, maxBuffer: 64 * 1024 * 1024 }, (err, out) => resolve(err ? '' : out))
     })
     const withMtime = await Promise.all(stdout.split('\n').filter(Boolean).map(async f => {
       try { return { f, m: (await stat(join(state.cwd, f))).mtimeMs } } catch { return { f, m: 0 } }

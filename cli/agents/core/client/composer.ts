@@ -78,6 +78,8 @@ export class Composer extends Component {
     const p = this.parent
     const draft = c.draft ?? null
     if (draft?.text !== p.draft?.text || draft?.thinking !== p.draft?.thinking) { p.draft = draft; changed = true }
+    const echo = c.echo ?? null
+    if (echo !== p.echo) { p.echo = echo; changed = true }
     const stats = c.stats ?? null
     if (stats?.cost !== p.stats?.cost || stats?.contextTokens !== p.stats?.contextTokens
       || stats?.contextPercent !== p.stats?.contextPercent) { p.stats = stats; changed = true }
@@ -551,8 +553,8 @@ export class Composer extends Component {
       err ? div({ class: 'composer-err' }, err) : null,
       !err && stat ? div({ class: ['composer-status', stat.kind], key: 'composer-status' }, stat.text) : null,
       this.queueStrip(),
-      // input-wrap anchors the buttons overlaid at the textarea's bottom-right; a stable key so the
-      // conditional popup/error siblings can't make positional diffing remount the textarea.
+      // input-wrap stacks the textarea over its action bar; a stable key so the conditional
+      // popup/error siblings can't make positional diffing remount the textarea.
       div({ class: 'input-wrap', key: 'composer-row' },
         inputTextArea({
           target: this,
@@ -573,22 +575,25 @@ export class Composer extends Component {
             ...disabled,
           },
         }),
-        // The overlay row at the textarea's bottom-right: clipboard capture, + (new conversation),
-        // then send/stop as the primary CTA.
-        button({ class: 'composer-clip', type: 'button', title: 'Capture clipboard to a file (Ctrl+;)', ariaLabel: 'Capture clipboard',
-          ...disabled,
-          onClick: () => void this.captureClipboard() }, icon('attach')),
-        // Always live, mid-turn included (C6): + detaches to a fresh conversation while the
-        // running turn continues in the background — it never aborts anything.
-        button({ class: 'composer-new', type: 'button', title: 'New conversation', ariaLabel: 'New conversation',
-          ...(this.#sending ? { disabled: true } : {}),
-          onClick: () => void this.newConversation() }, icon('addCircle')),
-        this.streaming
-          ? button({ class: 'composer-act stop', type: 'button', title: 'Stop the current turn', ariaLabel: 'Stop',
-              onClick: () => void this.stopTurn() }, icon('stopCircle'))
-          : button({ class: 'composer-act send', type: 'button', title: 'Send (Enter)', ariaLabel: 'Send',
-              ...disabled,
-              onClick: () => void this.send() }, icon('playCircle')),
+        // The action bar under the textarea, right-aligned: clipboard capture, + (new conversation),
+        // then send/stop as the primary CTA. Below the text (not overlaid) so the textarea keeps the
+        // full prose column.
+        div({ class: 'composer-actions' },
+          button({ class: 'composer-clip', type: 'button', title: 'Capture clipboard to a file (Ctrl+;)', ariaLabel: 'Capture clipboard',
+            ...disabled,
+            onClick: () => void this.captureClipboard() }, icon('attach')),
+          // Always live, mid-turn included (C6): + detaches to a fresh conversation while the
+          // running turn continues in the background — it never aborts anything.
+          button({ class: 'composer-new', type: 'button', title: 'New conversation', ariaLabel: 'New conversation',
+            ...(this.#sending ? { disabled: true } : {}),
+            onClick: () => void this.newConversation() }, icon('addCircle')),
+          this.streaming
+            ? button({ class: 'composer-act stop', type: 'button', title: 'Stop the current turn', ariaLabel: 'Stop',
+                onClick: () => void this.stopTurn() }, icon('stopCircle'))
+            : button({ class: 'composer-act send', type: 'button', title: 'Send (Enter)', ariaLabel: 'Send',
+                ...disabled,
+                onClick: () => void this.send() }, icon('playCircle')),
+        ),
       ),
     )
   }

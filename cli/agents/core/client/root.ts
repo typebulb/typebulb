@@ -42,6 +42,8 @@ export class Root extends Component implements IRoot {
   // The driver's in-flight assistant message (IRoot.draft) — MessageList renders it as one ephemeral
   // trailing bubble; replaced by the durable transcript row when the entry lands (Invariant C1).
   draft: { text: string; thinking: string } | null = null
+  // The just-sent user prompt (IRoot.echo) — the draft's user-side twin, rendered above it.
+  echo: string | null = null
 
   #cursor = 0
   #polling = false

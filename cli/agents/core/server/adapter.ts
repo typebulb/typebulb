@@ -31,6 +31,10 @@ export interface AgentDriver {
   /** The partial assistant message accumulated from stream deltas; null when there's nothing to
    *  show. Retained after a message completes until the engine sees its durable row (below). */
   readonly draft: { text: string; thinking: string } | null
+  /** The just-sent user prompt, held until its durable row lands (pi flushes entries at
+   *  message_end, so the assistant draft would otherwise render before the prompt that caused it).
+   *  Ephemeral, rides the poll like `draft`. */
+  readonly echo: string | null
   /** Ambient one-line state (TB-Agent-Composer-Toolkit.md Piece 2): a retry/compaction in progress, an
    *  extension notice, joined extension statuses. Ephemeral, rides the poll response like `draft`. */
   readonly status: ComposerStatus | null
@@ -62,6 +66,9 @@ export interface AgentDriver {
    *  the drain emits a live-chain assistant event — the durable row has arrived, so the ephemeral
    *  bubble hands off without a gap. A draft mid-accumulation is kept. */
   clearCompletedDraft(): void
+  /** Drop the echoed prompt — the same handoff, user side: called when the drain emits a
+   *  live-chain user event. */
+  clearEcho(): void
   /** Kill the owned process (abort first if streaming, brief grace, then kill). Idempotent. */
   dispose(): Promise<void>
 }

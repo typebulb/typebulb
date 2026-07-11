@@ -24,6 +24,13 @@
   /* Prose measure for text (bubbles + notes) — kept to a readable line length.
      Diagrams break out wider than this; see .md .mermaid. */
   --content-max: 800px;
+  /* One height for every word-pill control — the statusbar pills (bulbs/model/session/token) and
+     the floating overlay pills (copy, breakout). Set once here so they can't drift apart again;
+     chosen a touch under the old statusbar 1.7rem and a touch over the overlay pills' ~1.35rem. */
+  --pill-h: 1.5rem;
+  /* One text size for every word-pill too (statusbar pills + overlay copy/breakout). Was drifting:
+     statusbar .85rem vs overlay .72rem read as amateurish. The emoji glyph pill keeps its own size. */
+  --pill-font: .8rem;
   color-scheme: light;
 }
 
@@ -87,13 +94,17 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
+  /* Same column as .messages and the composer: a --content-max band centred in a 1.75rem gutter
+     (max-width carries the two gutters so the content box lands on --content-max). The pills are
+     right-aligned within it, so the cluster's right edge tracks the prose column's — consistent
+     with the input above and the transcript behind. The gutter also clears the overlaid scrollbar
+     that the old asymmetric right padding was there to dodge. */
+  margin-inline: auto;
+  max-width: calc(var(--content-max) + 3.5rem);
   display: flex;
   align-items: center;
   gap: .65rem;
-  /* .4rem inset on top/left/bottom; the right is larger to clear the scrollbar
-     the statusbar overlays — so the *visible* gap to the content edge matches the
-     other sides instead of the pills sitting flush against the scrollbar. */
-  padding: .4rem 1.35rem .4rem .4rem;
+  padding: .4rem 1.75rem;
   font-size: .8rem;
   /* Drop the inherited 1.55 line-height so the bar's own strut doesn't add
      phantom ascender/descender room above the pills. Everything in the bar
@@ -107,24 +118,28 @@ body {
   gap: .4rem;
   align-items: center;
 }
-/* Chip shape shared by the status-bar pills, interactive (session chip) and
-   passive (token counter). One rule = one source of vertical alignment, no
-   element-type drift between siblings; inline-flex + line-height:1 + fixed
-   height centers the glyph run by the box, not by the inherited line-box.
-   Opaque so they read cleanly over the message text the transparent strip lets
-   through. */
-.pill, .token {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  height: 1.7rem;
+/* Chip shape shared by EVERY word-label control — the status-bar pills (interactive and
+   passive) AND the floating overlay pills (copy, breakout, code⇄run). One rule = one source
+   of vertical alignment; when these drift apart it reads as amateurish.
+   THE CENTERING RECIPE (don't re-tweak per button — fix it here or nowhere): Segoe UI's font
+   ascent (~1.08em) dwarfs its descent (~0.25em), so anything that centers the LINE BOX —
+   flex, line-height, padding — parks the glyphs ~2px low at pill sizes. `text-box` trims the
+   line box to the glyphs (cap→baseline) so centering centers the letters themselves. It only
+   applies to block containers (not flex), hence inline-block + align-content, not inline-flex
+   + align-items. Browsers without text-box (Firefox) fall back to plain line-box centering.
+   Opaque so pills read cleanly over the message text the transparent strip lets through. */
+.pill, .token, .overlay-pill {
+  display: inline-block;
+  align-content: center;
+  text-align: center;
+  text-box: trim-both cap alphabetic;
+  height: var(--pill-h);
   padding: 0 .7rem;
   border-radius: 7px;
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: .8rem;
+  font-size: var(--pill-font);
   white-space: nowrap;
   user-select: none;
 }
@@ -132,7 +147,7 @@ body {
    interactive affordance. Slightly larger text than the passive indicator. */
 .pill {
   font: inherit;
-  font-size: .85rem;
+  font-size: var(--pill-font);
   appearance: none;
   margin: 0;
   cursor: pointer;
@@ -143,8 +158,19 @@ body {
 /* Square glyph pill (the prose-mode toggle): width pinned to the pill height rather than
    padding-driven — the bar's first non-word pill. The emoji can't take currentColor, so it
    carries state itself: grayscale at rest, color while hovered or on — filtered on the
-   inner span, never the button, or it would wash the accent border too. */
-.pill.glyph { width: 1.7rem; padding: 0; font-size: .9rem; }
+   inner span, never the button, or it would wash the accent border too.
+   Glyph content (emoji span / the Anthropic SVG) is vertically symmetric, so plain flex
+   centering is exact for it — and cap/alphabetic trim mis-seats a replaced SVG (it trims to
+   TEXT metrics), so opt glyph pills back out of the word-pill recipe. */
+.pill.glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-box: normal;
+  width: var(--pill-h);
+  padding: 0;
+  font-size: .9rem;
+}
 .pill.glyph .glyph-img { filter: grayscale(1); opacity: .75; }
 .pill.glyph:hover .glyph-img, .pill.glyph.on .glyph-img { filter: none; opacity: 1; }
 
@@ -241,7 +267,18 @@ body {
 
 /* ── The composer (TB-Agent-Composer.md): the prompt panel under the transcript. In flow (not
    overlaid like the statusbar) — it owns real height and must never cover content. ── */
-.composer { position: relative; flex: none; background: var(--bg); }
+.composer { position: relative; flex: none; background: var(--bg); padding-inline: 1.75rem; }
+/* Keep the composer's rows on the same prose column as the transcript (--content-max, centered like
+   .messages) — full-mirror-width input reads badly, the eye has to travel to wrap long lines. The
+   1.75rem inline padding above matches .messages' gutter so the two columns align at every width. */
+.composer .splitter,
+.composer .input-wrap,
+.composer-err,
+.composer-status,
+.composer-queue {
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
 /* A 4px drag zone centered on the composer's top border; z-index lifts it above the input-wrap
    border so the line itself is grabbable. */
 .splitter {
@@ -267,8 +304,10 @@ body {
   font: inherit;
   font-size: .9rem;
   line-height: 1.45;
-  /* Right padding clears the three overlaid 28px buttons: .5rem inset + 3×28px + 2×.15rem gaps. */
-  padding: .5rem 6.2rem .5rem .75rem;
+  /* Zero horizontal padding so the text sits flush on the --content-max column — its left and right
+     edges line up with the transcript prose (which has no inset) and the splitter. Buttons live in
+     .composer-actions below, so the text needs no right gutter either. */
+  padding: .5rem 0;
 }
 .composer-input:focus { outline: none; }
 .composer-input:disabled { opacity: .6; }
@@ -277,11 +316,17 @@ body {
    it. 14px default; context classes (.btn-icon, .caret-tri, …) override. */
 .icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: none; }
 .icon svg { width: 100%; height: 100%; display: block; }
-/* The overlay row, bottom-anchored to the textarea's right edge: send/stop is the primary CTA;
-   + (new conversation) and the clipboard clip are the quiet secondaries to its left. */
+/* The action bar under the textarea, right-aligned: send/stop is the primary CTA; + (new
+   conversation) and the clipboard clip are the quiet secondaries to its left. Below the text (not
+   overlaid) so the textarea keeps the full prose column. */
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: .15rem;
+  padding: 0 0 .4rem;    /* flush right, so Send lines up with the copy pill / statusbar pills */
+}
 .composer-act, .composer-new, .composer-clip {
-  position: absolute;
-  bottom: .5rem;
   width: 28px;
   height: 28px;
   display: flex;
@@ -299,7 +344,7 @@ body {
    the button, no painted disc. One size for all three — the circles' diameter and the paperclip's
    ink height are both 800/960 of the material viewBox, so equal boxes = equal visual height. */
 .composer-act .icon, .composer-new .icon, .composer-clip .icon { width: 24px; height: 24px; }
-.composer-act { right: .5rem; background: transparent; }
+.composer-act { background: transparent; }
 .composer-act.send { color: var(--accent); }
 .composer-act.send:hover:not(:disabled) { color: color-mix(in srgb, var(--accent) 80%, white); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .composer-act.stop { color: var(--err); }
@@ -307,38 +352,36 @@ body {
 .composer-act:active, .composer-new:active, .composer-clip:active { transform: scale(.94); }
 .composer-act:disabled, .composer-new:disabled, .composer-clip:disabled { opacity: .5; cursor: default; }
 .composer-new {
-  /* offset = act's right inset (.5rem) + act width (28px) + gap (.15rem) */
-  right: calc(.5rem + 28px + .15rem);
   background: transparent;
   color: var(--muted);
 }
 .composer-new:hover:not(:disabled) { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .composer-clip {
-  /* one more button-width left of .composer-new */
-  right: calc(.5rem + 2 * (28px + .15rem));
   background: transparent;
   color: var(--muted);
 }
 .composer-clip:hover:not(:disabled) { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.composer-err { padding: .3rem .75rem; color: var(--err); font-size: .78rem; }
+/* Zero horizontal padding (like .composer-input): these rows sit flush on the content column. */
+.composer-err { padding: .3rem 0; color: var(--err); font-size: .78rem; }
 /* The ambient status line (TB-Agent-Composer-Toolkit.md Piece 2): one slim kind-tinted row above the
    input — a retry/compaction in progress, an extension notice, a recipe's transient result. */
-.composer-status { padding: .3rem .75rem; font-size: .78rem; color: var(--muted); }
-.composer-status.warning { color: color-mix(in srgb, var(--err) 55%, var(--fg)); }
+.composer-status { padding: .3rem 0; font-size: .78rem; color: var(--accent); }
+.composer-status.warning { color: var(--warn); }
 .composer-status.error { color: var(--err); }
 /* The pending-queue strip (parity #2): queued steer/follow-up texts above the input. Block rows,
    not a flex column — .queue-row's overflow:hidden would zero flex min-heights (the .dlg-opts
    lesson). */
-.composer-queue { padding: .15rem .75rem 0; }
+.composer-queue { padding: .15rem 0 0; }
 .queue-row { font-size: .78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .queue-tag { color: var(--accent); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; margin-right: .5rem; }
 /* The @-file-mention popup, anchored above the composer. */
 .at-popup {
   position: absolute;
   bottom: calc(100% + .25rem);
-  left: 1rem;
-  right: 1rem;
+  left: 0;
+  right: 0;
   max-width: 600px;
+  margin-inline: auto;
   max-height: 280px;
   overflow-y: auto;
   background: var(--panel);
@@ -836,6 +879,11 @@ a.server-port:hover { text-decoration: underline; }
 .messages {
   flex: 1;
   overflow-y: auto;
+  /* Reserve the scrollbar gutter on BOTH edges so the centred --content-max column stays on the
+     true axis (window centre) whether or not a scrollbar is showing. Without this the scrollbar
+     shrinks the column and shifts it ~half a scrollbar left of the composer/statusbar columns
+     (which never scroll) — the misalignment between the prose and the composer's left edge. */
+  scrollbar-gutter: stable both-edges;
   /* Content runs under the overlaid statusbar rather than stopping above it.
      Gutters are symmetric: the turn stripe is absolutely positioned, so it claims no layout
      width and the left gutter needs no extra room for it (see Invariants). The bottom is
@@ -861,8 +909,8 @@ a.server-port:hover { text-decoration: underline; }
 .masthead {
   max-width: var(--content-max);
   width: 100%;
-  margin: 0 auto 1rem auto;
-  padding: .35rem 0 .35rem;
+  margin: 0 auto .25rem auto;
+  padding: .15rem 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -871,7 +919,7 @@ a.server-port:hover { text-decoration: underline; }
   user-select: none;
 }
 .masthead-logo {
-  width: 170px;
+  width: 150px;
   max-width: 55%;
   height: auto;
   opacity: .92;
@@ -1178,24 +1226,20 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 /* Overlay pill: a small hover-revealed control floated at a container's
    bottom-right, shared by the embed breakout button and the message copy button.
    Muted at rest, accent on hover (instant, matching the status pills). The
-   container supplies the reveal; per-button bits layer on top. */
+   container supplies the reveal; per-button bits layer on top. Box shape, colors
+   and vertical centering come from the shared word-pill rule (.pill, .token,
+   .overlay-pill) — only positioning, reveal and sizing quirks live here. */
 .overlay-pill {
   position: absolute;
   bottom: .5rem;
-  right: .5rem;
+  right: 0;              /* flush with the content column's right edge (prose / statusbar pills) */
   font: inherit;
-  font-size: .72rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--muted);
-  padding: .12rem .45rem;
-  /* These are word buttons that swap labels in place (fit⇄spread, code⇄run, copy⇄copied), so a
-     min-width keeps the button from jumping as the word's length changes — "fit" is much narrower
-     than "spread". Centered text so the floor padding sits evenly. (An icon button wouldn't want
-     this, but every pill here is a word.) */
+  font-size: var(--pill-font);
+  padding: 0 .45rem;
+  /* Word buttons that swap labels in place (fit⇄spread, code⇄run, copy⇄copied), so a min-width
+     keeps the button from jumping as the word's length changes — "fit" is much narrower than
+     "spread". */
   min-width: 3.5rem;
-  text-align: center;
   cursor: pointer;
   opacity: 0;
   transition: opacity .2s ease;
@@ -1223,7 +1267,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .md .bulb-controls {
   position: absolute;
   top: 0;
-  right: .5rem;
+  right: 0;              /* flush with the content column's right edge (prose / statusbar pills) */
   z-index: 2;
   display: flex;
   gap: .4rem;

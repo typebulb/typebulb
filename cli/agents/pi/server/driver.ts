@@ -69,6 +69,7 @@ export class PiRpcDriver {
   #optimisticUntil = 0                       // send accepted, agent_start not yet seen
   #open = false                              // an assistant message is mid-accumulation
   #draft: { text: string; thinking: string } | null = null
+  #echo: string | null = null                // the just-sent idle prompt, held until its durable row lands
   // Ambient status (TB-Agent-Composer-Toolkit.md Piece 2): an agent operation in progress (retry,
   // compaction — wins priority), a transient notice, and keyed extension setStatus entries.
   #op: ComposerStatus | null = null
@@ -135,6 +136,7 @@ export class PiRpcDriver {
 
   get streaming() { return this.#streaming || Date.now() < this.#optimisticUntil }
   get draft() { return this.#draft }
+  get echo() { return this.#echo }
   get queue() { return this.#queue }
   get stats() { return this.#stats }
   get model() { return this.#model }
@@ -216,6 +218,10 @@ export class PiRpcDriver {
       return { ok: false, error: errorMessage(err) }
     }
     if (r.success && !wasStreaming) this.#optimisticUntil = Date.now() + OPTIMISTIC_STREAM_MS
+    // Hold the prompt for the mirror to render now — pi flushes the user entry at message_end, so
+    // the draft would otherwise render before the message that caused it. Mid-turn sends are in the
+    // queue strip already; slash commands may run no turn and land no user entry to hand off to.
+    if (r.success && !wasStreaming && !text.trimStart().startsWith('/')) this.#echo = text
     return r.success ? { ok: true } : { ok: false, error: r.error ?? 'pi rejected the message' }
   }
 
@@ -227,6 +233,9 @@ export class PiRpcDriver {
   /** Engine hook: the durable transcript row arrived — drop a completed draft. One mid-accumulation
    *  (a NEW message is streaming) is kept; the completed text it replaced is already on disk. */
   clearCompletedDraft() { if (!this.#open) this.#draft = null }
+
+  /** Engine hook: the durable user row arrived — drop the echoed prompt (the draft handoff, user side). */
+  clearEcho() { this.#echo = null }
 
   /**
    * The disposal ladder: abort a live turn, grace; close stdin (pi exits on EOF — with shell:true
@@ -415,6 +424,7 @@ export class PiRpcDriver {
     this.#optimisticUntil = 0
     this.#open = false
     this.#draft = null
+    this.#echo = null
     this.#op = null
     this.#notice = null
     this.#extStatus.clear()

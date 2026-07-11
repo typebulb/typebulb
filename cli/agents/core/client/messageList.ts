@@ -377,8 +377,13 @@ export class MessageList extends Component {
     // after the transcript, continuing the current turn's stripe. NOT a Msg — it never joins
     // `messages`, search, or turn collapse (Invariant C1); the durable row replaces it when the
     // entry lands off the tail.
+    // The echo (the just-sent prompt awaiting its durable row) renders above the draft with the
+    // stripe index its landed row will get, so the handoff never shifts colors.
+    const echo = this.parent.echo
     const draft = this.parent.draft
-    if (draft) out.push(this.#draftBubble(draft, Math.max(0, turn)))
+    const tailTurn = echo ? turn + 1 : Math.max(0, turn)
+    if (echo) out.push(this.#echoBubble(echo, tailTurn))
+    if (draft) out.push(this.#draftBubble(draft, tailTurn))
     else { this.#draftScroll.clear(); this.#draftThinkingOpen = false }
     return out
   }
@@ -391,6 +396,13 @@ export class MessageList extends Component {
       img({ class: 'masthead-logo dark', src: LOGO_DARK, alt: 'typebulb' }),
       div({ class: 'masthead-tagline' }, 'a live mirror of your agent’s session, with embedded bulbs, latex, svg, mermaid and more'),
     )
+  }
+
+  // The ephemeral user bubble for a prompt the driver accepted but pi hasn't flushed to the session
+  // file yet. Keyed by content so a rapid re-send remounts and re-renders the markdown.
+  #echoBubble(text: string, turnIdx: number) {
+    return div({ class: ['bubble', 'user', turnClassFor(turnIdx)], key: `echo-${text.length}` },
+      this.#mdDiv(`md-echo-${text.length}`, userMarkdown({ id: -1, role: 'user', text, thinking: '', tools: [] })))
   }
 
   // Keyed by content length so growth remounts the node and re-renders the markdown — onMounted

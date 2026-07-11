@@ -60,6 +60,9 @@ export interface ComposerDialogRequest {
 export interface ComposerPoll {
   streaming: boolean
   draft: { text: string; thinking: string } | null
+  // The just-sent user prompt awaiting its durable row — an ephemeral user bubble above the draft
+  // (pi flushes the user entry at message_end, seconds into a long turn).
+  echo: string | null
   status: ComposerStatus | null
   dialog: ComposerDialogRequest | null
   queue: ComposerQueue | null

@@ -94,6 +94,9 @@ export interface IRoot {
   // MessageList as one ephemeral bubble after the transcript, replaced by the durable row when the
   // entry lands on disk (TB-Agent-Composer.md, Invariant C1). null when idle or no composer.
   draft: { text: string; thinking: string } | null
+  // The just-sent user prompt awaiting its durable row (poll composer.echo) — rendered as an
+  // ephemeral user bubble above the draft; null when idle or landed.
+  echo: string | null
   tokens: TokenCounts
   // Session cost so far: the sum of the usage events' per-entry harness-computed costs (pi writes
   // usage.cost.total; CC writes none, so this stays 0 there). Reset by `cleared` like tokens.
