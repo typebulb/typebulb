@@ -199,8 +199,11 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   // so the engine falls back to file-mtime freshness.
   sessionAlive(): boolean | undefined { return undefined }
 
-  // Picker title: a user-set session name (session_info) wins, else the first user prompt. Head-only
-  // read (64 KB) — pi transcripts can be MB-scale and the picker maps this over every session.
+  // Picker title: the latest user-set session name (session_info) wins, else the first user prompt.
+  // The name entry is appended at the leaf — the END of the file — so a `/name` mid-session lands past
+  // a head-only window on any transcript over ~64 KB (pi's run to MB). Scan the head (first-user-prompt
+  // fallback + a boot-time --name near the top) and the tail (last 64 KB), letting the tail's later
+  // name win; two capped reads, never the whole MB-scale file.
   readPreview(file: string): string {
     let fd: number
     try { fd = openSync(file, 'r') } catch { return '' }
@@ -208,21 +211,31 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
       const CAP = 64 * 1024
       let size = CAP
       try { size = statSync(file).size } catch {}
-      const buf = Buffer.alloc(Math.min(CAP, size))
-      const n = readSync(fd, buf, 0, buf.length, 0)
-      const head = buf.subarray(0, n).toString('utf8')
-      let name = ''
+      const chunk = (pos: number, len: number) => {
+        const buf = Buffer.alloc(len)
+        const n = readSync(fd, buf, 0, len, pos)
+        return buf.subarray(0, n).toString('utf8')
+      }
+      const head = chunk(0, Math.min(CAP, size))
+      const tail = size > CAP ? chunk(size - CAP, CAP) : ''   // '' ⇒ head already covered the file
+      // The last session_info name in a chunk (a partial first tail line just fails JSON.parse — skipped).
+      const lastName = (text: string) => {
+        let name = ''
+        for (const line of text.split('\n')) {
+          if (!line.includes('"session_info"')) continue
+          try { const e = JSON.parse(line) as PiEntry; if (e?.type === 'session_info' && typeof e.name === 'string' && e.name) name = e.name } catch { /* partial line */ }
+        }
+        return name
+      }
       let firstUser = ''
       for (const line of head.split('\n')) {
-        if (!line.includes('"type"')) continue
-        let e: PiEntry
-        try { e = JSON.parse(line) } catch { continue }      // a truncated trailing line — skip
-        if (e?.type === 'session_info' && typeof e.name === 'string' && e.name) name = e.name   // last wins
-        else if (!firstUser && e?.type === 'message' && e.message?.role === 'user') {
-          firstUser = this.contentText(e.message.content).replace(/\s+/g, ' ').trim()
-        }
+        if (firstUser || !line.includes('"type"')) continue
+        try {
+          const e = JSON.parse(line) as PiEntry
+          if (e?.type === 'message' && e.message?.role === 'user') firstUser = this.contentText(e.message.content).replace(/\s+/g, ' ').trim()
+        } catch { /* a truncated trailing line — skip */ }
       }
-      const title = name || firstUser
+      const title = lastName(tail) || lastName(head) || firstUser
       return title ? title.slice(0, 200) : ''
     } finally { closeSync(fd) }
   }

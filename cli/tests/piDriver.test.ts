@@ -313,6 +313,25 @@ describe('PiRpcDriver', () => {
     expect(driver.model).toBe('claude-sonnet-4')
   })
 
+  it('re-resolves the session file after fork and hands it to the caller (the recipe attaches)', async () => {
+    const { driver, sent, emit, settle } = makeDriver('C:\\old.jsonl')
+    await settle()
+    const p = driver.rpc({ type: 'fork', entryId: 'abc' })
+    await settle()
+    const fk = sent.find(c => c.type === 'fork')!
+    emit({ type: 'response', id: fk.id, success: true, data: { text: 'restored prompt' } })
+    await settle()
+    // fork moves the pi process to a NEW session file (0.80.3) — the driver re-asks get_state and
+    // rebinds, so the engine's resolveBindings re-keys the rec instead of stranding it on the old file.
+    const gs = sent.filter(c => c.type === 'get_state').pop()!
+    emit({ type: 'response', id: gs.id, success: true, data: { sessionFile: 'C:\\forked.jsonl' } })
+    const r = await p
+    expect(r.ok).toBe(true)
+    expect((r.data as { sessionFile?: string }).sessionFile).toBe('C:\\forked.jsonl')
+    expect((r.data as { text?: string }).text).toBe('restored prompt')
+    expect(driver.sessionFile).toBe('C:\\forked.jsonl')
+  })
+
   it('a dying pi fails pending sends and surfaces error; streaming/draft reset', async () => {
     const { driver, child, emit, settle } = makeDriver('C:\\s.jsonl')
     emit({ type: 'agent_start' })

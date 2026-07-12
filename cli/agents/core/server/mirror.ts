@@ -27,6 +27,16 @@ const LOCKS_DIR = `${RUNTIME_DIR}/locks`
 const LOCK_TTL_MS = 5000                          // claim valid for 5s of mtime staleness
 const LOCK_SWEEP_AGE_MS = 60_000                  // anything older than 1min on boot is junk
 
+// A lock records the PID holding a session. process.kill(pid, 0) sends no signal, only the
+// existence check: ESRCH ⇒ the process is gone (a dead lock), EPERM ⇒ alive but not ours to signal.
+// (Mirrors src/serve/serverRegistry.ts `isAlive`; inlined to keep this neutral module off the src
+// boundary.) A NaN pid returns true so an unreadable body stays "live" — the mtime TTL still bounds it.
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid)) return true
+  try { process.kill(pid, 0); return true }
+  catch (e) { return (e as { code?: string }).code === 'EPERM' }
+}
+
 const SEARCH_MAX_SESSIONS = 50
 
 // The mirror never creates sessions — it only tails what the terminal writes. Attachment: fresh boot
@@ -125,14 +135,16 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     }
   }
 
-  // Bind freshly-resolved session files onto their recs, and — the one case the mirror "creates" a
+  // Bind each rec to the file its driver reports — first resolution and rebinds alike (a fork or
+  // clone moves the pi process to a new file; the driver's own get_state is the identity report,
+  // never inference — C5). Also — the one case the mirror "creates" a
   // session — attach the blank view to its OWN newborn's file once the first entry lands on disk.
   // The gate is the blank pointer (C5), never "the view is blank and some driver has a resolved
   // file". Resolution goes through the adapter's listing so locks/preview keep working; pi reports
   // its file immediately but writes it only on the first entry, so the attach retries every call
   // while the view is blank (giving up on the first miss left the draft as a never-landing card).
   function resolveBindings() {
-    for (const r of drivers) if (!r.file && r.d.sessionFile) r.file = r.d.sessionFile
+    for (const r of drivers) if (r.d.sessionFile && r.file !== r.d.sessionFile) r.file = r.d.sessionFile
     if (blank && !state.file && blank.file) {
       const sf = adapter.listSessionFiles(state.cwd).find(f => f.file === blank!.file)
       if (sf) attachTo(sf)                 // clears the blank pointer; the rec stays, now file-keyed
@@ -153,6 +165,10 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       try {
         const pid = parseInt(readFileSync(p, 'utf8').trim(), 10)
         if (pid === process.pid) return false
+        // A fresh lock left by a just-stopped mirror (or a crash) keeps its heartbeat mtime for up to
+        // LOCK_TTL_MS, but its owner is gone — a dead lock, so the newest session isn't skipped when
+        // you relaunch within 5s (the "2nd-newest gets selected" bug).
+        if (!pidAlive(pid)) return false
       } catch { /* unreadable lock body — fall through to "live" */ }
       return true
     } catch { return false }                        // missing → not live
@@ -717,6 +733,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!sf) return { ok: false, error: 'session not found' }
     if (sf.file === s.file) return { ok: true }
     attachTo(sf)
+    // Rebind before the sweep: a driver that just moved itself (fork/clone) must be keyed by its
+    // new file, or attaching TO that file would reap it as "idle, bound elsewhere".
+    resolveBindings()
     // Navigation is never destructive (C6): a streaming driver keeps running as a background
     // conversation — flipping to it shows its live draft, and the composer there steers. Idle
     // drivers the flip leaves behind are reaped (C2); the next send there respawns, a cheap

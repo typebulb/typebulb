@@ -1604,6 +1604,10 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 /* The <summary> toggle defaults to a text cursor — give it the pointer every other expandable uses. */
 .thinking summary { cursor: pointer; }
 .thinking pre { white-space: pre-wrap; }
+/* Streaming (draft) thinking: capped + scrollable at the bulb-streaming card's height — ambient
+   progress, not reading material — stuck to the live edge unless the user scrolls up
+   (#draftThinkingPre). Durable rows stay uncapped: finished thinking IS reading material. */
+.draft .thinking pre { max-height: 220px; overflow-y: auto; }
 
 /* Copy button: an .overlay-pill revealed on bubble-hover. */
 .bubble:hover .copy { opacity: 1; }

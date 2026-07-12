@@ -196,6 +196,17 @@ export class PiRpcDriver {
         const id = (r.data as { id?: unknown } | undefined)?.id
         if (typeof id === 'string' && id) this.#model = id
       }
+      // fork/clone move the pi process to a NEW session file (verified 0.80.3 — the old file is
+      // left untouched); re-resolve the binding from the process's own report and hand the file
+      // to the caller, so the fork/clone recipes can attach the view to it.
+      if (r.success && (cmd.type === 'fork' || cmd.type === 'clone')) {
+        try {
+          const st = await this.#request({ type: 'get_state' })
+          const f = st.data?.sessionFile
+          if (typeof f === 'string' && f) this.#sessionFile = f
+        } catch { /* keep the old binding — the recipe's attach becomes a no-op */ }
+        return { ok: true, data: { ...(r.data ?? {}), sessionFile: this.#sessionFile } }
+      }
       return r.success ? { ok: true, data: r.data } : { ok: false, error: r.error ?? `pi rejected ${cmd.type}` }
     } catch (err) {
       return { ok: false, error: errorMessage(err) }

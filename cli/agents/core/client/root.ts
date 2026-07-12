@@ -100,6 +100,13 @@ export class Root extends Component implements IRoot {
       : this.#title
   }
 
+  // Re-fetch the session list (re-runs the adapter's readPreview) and re-render, so a rename lands on
+  // the pill/tab title/picker rows immediately — the picker otherwise only reloads on boot or open.
+  // loadSessions already refreshes the title; the update() paints the new preview everywhere.
+  refreshSessions() {
+    this.sessionPicker.loadSessions().then(() => this.update()).catch(() => {})
+  }
+
   // Poll the buffer every 600ms; the terminal drives turns, so entries pop in
   // whenever the agent flushes a line (no live streaming signal to chase).
   pump() {

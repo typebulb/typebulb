@@ -285,6 +285,7 @@ export class Composer extends Component {
         return !!r.confirmed
       },
       setInput: text => { this.input = text; this.update(); this.#placeCaret() },
+      refreshSessions: () => this.parent.refreshSessions(),
     }
   }
 

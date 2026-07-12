@@ -39,6 +39,16 @@ async function newConversationHandoff(): Promise<string> {
   return 'new conversation — /model now lists your local models'
 }
 
+// fork/clone land in a NEW session file and the pi process moves itself there (0.80.3); attach
+// the view to it, or the next send renders somewhere the user isn't looking. False = the file
+// isn't on disk yet: pi defers it until the first entry (the sessionless-newborn behavior), which
+// happens exactly when the kept prefix is empty — a fork from the first message.
+async function attachSession(file: string): Promise<boolean> {
+  const id = file.replace(/\\/g, '/').split('/').pop()!.replace(/\.jsonl$/, '')
+  const r = await (tb.server.attach(id) as Promise<{ ok: boolean; error?: string }>)
+  return !!r?.ok
+}
+
 // Sync = CLOBBER the ollama block to what's installed (setup is just the no-block-yet case): one
 // operation, no add/remove bookkeeping. A user curating the list by hand simply cancels — and the
 // row only ever triggers on installed-but-unconfigured models, so pruning alone never re-offers.
@@ -103,12 +113,9 @@ export const piRecipes: ComposerRecipe[] = [
       return `thinking: ${level}`
     },
   },
-  // compact/fork/clone: hidden until live-verified (fork-in-same-file rendering and clone's
-  // driver-binding aftermath are the open risks; compact spends). Flip `hidden` off to re-enable.
   {
     name: 'compact',
     description: 'Compact the conversation context',
-    hidden: true,
     async run(ctx) {
       const instructions = await ctx.input('Compact context', 'optional instructions — Enter to compact')
       if (instructions === null) return
@@ -120,7 +127,6 @@ export const piRecipes: ComposerRecipe[] = [
   {
     name: 'fork',
     description: 'Fork from an earlier message',
-    hidden: true,
     async run(ctx) {
       const data = await call(ctx, { type: 'get_fork_messages' }, 'could not list fork points')
       const msgs = ((data as { messages?: { entryId: string; text: string }[] })?.messages) ?? []
@@ -129,19 +135,26 @@ export const piRecipes: ComposerRecipe[] = [
       const pick = await ctx.select('Fork from…', labels)
       if (pick === null) return
       const m = msgs[labels.indexOf(pick)]!
-      const text = (await call(ctx, { type: 'fork', entryId: m.entryId }, 'fork failed') as { text?: string } | undefined)?.text
-      if (text) ctx.setInput(text)
+      const d = await call(ctx, { type: 'fork', entryId: m.entryId }, 'fork failed') as
+        { text?: string; sessionFile?: string } | undefined
+      if (d?.sessionFile && !(await attachSession(d.sessionFile))) {
+        // Empty-prefix fork (from the first message): no file to attach — the same shape as a new
+        // conversation, so take that gesture; the restored prompt below is the whole payload.
+        const r = await (tb.server.composerNew() as Promise<{ ok: boolean; error?: string }>)
+        if (!r?.ok) throw new Error(r?.error ?? 'could not open a new conversation')
+      }
+      if (d?.text) ctx.setInput(d.text)
       return 'forked — edit the restored prompt and send'
     },
   },
   {
     name: 'clone',
     description: 'Duplicate this branch into a new session',
-    hidden: true,
     async run(ctx) {
       if (!(await ctx.confirm('Clone session?', 'Duplicates the current branch into a new session file.'))) return
-      await call(ctx, { type: 'clone' }, 'clone failed')
-      return 'cloned into a new session'
+      const d = await call(ctx, { type: 'clone' }, 'clone failed') as { sessionFile?: string } | undefined
+      if (d?.sessionFile && !(await attachSession(d.sessionFile))) throw new Error('clone finished but its session file never appeared')
+      return 'cloned — this is the duplicate'
     },
   },
   {
@@ -151,6 +164,7 @@ export const piRecipes: ComposerRecipe[] = [
       const name = await ctx.input('Session name')
       if (name === null || !name.trim()) return
       await call(ctx, { type: 'set_session_name', name: name.trim() }, 'set_session_name failed')
+      ctx.refreshSessions()      // the new name only reaches the pill/title/picker on a re-fetch
       return `named: ${name.trim()}`
     },
   },

@@ -56,6 +56,9 @@ export interface RecipeCtx {
   confirm(title: string, message?: string): Promise<boolean>
   /** Put text in the composer editor (fork's restored prompt). */
   setInput(text: string): void
+  /** Re-fetch the session list (re-runs readPreview server-side) and re-render — a recipe that
+   *  changes session metadata (e.g. /name) uses it so the pill/title/picker update without a reopen. */
+  refreshSessions(): void
 }
 // `hidden` keeps a row out of the palette listing (its only entry point) while the code stays —
 // for shipped-but-not-yet-live-verified commands; it still shadows a same-named pass-through row.
@@ -107,6 +110,9 @@ export interface IRoot {
   messageList: IMessageList
   closePopups(except?: unknown): void
   updateTitle(): void
+  // Re-fetch the session list and re-render; the session pill/tab title read from that fetched data,
+  // so a metadata change (e.g. a /name recipe) needs this to show without reopening the picker.
+  refreshSessions(): void
 }
 
 

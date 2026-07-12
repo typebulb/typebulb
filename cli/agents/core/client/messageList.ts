@@ -146,7 +146,7 @@ export class MessageList extends Component {
   #embedSeq = 0
   #superseded = new Set<BulbEmbed>()               // recomputed per chain pass; drives fold-vs-live in #renderBody
   #stuckToBottom = true
-  #draftScroll = new Map<number, { top: number; stuck: boolean }>()  // per-card scroll state across draft remounts (see #draftBulbCard)
+  #draftScroll = new Map<number, { top: number; stuck: boolean }>()  // per-card scroll state across draft remounts (see #draftBulbCard; the thinking pre parks under -1)
   #draftLen = 0                                    // shrink detector: a new in-flight message resets the card scroll state
   #draftThinkingOpen = false                       // the draft's <details> recreates on every growth tick; this carries its open state across
   // Pasted-image thumbnails (TB-Agent-Composer-Toolkit.md Piece 6): data-URLs by filename, fetched
@@ -417,8 +417,11 @@ export class MessageList extends Component {
         ? details({
             class: 'thinking',
             open: this.#draftThinkingOpen,
+            // Track state ONLY — never touch scroll from here. <details> queues a toggle task every
+            // time the per-tick remount re-adds `open` (measured: one per remount, not per click), so
+            // any scroll write in this handler yanks the reader to the bottom on every delta.
             onToggle: (e: Event) => { this.#draftThinkingOpen = (e.currentTarget as HTMLDetailsElement).open },
-          }, summary('thinking'), pre(draft.thinking)) : null,
+          }, summary('thinking'), this.#draftThinkingPre(draft.thinking)) : null,
       draft.text.trim()
         ? this.#draftBody(key, draft.text)
         : div({ class: 'draft-wait shimmer-text' }, '…'),
@@ -437,6 +440,30 @@ export class MessageList extends Component {
       : this.#draftBulbCard(s.source, i))
   }
 
+  // Shared scroll wiring for a capped draft pane that remounts per growth tick: stick to the live
+  // edge within 50px of the bottom, else restore the reader's place (#draftScroll survives the
+  // remounts; `slot` is the bulb segment index, or -1 for the thinking pre). The element carrying
+  // this MUST also carry a content-derived key — onMounted refires only on remount (the #mdDiv
+  // rule; an unkeyed element's hook fires once and the pane stops following).
+  #stickyScroll(slot: number, fill?: (el: HTMLElement) => void) {
+    return {
+      onScroll: (e: Event) => {
+        const el = e.currentTarget as HTMLElement
+        this.#draftScroll.set(slot, { top: el.scrollTop, stuck: stuckToBottom(el, 50) })
+      },
+      onMounted: (el: Element) => {
+        fill?.(el as HTMLElement)
+        const st = this.#draftScroll.get(slot)
+        ;(el as HTMLElement).scrollTop = st && !st.stuck ? st.top : el.scrollHeight
+      },
+    }
+  }
+
+  // The streaming thinking pane — the bulb card's system via #stickyScroll, nothing bespoke.
+  #draftThinkingPre(text: string) {
+    return pre({ key: `think-${text.length}`, ...this.#stickyScroll(-1) }, text)
+  }
+
   // A streaming bulb's code card: shimmer header + ticking line count over the standard
   // .bulb-code listing, height-capped, stuck to the bottom as it grows. The draft bubble
   // remounts on every growth tick (the length key), so scroll state lives in #draftScroll
@@ -452,15 +479,8 @@ export class MessageList extends Component {
           span({ class: 'bulb-streaming-count' }, `${lines} lines`)),
         div({
           class: ['bulb-code', 'md'],
-          onScroll: (e: Event) => {
-            const el = e.currentTarget as HTMLElement
-            this.#draftScroll.set(i, { top: el.scrollTop, stuck: stuckToBottom(el, 50) })
-          },
-          onMounted: (el: Element) => {
-            el.innerHTML = mdPlain.render(stripFrontmatter(source))
-            const st = this.#draftScroll.get(i)
-            ;(el as HTMLElement).scrollTop = st && !st.stuck ? st.top : el.scrollHeight
-          },
+          key: `bulb-code-${source.length}`,
+          ...this.#stickyScroll(i, el => { el.innerHTML = mdPlain.render(stripFrontmatter(source)) }),
         })))
   }
 
