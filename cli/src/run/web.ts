@@ -6,9 +6,9 @@ import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile } from '../pipeline.js'
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
-import { startServer, findAvailablePort } from '../serve/server.js'
+import { startAndRegister } from '../serve/serveSession.js'
 import { watchPath } from '../serve/watcher.js'
-import { registerServer, unregisterServer, startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
+import { startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -55,24 +55,6 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, serverCacheDir)
   reportEnv(envResult, bulbPath, bulb.server)
 
-  // Find available port
-  const port = await findAvailablePort(args.port)
-
-  // Start server with dynamic HTML getter for hot reload
-  const server = await startServer({
-    getHtml: () => html,
-    basePath,
-    port,
-    reloadEmitter,
-    messageEmitter,
-    getServerExports: () => serverExports,
-    localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
-    trusted: args.trust,
-    trustHint,
-  })
-
-  const url = `http://localhost:${port}`
-
   // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
   // bulb for privileged tb.* usage so a host (and the terminal message below) can offer --trust
   // BEFORE the bulb runs and trips the gate — sparing the failed-first-run that ~20% of bulbs
@@ -80,16 +62,28 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // to the reactive denial. Skipped when already trusted (nothing to predict).
   const predicted = args.trust ? undefined : predictTrust(bulb)
 
-  // Self-register so hosts (and other terminals) can discover/stop this server — the
-  // cross-project registry that breakout's launch/list/stop builds on. We're listening
-  // now, so the port is the TRUE one. unregistered in cleanup; a crash leaves a stale
-  // entry, reaped by listBulbServers's liveness prune (TB-Agent-Mirror-Embed.md).
-  await registerServer({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, predicted })
-  console.log(`\n  ${bulb.name}`)
-  console.log(`  ${url}`)
-  // findAvailablePort bumps past a busy port; say so, or the URL silently lands somewhere other
-  // than where the caller asked (the wrong-port confusion this avoids).
-  if (port !== args.port) console.log(`  (port ${args.port} was busy)`)
+  // Start + register the server, and get the shared SIGINT/SIGTERM cleanup shell
+  // (serveSession.ts). The cross-project registry entry is what breakout's launch/list/stop
+  // builds on (TB-Agent-Mirror-Embed.md).
+  const { port, url, onCleanup } = await startAndRegister({
+    portPreference: args.port,
+    displayName: bulb.name,
+    stopLog,
+    // Dynamic HTML/exports getters so a hot reload swaps the served bytes in place.
+    makeServerOptions: (port) => ({
+      getHtml: () => html,
+      basePath,
+      port,
+      reloadEmitter,
+      messageEmitter,
+      getServerExports: () => serverExports,
+      localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
+      trusted: args.trust,
+      trustHint,
+    }),
+    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, predicted }),
+  })
+
   if (args.trust) console.log('  trust: granted (filesystem, AI, server.ts enabled)')
   else if (predicted) console.log(`  trust: restricted — this bulb appears to use ${predicted}; re-run with --trust to enable it:\n  ${trustHint}\n`)
   else console.log('  trust: restricted — re-run with --trust to enable filesystem / AI / server.ts\n')
@@ -140,6 +134,13 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     }
   }
 
+  // Register teardown with the shared cleanup shell (in order: stop the watchers, then remove the
+  // temp server file — node_modules is kept for the next run). server.close / stopLog / unregister
+  // are owned by startAndRegister.
+  if (cleanupWatcher) onCleanup(cleanupWatcher)
+  if (cleanupOverrideWatcher) onCleanup(cleanupOverrideWatcher)
+  onCleanup(() => fs.rm(path.join(path.dirname(bulbPath), '.typebulb', 'server.mjs'), { force: true }))
+
   // Open browser — unless this launch replaced a live server on the same port, in which case its
   // existing tab reconnects over SSE and reloads on its own. Opening a second tab would only pile up
   // (the orphaned-tab complaint); the relaunch loop reuses one tab instead. (Stopping the predecessor
@@ -148,21 +149,4 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     if (replaced.some(s => s.port === port)) console.log('  Reusing the open browser tab.\n')
     else await open(url)
   }
-
-  // Handle shutdown
-  const cleanup = async () => {
-    console.log('\nShutting down...')
-    server.close()
-    cleanupWatcher?.()
-    cleanupOverrideWatcher?.()
-    stopLog()
-    await unregisterServer(process.pid)
-    // Clean up temp server file (keep node_modules for next run)
-    const serverMjs = path.join(path.dirname(bulbPath), '.typebulb', 'server.mjs')
-    await fs.rm(serverMjs, { force: true }).catch(() => {})
-    process.exit(0)
-  }
-
-  process.on('SIGINT', cleanup)
-  process.on('SIGTERM', cleanup)
 }

@@ -1,7 +1,4 @@
-import { listAgentNames } from './registry.js'
-import type { AgentAdapter } from '../../agents/core/server/adapter.js'
-import { ClaudeAdapter } from '../../agents/claude/server/adapter.js'
-import { PiAdapter } from '../../agents/pi/server/adapter.js'
+import { listAgentNames, agentAdapterFactories } from './registry.js'
 
 /**
  * Which harness bare `typebulb agent` should mirror (TB-Skill.md, TB-Agent-Harness.md). Historically bare
@@ -9,15 +6,13 @@ import { PiAdapter } from '../../agents/pi/server/adapter.js'
  * resolves the harness instead — restoring the symmetry of the single universal instruction "run
  * `npx typebulb agent`", which now does the right thing under whichever harness invoked it.
  *
- * Per-agent adapter constructors. Constructing an adapter is side-effect free, so the resolver can read
- * a harness's env marker + session dir WITHOUT importing its server *barrel* (which would boot the
- * Claude switcher on import — TB-Agent-Switcher.md). Static imports, like AGENT_SERVERS in serve.ts:
- * adding a harness adds an entry here too (TB-Agent-Harness.md "Adding a harness").
+ * Per-agent adapter constructors, sourced from the one harness registry (registry.ts). Constructing an
+ * adapter is side-effect free, so the resolver can read a harness's env marker + session dir WITHOUT
+ * importing its server *barrel* (which would boot the Claude switcher on import — TB-Agent-Switcher.md).
+ * Reading the shared map here is what lets adding a harness be a single registry entry
+ * (TB-Agent-Harness.md "Adding a harness").
  */
-const AGENT_ADAPTERS: Record<string, () => AgentAdapter> = {
-  claude: () => new ClaudeAdapter(),
-  pi: () => new PiAdapter(),
-}
+const AGENT_ADAPTERS = agentAdapterFactories()
 
 /**
  * Install every harness's CLI-side support through the adapter contract (pi's background-wait shim

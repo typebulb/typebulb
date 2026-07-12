@@ -727,6 +727,37 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return out
   }
 
+  // ── session peek: the picker's hover-preview (TB-Agent-Mirror-Ready.md) ──
+
+  // The session's last assistant prose chunk — verbatim + display-cleaned through the same `apply`
+  // the transcript renders (no inference — Invariant 1). mtime-keyed like searchTurns: the first
+  // hover pays the scan, repeats are instant, a changed file re-extracts alone.
+  const PEEK_MAX = 800
+  const peekCache = new Map<string, { mtime: number; text: string }>()
+  function peekTail(file: string, mtime: number): string {
+    const hit = peekCache.get(file)
+    if (hit && hit.mtime === mtime) return hit.text
+    let raw = ''
+    try { raw = readFileSync(file, 'utf8') } catch { return '' }
+    let last = ''
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      const e = adapter.parseEntry(line)
+      if (!e) continue
+      for (const ev of adapter.apply(e, state.sessionStartMs).events) {
+        if (ev.type === 'assistant' && ev.text.trim()) last = ev.text.trim()
+      }
+    }
+    const text = last.length > PEEK_MAX ? last.slice(0, PEEK_MAX).trimEnd() + '…' : last
+    peekCache.set(file, { mtime, text })
+    return text
+  }
+
+  async function sessionPeek(sessionId: string) {
+    const sf = adapter.listSessionFiles(state.cwd).find(f => f.sessionId === sessionId)
+    return { text: sf ? peekTail(sf.file, sf.mtime) : '' }
+  }
+
   async function attach(sessionId: string) {
     const s = state
     const sf = adapter.listSessionFiles(s.cwd).find(f => f.sessionId === sessionId)
@@ -749,5 +780,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logEmbedStatus, listSessions, searchSessions, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer }
+  return { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer }
 }

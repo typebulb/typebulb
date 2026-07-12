@@ -2,6 +2,7 @@ import { div, span, button, VElement } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { relTime, truncate } from './util.js'
+import { mdPlain } from './markdown.js'
 
 type SessionRow = { sessionId: string; mtime: number; preview: string; hitCount?: number; snippet?: string }
 
@@ -14,6 +15,16 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   protected filterId = 'session-filter'
   protected listSelector = '#session-list'
   protected filterNoun = 'title'
+
+  // Unread cue (TB-Agent-Mirror-Ready.md): a per-session watermark, baselined at mirror-open so a
+  // row limes only once it changes while we're watching. Cleared on attach (pick), never on peek.
+  // Ephemeral — dies with the page.
+  #seen = new Map<string, number>()
+  #baselined = false
+  // Hover-peek: the last-output preview shown while hovering a row's time. #peekKey = `${id}:${mtime}`
+  // (null = none); the text is fetched lazily and cached by that key.
+  #peekKey: string | null = null
+  #peekCache = new Map<string, string>()
 
   protected search(query: string) { return tb.server.searchSessions(query) as Promise<SessionRow[]> }
 
@@ -42,7 +53,26 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   // consumer (filter, rows, currentIndex) reads it straight. Shared by boot and open.
   async loadSessions() {
     this.sessions = (await tb.server.listSessions()).reverse()
+    this.#reconcileSeen()
     this.parent.updateTitle()
+  }
+
+  // Baseline every session at the first load (mirror-open) so nothing limes until it changes while
+  // we're watching; on later loads advance only the CURRENT session (you're viewing it, so it's
+  // read-to-now). A session that first appears after boot has no watermark, so it limes — new work.
+  #reconcileSeen() {
+    const cur = this.parent.sessionId
+    for (const s of this.sessions) {
+      if (!this.#baselined || s.sessionId === cur) this.#seen.set(s.sessionId, s.mtime)
+    }
+    this.#baselined = true
+  }
+
+  // Changed since we last looked, and not the session we're viewing.
+  #lime(s: { sessionId: string; mtime: number }): boolean {
+    if (s.sessionId === this.parent.sessionId) return false
+    const seen = this.#seen.get(s.sessionId)
+    return seen === undefined || s.mtime > seen
   }
 
   override onAttached() {
@@ -72,6 +102,8 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   }
 
   async pick(sessionId: string) {
+    const s = this.rows().find(x => x.sessionId === sessionId)
+    if (s) this.#seen.set(sessionId, s.mtime)   // attach marks read; peek never does
     this.close()
     // Land at the bottom of the new session, not the old scroll position.
     this.parent.messageList.stickToBottomNextRender()
@@ -101,9 +133,12 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   picker() {
     const sessions = this.rows()
     return div({ class: 'picker' },
-      sessions.length === 0
-        ? this.emptyState('No sessions yet — start one in your terminal.')
-        : div({ id: 'session-list', class: 'picker-list', onScroll: () => this.onListScroll() }, sessions.map((s, i) => this.pickerRow(s, i))),
+      div({ class: 'picker-body' },
+        sessions.length === 0
+          ? this.emptyState('No sessions yet — start one in your terminal.')
+          : div({ id: 'session-list', class: 'picker-list', onScroll: () => this.onListScroll() }, sessions.map((s, i) => this.pickerRow(s, i))),
+        this.peekCard(),
+      ),
       this.filterBox(this.sessions.length, 'session'),
     )
   }
@@ -124,9 +159,54 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
         span({ class: 'picker-dot' }),
         span({ class: ['picker-preview', busy ? 'shimmer-text shimmer-slow' : ''] }, s.preview || '(no preview)'),
         hitsBadge(s.hitCount),
-        span({ class: 'picker-time' }, relTime(s.mtime)),
+        span({
+          class: ['picker-time', this.#lime(s) ? 'unseen' : ''],
+          onMouseEnter: () => this.#peekEnter(s),
+          onMouseLeave: () => this.#peekLeave(s),
+        }, relTime(s.mtime)),
       ),
       snippetLine(s.snippet, this.filter.trim()),
     )
+  }
+
+  #peekEnter(s: SessionRow) {
+    this.#peekKey = `${s.sessionId}:${s.mtime}`
+    void this.#peekLoad(s.sessionId, this.#peekKey)
+    this.update()
+  }
+
+  #peekLeave(s: SessionRow) {
+    if (this.#peekKey === `${s.sessionId}:${s.mtime}`) { this.#peekKey = null; this.update() }
+  }
+
+  async #peekLoad(sessionId: string, key: string) {
+    if (this.#peekCache.has(key)) return
+    let text = ''
+    try { text = String((await tb.server.sessionPeek(sessionId))?.text ?? '') } catch {}
+    this.#peekCache.set(key, text)
+    if (this.#peekKey === key) this.update()
+  }
+
+  // The tail preview — a non-interactive card overlaying the top of the popover (out of flow, so it
+  // never reflows the list under the cursor); the list rests at its newest-at-bottom edge, so a card
+  // at the top rarely covers the row being hovered (TB-Agent-Mirror-Ready.md).
+  peekCard(): VElement | null {
+    if (!this.#peekKey) return null
+    const text = this.#peekCache.get(this.#peekKey)
+    if (text === undefined) return div({ class: 'picker-peek muted' }, '…')
+    if (!text) return div({ class: 'picker-peek muted' }, '(no assistant text yet)')
+    // Prose markdown only (mdPlain: html:false, no bulb/mermaid/svg/katex plugins) — a bulb or
+    // diagram in the tail renders as a code block, never a live mount. Keyed so a new hover remounts
+    // and re-renders (onMounted refires only on remount).
+    return div({
+      class: 'picker-peek md',
+      key: `peek:${this.#peekKey}`,
+      onMounted: (el: Element) => { el.innerHTML = mdPlain.render(text) },
+    })
+  }
+
+  protected override onClosed() {
+    super.onClosed()
+    this.#peekKey = null
   }
 }

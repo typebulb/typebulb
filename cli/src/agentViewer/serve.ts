@@ -5,20 +5,11 @@ import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import open from 'open'
-import { startServer, findAvailablePort } from '../serve/server.js'
+import { startAndRegister } from '../serve/serveSession.js'
 import { watchPath } from '../serve/watcher.js'
-import { registerServer, unregisterServer, startServerLog, findProjectViewer } from '../serve/serverRegistry.js'
-import { isKnownAgent, listAgentNames } from './registry.js'
+import { startServerLog, findProjectViewer } from '../serve/serverRegistry.js'
+import { isKnownAgent, listAgentNames, loadAgentServer } from './registry.js'
 import { buildAgentHtml, clientBundleUrl } from './page.js'
-
-// Each agent mirror's server module, keyed by agent name. The values are *static* `import()` literals
-// so esbuild inlines every agent's `server.ts` into `dist/index.js` (a `import(variable)` would not
-// bundle). Adding an agent (TB-Agent-Harness.md) is a line here plus its `agents/<name>/` code and a registry
-// entry. Each module's shape is the RPC surface startServer hosts, plus a `displayName` const.
-const AGENT_SERVERS: Record<string, () => Promise<Record<string, unknown>>> = {
-  claude: () => import('../../agents/claude/server.js'),
-  pi: () => import('../../agents/pi/server.js'),
-}
 
 /**
  * Serve the Claude agent mirror (TB-Agent-Mirror.md).
@@ -59,7 +50,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // Load the cwd .env cascade BEFORE importing server.ts — it reads process.env at import
   // (TB-Env.md), so the import must be dynamic and come after loadEnv.
   const envResult = loadEnv(args.mode)
-  const agentServer = await AGENT_SERVERS[agent]()
+  const agentServer = await loadAgentServer(agent)
   const displayName = (agentServer.displayName as string) || `${agent} mirror`
   // No bulb file to report against; a synthetic path under cwd keeps reportEnv's
   // "beside the bulb" check from looking at cwd's parent. No server source string at
@@ -87,40 +78,29 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     watch: args.watch,
   })
 
-  const port = await findAvailablePort(args.port)
-
-  const server = await startServer({
-    getHtml,
-    basePath,
-    port,
-    reloadEmitter,
-    // The mirror's server.ts exports are the RPC surface (info/poll/listSessions/…).
-    getServerExports: () => agentServer as unknown as Record<string, Function>,
-    // The mirror is privileged: /__api is ungated, and there is no --trust for it
-    // (TB-Agent-Mirror.md).
-    trusted: true,
-    staticAssets: { mount: `${path.posix.dirname(clientBundleUrl(agent))}/`, dir: assetDir },
+  // Start + register the mirror, and get the shared SIGINT/SIGTERM cleanup shell (serveSession.ts).
+  // The registry identity is the `agent` field, not a `.bulb.md` path (a mirror has none) —
+  // `typebulb agent`'s URL line and the launcher's self-exclusion find it that way
+  // (TB-Agent-Mirror.md). `file` is a sentinel for `logs`/`stop` display only.
+  const { port, url, onCleanup } = await startAndRegister({
+    portPreference: args.port,
+    displayName,
+    stopLog,
+    makeServerOptions: (port) => ({
+      getHtml,
+      basePath,
+      port,
+      reloadEmitter,
+      // The mirror's server.ts exports are the RPC surface (info/poll/listSessions/…).
+      getServerExports: () => agentServer as unknown as Record<string, Function>,
+      // The mirror is privileged: /__api is ungated, and there is no --trust for it
+      // (TB-Agent-Mirror.md).
+      trusted: true,
+      staticAssets: { mount: `${path.posix.dirname(clientBundleUrl(agent))}/`, dir: assetDir },
+    }),
+    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: `agent:${agent}`, cwd: basePath, startedAt: Date.now(), trust: true, agent }),
   })
 
-  const url = `http://localhost:${port}`
-
-  // Self-register so `typebulb agent` (the URL line) and the launcher's self-exclusion find
-  // the mirror. Identity is the `agent` field, not a `.bulb.md` path (a mirror has none) —
-  // see TB-Agent-Mirror.md. `file` is a sentinel for `logs`/`stop` display only.
-  await registerServer({
-    pid: process.pid,
-    port,
-    url,
-    file: `agent:${agent}`,
-    cwd: basePath,
-    startedAt: Date.now(),
-    trust: true,
-    agent,
-  })
-
-  console.log(`\n  ${displayName}`)
-  console.log(`  ${url}`)
-  if (port !== args.port) console.log(`  (port ${args.port} was busy)`)
   if (args.watch) console.log('  Watching for changes...\n')
 
   // Hot reload (dev). In the repo the mirror's source sits beside `dist/`, so watch it, rebuild the
@@ -176,20 +156,13 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
 
   if (args.open) await open(url)
 
-  const cleanup = async () => {
-    console.log('\nShutting down...')
-    // Fail-safe: the agent switcher removes its OpenRouter route on a clean shutdown so a closed mirror
-    // never leaves CC pointed at a dead proxy port (TB-Agent-Switcher.md — Lifecycle).
-    try { (agentServer as { shutdownSwitcher?: () => void }).shutdownSwitcher?.() } catch { /* best-effort */ }
-    // Same shape for the composer's driver: reap the mirror-owned pi process (TB-Agent-Composer.md,
-    // Invariant C2). Absent on agents without a composer (Claude) — optional-chained like the switcher.
-    try { (agentServer as { shutdownComposer?: () => void }).shutdownComposer?.() } catch { /* best-effort */ }
-    server.close()
-    cleanupWatcher?.()
-    stopLog()
-    await unregisterServer(process.pid)
-    process.exit(0)
-  }
-  process.on('SIGINT', cleanup)
-  process.on('SIGTERM', cleanup)
+  // Register teardown with the shared cleanup shell (server.close / stopLog / unregister are owned by
+  // startAndRegister; each step here runs best-effort). Fail-safe: the agent switcher removes its
+  // OpenRouter route so a closed mirror never leaves CC pointed at a dead proxy port
+  // (TB-Agent-Switcher.md — Lifecycle); the composer driver reaps the mirror-owned pi process
+  // (TB-Agent-Composer.md, Invariant C2). Both are optional — absent on agents that lack them (Claude
+  // has no composer; a composer-only agent no switcher).
+  onCleanup(() => (agentServer as { shutdownSwitcher?: () => void }).shutdownSwitcher?.())
+  onCleanup(() => (agentServer as { shutdownComposer?: () => void }).shutdownComposer?.())
+  if (cleanupWatcher) onCleanup(cleanupWatcher)
 }

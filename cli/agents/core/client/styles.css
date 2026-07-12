@@ -446,6 +446,9 @@ body {
    jumps as the filtered list changes height; the row list scrolls inside the capped box, resting at
    its end (newest-at-bottom) — same shape as the launcher's .servers-pop / .bulb-list. */
 .picker-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+/* Positioned wrapper around just the list (not the filter) so the hover-peek card anchors to the
+   list's bottom edge, sitting above the filter input. */
+.picker-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .picker-empty { padding: .8rem; color: var(--muted); font-size: .85rem; text-align: center; }
 .picker-row {
   display: flex;
@@ -491,6 +494,9 @@ body {
   font-size: .72rem;
   min-width: 2.6rem; text-align: right;
 }
+/* Unread cue (TB-Agent-Mirror-Ready.md): the row's time turns the launcher's running-:port green
+   (--fold-marker) when the session changed since the mirror opened and hasn't been viewed. */
+.picker-time.unseen { color: var(--fold-marker); }
 .picker-hits { color: var(--muted); font-size: .72rem; white-space: nowrap; }
 /* Full-text result context: first matching turn, indented past the dot gutter into the title column. */
 .picker-snippet {
@@ -505,6 +511,29 @@ body {
   border-radius: 2px;
   color: var(--fg);
 }
+/* Hover-peek (TB-Agent-Mirror-Ready.md): the session's last output, overlaid over the TOP of the
+   list — not a floating card but part of the menu, opaque over the rows it covers and set off from
+   the rows below by one thick divider. Stops at the left edge of the time column (right), so the
+   elapsed column stays an uninterrupted strip. The list rests newest-at-bottom, so a top overlay
+   rarely sits on the row being hovered. Out of flow (no reflow); pointer-events:none. */
+.picker-peek {
+  position: absolute;
+  top: 0; left: 0; right: 3.4rem;
+  z-index: 5;
+  max-height: 18em;
+  overflow: hidden;
+  padding: .5rem .6rem .6rem;
+  border-radius: 8px 8px 0 0;   /* top rounded to match the menu; bottom square where it meets the rows */
+  /* One veil step over the opaque panel — the mirror's nested-panel shade (a hair off the menu bg,
+     still opaque over the rows it covers). */
+  background: linear-gradient(var(--veil), var(--veil)), var(--panel);
+  border-bottom: 3px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  color: var(--fg);
+  font-size: .8rem; line-height: 1.5;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.picker-peek.muted { color: var(--muted); font-style: italic; }
 
 /* Agent switcher (TB-Agent-Switcher.md) — reuses the .picker popover + rows; just its own width and
    the no-key entry form. The active model is marked with .picker-row.current (the accent dot), like
