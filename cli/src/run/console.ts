@@ -8,7 +8,7 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * Server mode: run only the `server.ts` section directly in Node — compile, dynamic-import, print to
  * stdout. No HTTP server, no browser. Watch mode re-runs on file changes.
  */
-export async function runConsole(bulbPath: string, watch: boolean, mode: string | undefined, local: ResolvedLocalOverride | undefined, serverCacheDir: string) {
+export async function runConsole(bulbPath: string, watch: boolean, mode: string | undefined, local: ResolvedLocalOverride | undefined) {
   const envResult = loadEnv(mode)
   let reported = false
 
@@ -16,7 +16,7 @@ export async function runConsole(bulbPath: string, watch: boolean, mode: string 
     const { bulb, config } = await readBulb(bulbPath)
     // Report once: env loads before the server import below (which reads process.env at import).
     if (!reported) { reportEnv(envResult, bulbPath, bulb.server); reported = true }
-    await importServerModule(bulb.server!, serverCacheDir, local, config.dependencies)
+    await importServerModule(bulb.server!, bulbPath, local, config.dependencies)
   }
 
   console.log(`Running ${path.basename(bulbPath)}...`)
@@ -24,15 +24,23 @@ export async function runConsole(bulbPath: string, watch: boolean, mode: string 
 
   if (watch) {
     console.log('Watching for changes...\n')
+    // Same latest-wins serialization as runWeb: re-runs queue (never overlap the shared compiled
+    // module) and a save superseded before its turn is skipped.
+    let runSeq = 0
+    let runChain: Promise<void> = Promise.resolve()
     watchPath({
       target: bulbPath,
-      onChange: async () => {
-        try {
-          console.log('Re-running...')
-          await run()
-        } catch (e) {
-          console.error('Error:', e)
-        }
+      onChange: () => {
+        const seq = ++runSeq
+        runChain = runChain.then(async () => {
+          if (seq !== runSeq) return
+          try {
+            console.log('Re-running...')
+            await run()
+          } catch (e) {
+            console.error('Error:', e)
+          }
+        })
       },
     })
   }

@@ -3,7 +3,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
-import { loadAndCompile } from '../pipeline.js'
+import { loadAndCompile, serverModulePath } from '../pipeline.js'
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
@@ -17,7 +17,7 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * cells the reload closure swaps and the request handlers read via getters stay
  * local to this function. Runs until SIGINT/SIGTERM.
  */
-export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string, local: ResolvedLocalOverride | undefined, serverCacheDir: string): Promise<void> {
+export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string, local: ResolvedLocalOverride | undefined): Promise<void> {
   // Use current working directory as base for filesystem operations
   const basePath = process.cwd()
 
@@ -52,7 +52,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
 
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)
-  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, serverCacheDir)
+  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local)
   reportEnv(envResult, bulbPath, bulb.server)
 
   // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
@@ -97,23 +97,33 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let cleanupOverrideWatcher: (() => void) | undefined
 
   if (args.watch && reloadEmitter) {
+    // Serialize recompiles (latest wins): a slow compile (e.g. one that npm-installs a new server
+    // dep) must neither run concurrently with a later save's — both write/import the same
+    // compiled server module — nor land after it and reload the browser onto stale code. Saves
+    // arriving mid-compile queue behind it; a queued save superseded by a newer one is skipped.
+    let compileSeq = 0
+    let compileChain: Promise<void> = Promise.resolve()
     cleanupWatcher = watchPath({
       target: bulbPath,
-      onChange: async () => {
-        try {
-          console.log('Recompiling...')
-          const result = await loadAndCompile(bulbPath, true, args.trust, local, serverCacheDir)
-          html = result.html
-          serverExports = result.serverExports
-          // New run boundary (only on a successful recompile — a compile error keeps the old run
-          // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
-          runId++
-          console.log(runMarker(runId))
-          // Signal browser to reload
-          reloadEmitter.emit('reload')
-        } catch (e) {
-          console.error('Compile error:', e)
-        }
+      onChange: () => {
+        const seq = ++compileSeq
+        compileChain = compileChain.then(async () => {
+          if (seq !== compileSeq) return
+          try {
+            console.log('Recompiling...')
+            const result = await loadAndCompile(bulbPath, true, args.trust, local)
+            html = result.html
+            serverExports = result.serverExports
+            // New run boundary (only on a successful recompile — a compile error keeps the old run
+            // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
+            runId++
+            console.log(runMarker(runId))
+            // Signal browser to reload
+            reloadEmitter.emit('reload')
+          } catch (e) {
+            console.error('Compile error:', e)
+          }
+        })
       },
     })
 
@@ -139,7 +149,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // are owned by startAndRegister.
   if (cleanupWatcher) onCleanup(cleanupWatcher)
   if (cleanupOverrideWatcher) onCleanup(cleanupOverrideWatcher)
-  onCleanup(() => fs.rm(path.join(path.dirname(bulbPath), '.typebulb', 'server.mjs'), { force: true }))
+  onCleanup(() => fs.rm(serverModulePath(bulbPath), { force: true }))
 
   // Open browser — unless this launch replaced a live server on the same port, in which case its
   // existing tab reconnects over SSE and reloads on its own. Opening a second tab would only pile up

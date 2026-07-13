@@ -1,4 +1,4 @@
-import { type NegativeCacheStore, type NegativeRecord } from 'typebulb/dts'
+import { type NegativeCacheStore, type NegativeRecord } from 'typebulb/resolver'
 import { atomicWriteFile } from './atomicWrite.js'
 import { readJson } from './cacheUtils.js'
 

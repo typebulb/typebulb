@@ -72,11 +72,11 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
             apply(v);
           } else {
             try { localStorage.removeItem(KEY); } catch (e) {}
-            apply(os());
+            apply(FORCED || os());
           }
         };
         apply(effective());
-        var onOsChange = function() { if (!stored()) apply(os()); };
+        var onOsChange = function() { if (!stored() && !FORCED) apply(os()); };
         mq.addEventListener ? mq.addEventListener('change', onOsChange) : mq.addListener(onOsChange);
         window.__tbTheme = { get: stored, set: set, effective: effective };
         window.addEventListener('keydown', function(e) {

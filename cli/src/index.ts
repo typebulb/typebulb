@@ -176,7 +176,9 @@ async function main(): Promise<void> {
   // unvetted code. (The agent mirror is privileged by construction and never reaches here — it's
   // served by runAgentViewer above, not the bulb path.)
   const remembered = !args.noTrust && isBulbTrusted(bulbPath)
-  if (remembered && !args.trust) console.log('trust: granted from memory (run `typebulb untrust` to revoke)')
+  // stderr: a diagnostic banner — `call` owns stdout for the serialized return (TB-Call Inv 2),
+  // and this prints before the call dispatch below, so stdout would carry it into `… | jq`.
+  if (remembered && !args.trust) console.error('trust: granted from memory (run `typebulb untrust` to revoke)')
   args.trust = args.noTrust ? false : (args.trust || remembered)
 
   // Best-effort read, shared by override validation and mode detection below. A
@@ -212,7 +214,7 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     // Persistent signal that an override is shadowing a dependency (Invariant 7).
-    console.log(`replace: ${local.name} → ${path.relative(process.cwd(), local.dir) || '.'}`)
+    console.error(`replace: ${local.name} → ${path.relative(process.cwd(), local.dir) || '.'}`)
   }
 
   // Type-check subcommand: emit + tsc, return tsc's exit code
@@ -221,9 +223,8 @@ async function main(): Promise<void> {
     return
   }
 
-  // The CLI's `.typebulb` cache (compiled server.mjs + auto-installed node_modules) lives in the
-  // bulb's own parent dir; shared by the call, console, and web modes below.
-  const serverCacheDir = path.dirname(bulbPath)
+  // The CLI's `.typebulb` cache (compiled `<slug>.server.mjs` + auto-installed node_modules)
+  // lives in the bulb's own parent dir — derived from the bulb path (pipeline serverModulePath).
 
   // `call` — invoke one server.ts export headlessly (TB-Call.md): the terminal-facing twin of the
   // browser bridge. Dispatched here, after remembered-trust resolution, so it's gated like --server.
@@ -234,7 +235,6 @@ async function main(): Promise<void> {
       { fn: args.fn!, positional: args.callArgs, argsJson: args.argsJson, hasArgsFlag: args.hasArgsFlag },
       args.mode,
       local,
-      serverCacheDir,
     )
     return
   }
@@ -244,12 +244,12 @@ async function main(): Promise<void> {
   // error surfaces.
   if (bulbInfo && bulbInfo.bulb.server && (isServerOnly(bulbInfo.bulb) || args.server)) {
     requireServerTrust(args.trust, trustHint)
-    await runConsole(bulbPath, args.watch, args.mode, local, serverCacheDir)
+    await runConsole(bulbPath, args.watch, args.mode, local)
     return
   }
 
   // Web mode (default): compile, serve, watch.
-  await runWeb(bulbPath, args, trustHint, local, serverCacheDir)
+  await runWeb(bulbPath, args, trustHint, local)
 }
 
 main().catch((e) => {

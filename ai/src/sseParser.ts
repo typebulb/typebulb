@@ -78,12 +78,19 @@ export async function* consumeSseStreamGen<T = any>(
   let buffer = ''
 
   // reader.read() can block for seconds after cancel; race against abort for immediate exit
+  let onAbort: (() => void) | undefined
   const abortPromise: Promise<never> | null = signal
     ? new Promise<never>((_, reject) => {
         if (signal.aborted) reject(new Error('Aborted'))
-        signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true })
+        onAbort = () => reject(new Error('Aborted'))
+        signal.addEventListener('abort', onAbort, { once: true })
       })
     : null
+  // The race can finish (stream done) with this promise still pending; a later abort of the
+  // same controller would then reject it with no handler — an unhandledrejection (and the
+  // family of the tb.ai() abort leak fixed in 392f4bb3). Pre-attach a no-op handler so the
+  // rejection is always observed; the race still rejects through the original promise.
+  abortPromise?.catch(() => {})
 
   try {
     while (true) {
@@ -111,6 +118,7 @@ export async function* consumeSseStreamGen<T = any>(
       }
     }
   } finally {
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
     try { await reader.cancel() } catch { /* already closed */ }
   }
 }

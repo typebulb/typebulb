@@ -2,7 +2,7 @@
  * Disk-backed DtsCache for the typebulb/dts resolver.
  *
  * Persists .d.ts file content + per-package resolution + negative-URL tracking
- * across CLI invocations so `typebulb dts <bulb>` only goes to network on a
+ * across CLI invocations so a `typebulb check` only goes to network on a
  * cold cache.
  *
  * Layout under ~/.typebulb/cache/dts/:
@@ -12,7 +12,8 @@
  */
 
 import * as path from 'path'
-import { type DtsCache, NegativeCacheHelper } from 'typebulb/dts'
+import { type DtsCache } from 'typebulb/dts'
+import { NegativeCacheHelper } from 'typebulb/resolver'
 import { dtsCacheDir, ensureCacheRoot } from './cacheRoot.js'
 import { atomicWriteFile } from './atomicWrite.js'
 import { FsNegativeStore } from './fsNegativeStore.js'

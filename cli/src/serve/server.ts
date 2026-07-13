@@ -287,6 +287,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         system,
         effort,
         webSearch,
+        signal: c.req.raw.signal,
       })
 
       if (!response.ok) {
@@ -414,8 +415,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           messageEmitter?.removeListener('message', onMessage)
         })
 
-        // Keep connection alive
-        while (true) {
+        // Keep connection alive. Checking `aborted` is what lets this coroutine end when the
+        // page disconnects — Hono's `sleep` ignores abort, and the stream only closes once
+        // this callback returns, so a bare `while (true)` leaks one immortal timer loop per
+        // closed EventSource (every hot reload makes one).
+        while (!stream.aborted) {
           await stream.sleep(30000)
         }
       })

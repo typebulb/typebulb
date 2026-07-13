@@ -73,9 +73,11 @@ export function parseBulb(content: string): ParsedBulb | null {
         // Skip empty lines until fence
         while (i < lines.length && lines[i]?.trim() === '') i++
 
-        // Parse fenced code block (tolerant of trailing whitespace)
+        // Parse fenced code block (tolerant of trailing whitespace). No fence: re-examine
+        // the current line from the top of the loop — it may itself be the next block's
+        // header, which an unconditional skip here would swallow (and every block after it).
         const fenceMatch = lines[i]?.match(FENCE_OPEN_RE)
-        if (!fenceMatch) { i++; continue }
+        if (!fenceMatch) { warnings.push(`**${filename}** has no code fence — block skipped`); continue }
 
         const fence = fenceMatch[1]
         i++

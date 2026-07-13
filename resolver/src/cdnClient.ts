@@ -7,7 +7,9 @@ export type Semver = string & { __semverBrand?: never }
 export type PackageMeta = { name: string; version: string; dependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, PeerMeta> }
 
 type MemoEntry = { value: Semver | undefined; ts: number }
-type JsDelivrMeta = { versions: string[]; distTags?: Record<string,string> }
+// The jsDelivr package endpoint's field is `tags` (verified live); normalized to
+// `distTags` at the fetchVersionsIndex boundary so internal consumers keep one name.
+type JsDelivrMeta = { versions: string[]; tags?: Record<string,string> }
 type PackageJsonPartial = { dependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, PeerMeta> }
 
 export function normalizeRelative(rel: string) {
@@ -89,9 +91,9 @@ export class CdnClient {
     }
 
     await this.cache.clearNegative(name)
-    const distTags = data.distTags && Object.keys(data.distTags).length ? data.distTags : undefined
+    const distTags = data.tags && Object.keys(data.tags).length ? data.tags : undefined
     await this.cache.setIndex(name, data.versions, distTags)
-    return data
+    return { versions: data.versions, distTags }
   }
 
   private parseVersionFromUrl(finalUrl: string) {

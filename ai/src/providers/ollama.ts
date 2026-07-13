@@ -29,7 +29,7 @@ export class OllamaProvider extends ChatCompletionsProvider {
   // operation path is just `/chat/completions` — paste-compatible with every OpenAI-compat vendor
   // (OpenAI `…/v1`, Groq `…/openai/v1`, vLLM/LM Studio `…/v1`). The `/v1` is supplied by the base,
   // not the path: the CLI resolver hands `openai-compat` the user's TB_AI_BASE_URL (a `/v1` base)
-  // and `ollama` a `${OLLAMA_HOST}/v1` base (resolveLocalProvider in runtime/cli/src/serve/server.ts).
+  // and `ollama` a `${OLLAMA_HOST}/v1` base (resolveLocalProvider in runtime/cli/src/serve/localProvider.ts).
   // `defaultBaseUrl` stays the bare origin because it's only the fallback for OLLAMA_HOST (Ollama's
   // own env var, an origin); the resolver appends `/v1` to it.
   readonly defaultBaseUrl = 'http://localhost:11434'

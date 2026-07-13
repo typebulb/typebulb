@@ -21,3 +21,8 @@ export { PeerResolver, type ResolvedRoot, type PackageFlags, type AutoAddedPeer 
 export { VersionResolver, type EffectivePackageResult } from './versionResolver.js'
 export { PackageService, type ImportMap } from './packageService.js'
 export type { PackageCache, HttpClient, PackageRanges, PeerMeta } from './types.js'
+export {
+  NegativeCacheHelper,
+  type NegativeCacheStore,
+  type NegativeRecord,
+} from './negativeCacheHelper.js'

@@ -5,6 +5,8 @@
  * implement against Dexie (web), the filesystem (CLI), or in-memory (tests).
  */
 
+import { attempt } from './attempt.js'
+
 /** Record shape stored per negative-cached key. */
 export interface NegativeRecord {
   until: number
@@ -26,21 +28,21 @@ export class NegativeCacheHelper {
   constructor(private store: NegativeCacheStore) {}
 
   async isNegative(key: string): Promise<boolean> {
-    const rec = await safe(() => this.store.get(key))
+    const rec = await attempt(() => this.store.get(key))
     return !!rec && rec.until > Date.now()
   }
 
   async recordNegative(key: string): Promise<void> {
-    const existing = await safe(() => this.store.get(key))
+    const existing = await attempt(() => this.store.get(key))
     const attempts = (existing?.attempts || 0) + 1
-    await safe(() => this.store.set(key, {
+    await attempt(() => this.store.set(key, {
       until: Date.now() + computeNextTtlMs(attempts),
       attempts,
     }))
   }
 
   async clearNegative(key: string): Promise<void> {
-    await safe(() => this.store.delete(key))
+    await attempt(() => this.store.delete(key))
   }
 }
 
@@ -48,8 +50,4 @@ function computeNextTtlMs(attempts: number): number {
   const base = 15 * 60 * 1000
   const max = 24 * 60 * 60 * 1000
   return Math.min(base * Math.pow(2, Math.max(0, attempts - 1)), max)
-}
-
-async function safe<T>(fn: () => Promise<T>): Promise<T | undefined> {
-  try { return await fn() } catch { return undefined }
 }

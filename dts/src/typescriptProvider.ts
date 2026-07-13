@@ -67,6 +67,7 @@ export class TypescriptProvider implements TypeProvider {
   private async resolveFromSelected(
     sel: ResolutionResult,
     fetchCandidate: (rel: string) => Promise<TypeFetchResult | undefined>,
+    opts?: { subpath?: boolean },
   ) {
     if (sel.kind === 'types') {
       const clean = normalizeRelative(sel.path)
@@ -80,7 +81,12 @@ export class TypescriptProvider implements TypeProvider {
       return fetchCandidate(clean)
     }
     const others = declarationCandidatesFor(sel.path)
-    return this.tryUntilSuccess([...DECLARATION_EXTENSIONS, ...others], fetchCandidate)
+    // For a subpath probe, its own sibling declarations must come before the package-root
+    // index.d.ts — root-first types every subpath as the root module and caches root content
+    // under the subpath key (the TB-Packages.md pitfall). Root-first stays correct for the
+    // root flow that shares this function.
+    const candidates = opts?.subpath ? [...others, ...DECLARATION_EXTENSIONS] : [...DECLARATION_EXTENSIONS, ...others]
+    return this.tryUntilSuccess(candidates, fetchCandidate)
   }
 
   private toResolutionResult(path: string): ResolutionResult {
@@ -125,7 +131,7 @@ export class TypescriptProvider implements TypeProvider {
         const expPath = this.resolveExportsPath(pkg, key)
 
         if (expPath) {
-          const res = await this.resolveFromSelected(this.toResolutionResult(expPath), fetcher)
+          const res = await this.resolveFromSelected(this.toResolutionResult(expPath), fetcher, { subpath: true })
           if (res) return { ...res, resolvedPkg: resolvedFullPkg }
         }
 

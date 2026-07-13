@@ -66,10 +66,13 @@ export async function emitServerTypecheck(opts: ServerEmitOptions): Promise<Serv
   // Drop the override from the install set — it's resolved via tsconfig `paths` to the
   // local .d.ts below, not npm (the published version may not even carry the subpath).
   const serverPackages = extractServerImports(opts.server).filter(p => p !== opts.local?.name)
+  // `check` runs pre-trust (it's the vetting gate, TB-Wait.md), so no install script from a
+  // bulb-declared dep may execute here — type-checking only needs the package files on disk.
   await ensureBulbServerPackages(
     [`@types/node@${TYPES_NODE_VERSION}`, ...serverPackages],
     bulbCacheDir,
     opts.dependencies,
+    { ignoreScripts: true },
   )
 
   // Link the bulb's server node_modules into the emit dir so tsc's default

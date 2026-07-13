@@ -10,12 +10,6 @@ export { clientTbTypings, serverTbTypings } from './tbTypings.js'
 
 export { type DtsCache } from './cache.js'
 
-export {
-  NegativeCacheHelper,
-  type NegativeCacheStore,
-  type NegativeRecord,
-} from './negativeCacheHelper.js'
-
 // DTS resolver pipeline
 export {
   DtsResolver,

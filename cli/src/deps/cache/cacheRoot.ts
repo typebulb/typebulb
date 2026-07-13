@@ -4,8 +4,8 @@
  * Layout under ~/.typebulb/cache/:
  *   version.json   — schema marker; mismatch wipes the cache
  *   packages/      — FsPackageCache (resolver metadata)
- *   dts/           — FsDtsCache (future)
- *   proxy/         — CDN response cache (future)
+ *   dts/           — FsDtsCache (.d.ts resolution cache)
+ *   proxy/         — FsProxyCache (CDN response bytes)
  *
  * All cache subsystems route through this module so we have one place to
  * change the layout and one place to wipe.

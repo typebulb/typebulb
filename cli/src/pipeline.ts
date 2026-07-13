@@ -30,8 +30,17 @@ export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; con
   return { bulb, config: parseConfig(bulb.config), warnings: validateBulbStructure(content) }
 }
 
-/** Compile server source, write to .typebulb/server.mjs, and dynamic-import it */
-export async function importServerModule(serverSource: string, basePath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>): Promise<Record<string, Function>> {
+/** The compiled server module's path: `.typebulb/<slug>.server.mjs` beside the bulb. Keyed by the
+ *  bulb's filename, not just its folder — two server bulbs in one folder (the `typebulbs/` layout),
+ *  or a `call` racing a hot reload, would otherwise clobber a shared `server.mjs` and can
+ *  dynamic-import the *other* bulb's server code through the write→import gap. */
+export function serverModulePath(bulbPath: string): string {
+  const slug = path.basename(bulbPath).replace(/\.bulb\.md$/i, '')
+  return path.join(path.dirname(bulbPath), '.typebulb', `${slug}.server.mjs`)
+}
+
+/** Compile server source, write to `.typebulb/<slug>.server.mjs`, and dynamic-import it */
+export async function importServerModule(serverSource: string, bulbPath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>): Promise<Record<string, Function>> {
   const compiled = transpile(serverSource, { serverOnly: true })
   if (compiled.error) {
     throw new Error(`Server compilation error: ${compiled.error}`)
@@ -45,14 +54,14 @@ export async function importServerModule(serverSource: string, basePath: string,
   let code = compiled.code
   if (local) code = await rewriteServerOverrideImports(code, local)
 
-  const cacheDir = path.join(basePath, '.typebulb')
+  const cacheDir = path.join(path.dirname(bulbPath), '.typebulb')
   await fs.mkdir(cacheDir, { recursive: true })
 
   // Auto-install any npm packages the server code imports
   const packages = extractServerImports(code)
   if (packages.length > 0) await ensureBulbServerPackages(packages, cacheDir, dependencies)
 
-  const serverPath = path.join(cacheDir, 'server.mjs')
+  const serverPath = serverModulePath(bulbPath)
   await fs.writeFile(serverPath, code, 'utf-8')
 
   // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models) before it runs — its free `tb`
@@ -66,7 +75,7 @@ export async function importServerModule(serverSource: string, basePath: string,
   return mod
 }
 
-export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, serverCacheDir: string) {
+export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined) {
   const { bulb, config } = await readBulb(bulbPath)
   const dataChunks = splitIntoChunks(bulb.data)
 
@@ -122,8 +131,8 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   })
 
   // Env is already loaded into process.env by the caller (index.ts runWeb/runConsole) from the
-  // cwd cascade, before this import — see TB-Env.md. The caller also owns where the
-  // `.typebulb` cache lives via serverCacheDir (the bulb's parent dir).
+  // cwd cascade, before this import — see TB-Env.md. The `.typebulb` cache lives in the
+  // bulb's parent dir (serverModulePath).
   //
   // server.ts top-level code runs in Node the moment it's imported — that's the
   // /__api capability. An untrusted launch must not execute it, so skip the import
@@ -131,7 +140,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // the privileged act — never run it without trust).
   let serverExports: Record<string, Function> | null = null
   if (bulb.server && trusted) {
-    serverExports = await importServerModule(bulb.server, serverCacheDir, local, config.dependencies)
+    serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies)
   }
 
   return { html, bulb, serverExports }

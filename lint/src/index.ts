@@ -74,19 +74,27 @@ function importRoot(spec: string): string | null {
   return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
 }
 
-/** Each bare-import root's FIRST occurrence in `lines`, in first-seen order — the one walk shared
+/** Each bare-import root's FIRST occurrence in `source`, in first-seen order — the one walk shared
  *  by `bareImportRoots` and the UNDECLARED_IMPORT rule, so what a caller *derives* into config.json
  *  (e.g. the CLI's `breakout`) matches exactly what that rule would *demand* — the two can't drift. */
-function firstBareRoots(lines: string[]): { root: string; lineIndex: number }[] {
-  const out: { root: string; lineIndex: number }[] = []
-  const seen = new Set<string>()
-  for (let i = 0; i < lines.length; i++) {
-    for (const pattern of IMPORT_FROM) {
-      for (const m of lines[i].matchAll(pattern)) {
-        const root = importRoot(m[1])
-        if (root && !seen.has(root)) { seen.add(root); out.push({ root, lineIndex: i }) }
-      }
+function firstBareRoots(source: string): { root: string; lineIndex: number }[] {
+  // Whole-source matching, NOT per-line: a multi-line import (`import {\n x,\n} from 'react'`)
+  // is invisible line-by-line but seen by the resolver, which applies these same regexes to the
+  // full text — matching scope is part of the "can't drift" contract above.
+  const matches: { root: string; index: number }[] = []
+  for (const pattern of IMPORT_FROM) {
+    for (const m of source.matchAll(pattern)) {
+      const root = importRoot(m[1])
+      if (root) matches.push({ root, index: m.index ?? 0 })
     }
+  }
+  matches.sort((a, b) => a.index - b.index)
+  const seen = new Set<string>()
+  const out: { root: string; lineIndex: number }[] = []
+  for (const { root, index } of matches) {
+    if (seen.has(root)) continue
+    seen.add(root)
+    out.push({ root, lineIndex: source.slice(0, index).split('\n').length - 1 })
   }
   return out
 }
@@ -97,7 +105,7 @@ function firstBareRoots(lines: string[]): { root: string; lineIndex: number }[] 
  * specifiers are excluded (not packages).
  */
 export function bareImportRoots(source: string): string[] {
-  return firstBareRoots(source.split('\n')).map(o => o.root)
+  return firstBareRoots(source).map(o => o.root)
 }
 
 /**
@@ -150,7 +158,7 @@ export function lint(source: string, options: { target: LintTarget; dependencies
  */
 function undeclaredImportIssues(lines: string[], dependencies: Record<string, string>): LintIssue[] {
   const declared = new Set(Object.keys(dependencies))
-  return firstBareRoots(lines)
+  return firstBareRoots(lines.join('\n'))
     .filter(({ root }) => !declared.has(root))
     .map(({ root, lineIndex }) => ({
       type: 'UNDECLARED_IMPORT' as const,

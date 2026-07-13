@@ -9,10 +9,9 @@ export const typebulbShim = `
   // bridge, so privileged tb.* (AI, fs, server RPC) can't reach a host and would
   // otherwise fail with cryptic CORS/CSP errors. Detect it and fail clearly.
   //
-  // The same sandboxed-iframe path also backs the CLI's default (untrusted) launch
-  // (TB-Security.md), where the right message names \`--trust\` rather
-  // than "no host bridge". The host injects window.__TB_EMBED_ERR__ to override the
-  // text; absent it, the nested-bulb wording applies.
+  // The host injects window.__TB_EMBED_ERR__ to override the text; absent it, the
+  // nested-bulb wording applies. (The CLI's untrusted launch is NOT this path — it's
+  // a top-level page, and its \`--trust\` message comes from the server 403.)
   const isEmbedded = window.parent !== window;
   const embedErr = (name) => new Error(
     typeof window.__TB_EMBED_ERR__ === 'function'
@@ -313,7 +312,7 @@ export const typebulbShim = `
 
     // Theme accessor - delegates to the head-script engine (window.__tbTheme).
     // Get: override slot ('dark'|'light'|undefined). Set applies + persists
-    // per-bulb; undefined clears the override. See Specs/Theme.md.
+    // per-bulb; undefined clears the override.
     get theme() { return window.__tbTheme ? window.__tbTheme.get() : undefined; },
     set theme(v) { if (window.__tbTheme) window.__tbTheme.set(v); }
   });

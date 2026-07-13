@@ -15,7 +15,9 @@ export const BUILTINS: Record<string, Function> = {
 /** Resolve a server function by name: a user `server.ts` export wins, else the built-in, and only if
  *  it's actually callable. The single rule both dispatch paths share (Invariant 1). */
 export function resolveServerFn(exports: Record<string, Function> | null | undefined, name: string): Function | undefined {
-  const fn = exports?.[name] ?? BUILTINS[name]
+  // Own-property check: BUILTINS is a plain object literal, so a bare index would hand
+  // back Object.prototype members (`toString`, `constructor`) as dispatchable "functions".
+  const fn = exports?.[name] ?? (Object.hasOwn(BUILTINS, name) ? BUILTINS[name] : undefined)
   return typeof fn === 'function' ? fn : undefined
 }
 

@@ -125,9 +125,20 @@ export abstract class AIProvider {
       const code = (obj.code as StreamErrorCode) || 'unknown'
       throw new ProviderStreamError(obj.message as string, code, !!obj.retryable)
     }
-    // Provider error format (OpenAI/Anthropic style)
+    // Provider error format (OpenAI/Anthropic style). Map the provider's error type so a
+    // mid-stream rate limit / overload carries the same code/retryable it would get pre-stream
+    // from normalizeUpstreamError, instead of defaulting to unknown/non-retryable.
     if (obj.error) {
-      throw new ProviderStreamError(this.extractErrorMessage(obj.error))
+      const err = obj.error as Record<string, unknown>
+      const kind = typeof err === 'object' && err !== null ? String(err.type ?? err.code ?? '') : ''
+      const rateLimited = /rate_limit|too_many_requests/i.test(kind)
+      const overloaded = /overloaded|server_error|unavailable/i.test(kind)
+      const contextExceeded = /context_length/i.test(kind)
+      throw new ProviderStreamError(
+        this.extractErrorMessage(obj.error),
+        rateLimited ? 'rate_limit' : contextExceeded ? 'context_exceeded' : 'unknown',
+        rateLimited || overloaded,
+      )
     }
   }
 

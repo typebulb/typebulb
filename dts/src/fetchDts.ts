@@ -1,5 +1,6 @@
 import { LRUCache } from 'lru-cache'
 import { DtsConfig } from './dtsConfig.js'
+import { fetchWithRetry } from './httpFetch.js'
 import type { DtsCache } from './cache.js'
 
 export type FetchOut = { dts: string; url: string } | undefined
@@ -26,9 +27,9 @@ export function createFetchDts(cache: DtsCache) {
       if (existing) return existing
 
       const p = (async (): Promise<FetchOut> => {
-        const resp = await fetch(url, { cache: 'no-store' })
-        if (!resp.ok) {
-          if (resp.status === 404) {
+        const resp = await fetchWithRetry(url, { init: { cache: 'no-store' } })
+        if (!resp?.ok) {
+          if (resp?.status === 404) {
             negativeCache.set(url, true)
             await cache.recordNegative(url)
           }

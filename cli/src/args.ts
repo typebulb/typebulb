@@ -229,6 +229,13 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (!arg.startsWith('-')) {
       if (result.subcommand === 'call' || result.subcommand === 'send') callPositionals.push(arg)
       else result.file = arg
+    } else {
+      // Unknown flag: fail rather than silently ignore — a typo'd `--no-wath` running with watch
+      // on, or `call add -1 2` silently dropping the `-1`, is wrong behavior with exit 0.
+      const hint = result.subcommand === 'call' ? ` (for a negative or dash-leading argument, use --args '<json-array>')`
+        : ''
+      console.error(`Unknown option: ${arg}${hint}`)
+      process.exit(1)
     }
   }
 

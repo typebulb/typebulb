@@ -88,6 +88,14 @@ export async function sendAIRequest(
   })
 }
 
+/** Providers report context overflow as a 400 with a telltale message, not a 413 — Anthropic
+ *  "prompt is too long", OpenAI "maximum context length" / `context_length_exceeded`, Gemini
+ *  "input token count exceeds". Message-match so the promised `context_exceeded` code actually
+ *  fires (TB-AI.md Error Handling). */
+export function isContextExceededMessage(message: string): boolean {
+  return /prompt is too long|context[_ ](length|window)|maximum context|token count exceeds|too many tokens/i.test(message)
+}
+
 /** Parse an upstream error response into our standard error payload */
 export async function normalizeUpstreamError(
   response: Response,
@@ -100,7 +108,8 @@ export async function normalizeUpstreamError(
 
   let code: StreamErrorPayload['code'] = 'unknown'
   if (status === 429) code = 'rate_limit'
-  else if (status === 413) code = 'context_exceeded'
+  else if (status === 413 || isContextExceededMessage(message)) code = 'context_exceeded'
 
-  return { code, message, retryable: status === 429 }
+  // Retryable: rate limits and server-side failures (500/502/503, Anthropic's 529 overload).
+  return { code, message, retryable: status === 429 || status >= 500 }
 }

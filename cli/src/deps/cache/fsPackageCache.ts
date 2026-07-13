@@ -22,8 +22,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import type { PackageCache, PeerMeta } from 'typebulb/resolver'
-import { NegativeCacheHelper } from 'typebulb/dts'
+import { NegativeCacheHelper, type PackageCache, type PeerMeta } from 'typebulb/resolver'
 import { packagesCacheDir, ensureCacheRoot } from './cacheRoot.js'
 import { atomicWriteFile } from './atomicWrite.js'
 import { FsNegativeStore } from './fsNegativeStore.js'

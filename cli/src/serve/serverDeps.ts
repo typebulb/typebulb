@@ -36,14 +36,30 @@ const execFileAsync = promisify(execFile)
  *                the same published version on each — no cross-consumer skew. A spec
  *                that already carries a version is left untouched.
  */
+/** Shape of an installable npm spec: optionally-scoped name, optional @range of shell-inert
+ *  characters. Everything a normal `name@^1.2.3` / `@scope/name@1.x` needs — and nothing the
+ *  shell can interpret (`&`, `|`, `;`, `<`, `>`, spaces, quotes…). Required because the npm
+ *  invocation below runs `shell: true` (Windows npm.cmd resolution) with specs sourced from
+ *  the bulb's own config.json / server.ts, i.e. untrusted-authored text (TB-Review R1). */
+const SAFE_NPM_SPEC = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-zA-Z0-9.^~*x-]+)?$/i
+
 export async function ensureBulbServerPackages(
   specs: string[],
   bulbCacheDir: string,
   declaredRanges?: Record<string, string>,
+  opts?: { ignoreScripts?: boolean },
 ): Promise<void> {
   const resolved = specs.map(spec => applyDeclaredRange(spec, declaredRanges))
   const missing = resolved.filter(spec => !isInstalled(spec, bulbCacheDir))
   if (missing.length === 0) return
+
+  const unsafe = missing.filter(spec => !SAFE_NPM_SPEC.test(spec))
+  if (unsafe.length) {
+    throw new Error(
+      `Refusing to install npm spec(s) with unsupported characters: ${unsafe.join(', ')}\n` +
+      `  Use a plain name with an exact / caret / tilde range (e.g. three@^0.160.0).`,
+    )
+  }
 
   await fs.mkdir(bulbCacheDir, { recursive: true })
   const pkgJsonPath = path.join(bulbCacheDir, 'package.json')
@@ -52,7 +68,8 @@ export async function ensureBulbServerPackages(
   }
 
   console.log(`  Installing: ${missing.join(', ')}`)
-  await execFileAsync('npm', ['install', '--no-audit', '--no-fund', ...missing], { cwd: bulbCacheDir, shell: true })
+  const flags = ['--no-audit', '--no-fund', ...(opts?.ignoreScripts ? ['--ignore-scripts'] : [])]
+  await execFileAsync('npm', ['install', ...flags, ...missing], { cwd: bulbCacheDir, shell: true })
 }
 
 /** A bare spec declared in the bulb's config.json installs at that range; a spec
