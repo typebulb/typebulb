@@ -4,10 +4,14 @@ import { type SubscriptKind, blocks, orderedKinds, isBulbFormat } from './regist
 import { unescapeYamlString } from './yaml.js'
 
 // The block grammar: a `**filename**` header on its own line, then a fenced code block (3+ backticks,
-// optional language).
+// optional language). Exported so the surgical writer (serialize.ts replaceBulbBlock) shares this
+// grammar rather than restating it — parse and replace must never disagree about what a fence is.
 const BLOCK_HEADER_RE = /^\*\*(.+)\*\*$/
-const FENCE_OPEN_RE = /^(`{3,})(\w*)\s*$/
+export const FENCE_OPEN_RE = /^(`{3,})(\w*)\s*$/
 const BLOCK_PATHS = new Set<string>(orderedKinds.map(k => blocks[k].path))
+
+/** The closing-fence test for a given opening fence (the fence chars alone, trailing whitespace ok). */
+export const fenceCloseRe = (fence: string): RegExp => new RegExp(`^${fence}\\s*$`)
 
 export interface BulbFrontmatter {
   format: string
@@ -83,7 +87,8 @@ export function parseBulb(content: string): ParsedBulb | null {
         i++
 
         const contentLines: string[] = []
-        while (i < lines.length && !lines[i]?.match(new RegExp(`^${fence}\\s*$`))) {
+        const closeRe = fenceCloseRe(fence)
+        while (i < lines.length && !lines[i]?.match(closeRe)) {
           contentLines.push(lines[i])
           i++
         }

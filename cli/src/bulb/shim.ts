@@ -32,6 +32,28 @@ export const typebulbShim = `
   // Read from window each time so updates are visible
   const getData = () => window.__TB_DATA__ || [];
 
+  // #tb= fragment restore (TB-Inference.md "Sharing a local run"): a refreshed or pasted share
+  // URL re-injects its run before the bulb code reads tb.insight()/tb.data() — the template's
+  // module script awaits __tbBoot, so the async decode still lands ahead of synchronous startup
+  // reads. Decode failure falls through to the file's own blocks with a console note.
+  if (!isEmbedded && location.protocol.indexOf('http') === 0 && location.hash.indexOf('#tb=') === 0) {
+    globalThis.__tbBoot = fetch('/__infer-decode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash: location.hash })
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res && Array.isArray(res.data)) {
+          window.__TB_INSIGHT__ = res.insightJson;
+          window.__TB_DATA__ = res.data;
+        } else {
+          console.warn('[typebulb] The #tb= fragment could not be decoded (incomplete or corrupted link) — using the bulb file state.');
+        }
+      })
+      .catch(() => {});
+  }
+
   // tb.onMessage subscribers, fed by the events-SSE 'message' channel (typebulb send). A message is
   // JSON-or-string: parse as JSON, else hand back the raw string; '' (a bare \`send\`) ⇒ undefined.
   const messageHandlers = new Set();
@@ -185,6 +207,52 @@ export const typebulbShim = `
   })();
   const ai = Object.assign(aiCall, { stream: aiStream });
 
+  // tb.infer() — the local inference layer (TB-Inference.md). The UI and network live in the
+  // lazy-imported modal module (/__infer-ui.js — zero bytes here until the first call); the shim
+  // stays the state machine and globals writer. The promise settles once: a modal retry after a
+  // rejected promise still updates runtime state on success, for tb.insight() readers.
+  let inferState = 'idle';
+  let dataOverrides = null;
+  const infer = (opts = {}) => {
+    if (isEmbedded) return Promise.reject(embedErr('tb.infer()'));
+    if (inferState === 'running') return Promise.reject(new Error('Inference already in progress'));
+    inferState = 'running';
+    // Data priority (matching the .com sandbox): explicit arg > setData overrides > undefined —
+    // the modal then seeds from the SOURCE chunks (/__infer-info), the local Data tab, exactly as
+    // .com's IDE modal reseeds from the Data tab rather than post-run runtime state.
+    let data = opts.data;
+    if (data === undefined && dataOverrides) data = Object.values(dataOverrides);
+    if (data !== undefined && !Array.isArray(data)) data = [data];
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (fn, v) => { if (!settled) { settled = true; fn(v); } };
+      import('/__infer-ui.js').then((ui) => {
+        ui.runInference({
+          data,
+          // The transport reader is the shim's — one NDJSON decoder per page, never two
+          // drifting copies (TB-Streaming.md envelope: payload-side, so drift is not tolerable).
+          readStream,
+          onComplete: (final) => {
+            // Runtime state only, never the file (TB-Inference.md Invariant 2).
+            window.__TB_INSIGHT__ = final.insightJson;
+            if (final.data && final.data.length) window.__TB_DATA__ = final.data;
+            if (final.hash) history.replaceState(null, '', location.pathname + location.search + final.hash);
+            inferState = 'complete';
+            settle(resolve, final.insight);
+          },
+          onError: (err) => {
+            inferState = 'error';
+            const e = new Error(err.message); e.code = err.code; e.retryable = !!err.retryable;
+            settle(reject, e);
+          },
+          onCancel: () => {
+            if (!settled) { inferState = 'idle'; settle(resolve, undefined); }
+          }
+        });
+      }).catch((e) => { inferState = 'error'; settle(reject, e); });
+    });
+  };
+
   // tb.server.<fn>(...) — one call object that is both awaitable (single result) and async-iterable
   // (a streamed async-generator export). The server picks by export kind; this stays graceful if
   // they're mismatched (await a stream → array of chunks; for-await a normal result → one value).
@@ -228,15 +296,11 @@ export const typebulbShim = `
     json: (index) => parseJson(getData()[index]),
     insight: () => window.__TB_INSIGHT__ ? parseJson(window.__TB_INSIGHT__) : undefined,
 
-    // Inference not available locally
-    infer: () => {
-      if (isEmbedded) return Promise.reject(embedErr('tb.infer()'));
-      alert('This bulb uses AI inference.\\n\\nFor local bulbs, simply ask your AI assistant (e.g. Claude Code) to read your .bulb.md file and edit the data.txt and insight.json blocks directly.');
-      return Promise.reject(new Error('tb.infer() is not available in the local CLI.'));
-    },
-    inferenceState: () => 'idle',
-    setData: () => {},
-    resetInferenceState: () => {},
+    // Inference (TB-Inference.md) — modal-hosted one-shot LLM call over the bulb's own blocks
+    infer,
+    inferenceState: () => inferState,
+    setData: (index, content) => { if (!dataOverrides) dataOverrides = {}; dataOverrides[index] = content; },
+    resetInferenceState: () => { inferState = 'idle'; dataOverrides = null; },
 
     // AI - tb.ai() proxies to the provider via the local server; tb.ai.stream() streams AiChunks.
     ai,

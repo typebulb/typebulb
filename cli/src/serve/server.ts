@@ -9,8 +9,10 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
-import { normalizeUpstreamError, consumeStreamText, streamAiChunks } from 'typebulb/ai'
+import { normalizeUpstreamError, consumeStreamText, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
+import { parseConfig, splitIntoChunks } from 'typebulb/format'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
+import { inferModalJs } from '../bulb/inferModalUi.js'
 import { recordDenial } from './serverRegistry.js'
 import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
@@ -67,10 +69,17 @@ export interface ServerOptions {
    *  `listenerCount('message')` is the count `/__send` reports back. */
   messageEmitter?: EventEmitter
   getServerExports?: () => Record<string, Function> | null
+  /** The bulb's raw block sources for `tb.infer()` prompt building (TB-Inference.md): `code` is
+   *  the TSX source, not transpiled output. A closure over the latest compile, like
+   *  `getServerExports`, so hot reload stays fresh. */
+  getBulbBlocks?: () => { infer: string; insight: string; code: string; config: string; data: string } | null
+  /** "Save to bulb" (TB-Inference.md): write a decoded inference run into the bulb file's
+   *  data.txt/insight.json blocks. Owned by the web runner (it knows the file and the watcher). */
+  saveInferenceResult?: (data: string[], insightJson: string) => Promise<void>
   /** Local package override: serve `<name>`'s bytes read-only from `serveDir`. */
   localOverride?: { name: string; serveDir: string }
   /** Whether the bulb was launched with `--trust`. When false (the default),
-   *  the three privileged endpoints (`/__fs`, `/__api`, `/__ai`) are hard-denied
+   *  the privileged endpoints (`/__fs`, `/__api`, `/__ai`, `/__infer`, `/__infer-save`) are hard-denied
    *  server-side — the airtight half of default-deny (TB-Security.md),
    *  independent of the sandboxed-frame origin isolation that also fences them off.
    *  `trustHint` is the re-run command surfaced in the 403 for non-browser callers. */
@@ -90,7 +99,7 @@ export interface ServerInstance {
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, port, reloadEmitter, messageEmitter, getServerExports, localOverride, trusted = false, trustHint, staticAssets } = options
+  const { getHtml, basePath, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets } = options
 
   const app = new Hono()
 
@@ -110,11 +119,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     c.res.headers.set('Cross-Origin-Embedder-Policy', 'credentialless')
   })
 
-  // The capability boundary (TB-Security.md, Trust Invariant 2): the only
-  // routes that touch the user's filesystem, API keys, or Node. Both guards below
-  // apply to exactly this set — defining it once keeps "these three are privileged"
-  // a single source of truth.
-  const PRIVILEGED_ROUTES = ['/__fs/*', '/__api/*', '/__ai']
+  // The capability boundary (TB-Security.md, Trust Invariant 2): the only routes that touch the
+  // user's filesystem, API keys, or Node, each paired with the capability its denial names (the
+  // same labels predictTrust echoes, so the proactive and reactive prompts read alike). Both
+  // guards below apply to exactly this set — one table keeps route-is-privileged and
+  // what-was-denied from drifting apart.
+  const PRIVILEGED_ROUTES: Array<[pattern: string, capability: string]> = [
+    ['/__fs/*', 'the filesystem'],
+    ['/__api/*', 'server-side code (server.ts)'],
+    ['/__ai', 'AI (your API keys)'],
+    ['/__infer', 'AI (your API keys)'],
+    ['/__infer-save', 'the filesystem'],
+  ]
 
   // Trust gate (default-deny). Without `--trust`, the privileged endpoints are
   // hard-denied here — the contract of TB-Security.md. This is
@@ -129,9 +145,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Record which capability was denied so a host (the launcher) can offer to relaunch
       // trusted. Fire-and-forget — never block the 403 on a registry write.
       const p = new URL(c.req.url).pathname
-      const cap = p.startsWith('/__fs') ? 'the filesystem'
-        : p === '/__ai' ? 'AI (your API keys)'
-        : 'server-side code (server.ts)'
+      const cap = PRIVILEGED_ROUTES.find(([pat]) =>
+        pat.endsWith('/*') ? p.startsWith(pat.slice(0, -2)) : p === pat
+      )?.[1] ?? 'server-side code (server.ts)'
       void recordDenial(process.pid, cap)
       const hint = trustHint ? `\n  ${trustHint}` : ''
       return c.text(`Forbidden: this capability requires --trust.${hint}`, 403)
@@ -160,7 +176,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     await next()
   }
 
-  for (const route of PRIVILEGED_ROUTES) {
+  for (const [route] of PRIVILEGED_ROUTES) {
     app.use(route, trustGate)
     app.use(route, csrfGuard)
   }
@@ -312,6 +328,116 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       return c.json(toStreamError(e), 500)
     }
   })
+
+  // Inference endpoint — tb.infer() (TB-Inference.md). The prompt is built server-side from the
+  // bulb's own blocks (hot-reload fresh via getBulbBlocks); the request carries only the data
+  // chunks the modal showed. Text deltas stream as NDJSON chunks for the modal's streaming view;
+  // the final envelope carries the sanitized result plus the #tb= share fragment.
+  app.post('/__infer', async (c) => {
+    try {
+      const { data } = await c.req.json<{ data?: string[] }>().catch(() => ({}) as { data?: string[] })
+      const blocks = getBulbBlocks?.()
+      if (!blocks?.infer.trim()) {
+        return c.json({ message: 'This bulb has no infer.md block.', code: 'unknown', retryable: false }, 400)
+      }
+      const resolved = resolveLocalProvider()
+      if (typeof resolved === 'string') {
+        return c.json({ message: resolved, code: 'unknown', retryable: false }, 400)
+      }
+
+      const chunks = Array.isArray(data) ? data.map(String) : []
+      const prompt = buildInferencePrompt(blocks, chunks)
+      const response = await sendTbAi(resolved, {
+        messages: [{ role: 'user', content: prompt }],
+        signal: c.req.raw.signal,
+      })
+      if (!response.ok) {
+        const error = await normalizeUpstreamError(response, resolved.protocol)
+        return c.json(error, response.status as any)
+      }
+
+      const source = (async function* () {
+        let full = ''
+        for await (const chunk of streamAiChunks(response, resolved.protocol)) {
+          if (chunk.kind !== 'text' || !chunk.text) continue
+          full += chunk.text
+          yield { kind: 'delta', text: chunk.text }
+        }
+        const result = sanitizeJsonOutput(full)
+        if (result.parsed === null) {
+          // Keep the evidence: without this, a parse failure is undiagnosable after the modal
+          // closes (the streamed text is gone). Tail-truncated so a runaway output can't flood.
+          console.warn('[tb.infer] output not valid JSON after sanitize; raw output (last 4000 chars):\n' + full.slice(-4000))
+          throw new ProviderStreamError('LLM output is not valid JSON', 'parse_error', true)
+        }
+        if (result.fixesApplied.length) {
+          console.warn('[tb.infer] sanitized output, fixes applied:', result.fixesApplied.join(', '))
+        }
+        const final = { insight: result.parsed, insightJson: result.json, data: chunks }
+        yield { kind: 'complete', ...final, fixesApplied: result.fixesApplied, hash: encodeToHash(final) }
+      })()
+      return streamNdjson(c, source)
+    } catch (e) {
+      return c.json(toStreamError(e), 500)
+    }
+  })
+
+  /** The `{hash}` body shared by /__infer-decode and /__infer-save: the page's `#tb=` fragment,
+   *  decoded or null. */
+  const decodeHashBody = async (c: Context): Promise<ReturnType<typeof decodeFromHash>> => {
+    const { hash } = await c.req.json<{ hash?: string }>().catch(() => ({}) as { hash?: string })
+    return typeof hash === 'string' ? decodeFromHash(hash) : null
+  }
+
+  // "Save to bulb" — promote the current #tb= run to source (TB-Inference.md). The fragment is the
+  // carrier: the modal POSTs the page's hash, we decode it and rewrite the file's data/insight
+  // blocks. Trust-gated (it writes the bulb file); the explicit modal gesture is the one sanctioned
+  // writer — tb.infer() itself never touches the file (Invariant 2).
+  app.post('/__infer-save', async (c) => {
+    try {
+      if (!saveInferenceResult) {
+        return c.json({ message: 'Save is not available for this server.', code: 'unknown', retryable: false }, 400)
+      }
+      const result = await decodeHashBody(c)
+      if (!result) {
+        return c.json({ message: 'No decodable #tb= fragment to save.', code: 'unknown', retryable: false }, 400)
+      }
+      await saveInferenceResult(result.data, result.insightJson)
+      return c.json({ ok: true })
+    } catch (e) {
+      return c.json(toStreamError(e), 500)
+    }
+  })
+
+  // Modal seed for tb.infer's confirmation view: the resolved .env pair (or the resolver's
+  // message, so a broken .env surfaces before any spend), the bulb's config.inference labels,
+  // and the SOURCE data chunks. Source, not runtime: .com's IDE modal always reseeds from the
+  // Data tab, never from post-run runtime state — the file is the local Data tab, and seeding
+  // from runtime globals made a completed run's filtered chunks silently become the next seed
+  // (an emptied chunk's tab vanished on reopen). Ungated like /__models: everything here is
+  // already served in the bulb page itself, never keys.
+  app.get('/__infer-info', (c) => {
+    const blocks = getBulbBlocks?.()
+    const inference = parseConfig(blocks?.config ?? '').inference
+    const data = splitIntoChunks(blocks?.data ?? '')
+    const resolved = resolveLocalProvider()
+    if (typeof resolved === 'string') return c.json({ error: resolved, inference, data })
+    return c.json({ provider: resolved.protocol, model: resolved.model, inference, data })
+  })
+
+  // #tb= fragment decode for the shim's boot restore (TB-Inference.md "Sharing a local run").
+  // The fragment never rides an HTTP request on its own (its privacy property), so the page must
+  // send it here — the server has fflate, the page doesn't. Pure function of caller-supplied
+  // data, no capability, so NOT trust-gated: viewing a shared run is page data, and a Restricted
+  // bulb must be able to consume one (parity with .com published pages). CSRF-guarded like /__log.
+  app.use('/__infer-decode', csrfGuard)
+  app.post('/__infer-decode', async (c) => {
+    return c.json((await decodeHashBody(c)) ?? { error: 'invalid fragment' })
+  })
+
+  // The lazy-loaded inference modal (TB-Inference.md): fetched by the shim on the first
+  // tb.infer() call, so a bulb that never infers serves a page with no host UI in it.
+  app.get('/__infer-ui.js', (c) => c.body(inferModalJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }))
 
   // Model discovery - fetches catalog from typebulb.com, filtered by local env API keys
   app.get('/__models', async (c) => {

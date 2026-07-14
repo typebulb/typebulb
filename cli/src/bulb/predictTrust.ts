@@ -16,7 +16,7 @@
  * Returns the same human capability label the gate stamps on a real denial (so the proactive
  * prompt and the reactive one read alike), or undefined if nothing matched.
  */
-export function predictTrust(bulb: { code: string; server: string }): string | undefined {
+export function predictTrust(bulb: { code: string; server: string; infer: string }): string | undefined {
   // A server.ts block is server-side Node, reached through /__api — the strongest signal, and
   // structural (its mere presence) rather than a textual guess.
   if (bulb.server.trim()) return 'server-side code (server.ts)'
@@ -24,6 +24,8 @@ export function predictTrust(bulb: { code: string; server: string }): string | u
   const code = bulb.code
   if (/\btb\s*\.\s*fs\b/.test(code) || code.includes('/__fs')) return 'the filesystem'
   if (/\btb\s*\.\s*ai\b/.test(code) || code.includes('/__ai')) return 'AI (your API keys)'
+  // An infer.md block is structural like server.ts: tb.infer() runs against the user's keys.
+  if (bulb.infer.trim() || /\btb\s*\.\s*infer\b/.test(code)) return 'AI (your API keys)'
   // tb.server.<fn> other than the ungated tb.server.log, or a raw /__api call.
   if (/\btb\s*\.\s*server\s*\.\s*(?!log\b)\w/.test(code) || code.includes('/__api')) {
     return 'server-side code (server.ts)'

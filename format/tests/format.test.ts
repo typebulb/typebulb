@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs,
+  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -281,5 +281,51 @@ describe('registry', () => {
   })
   it('kindFromPath round-trips every block', () => {
     for (const kind of orderedKinds) expect(kindFromPath(blocks[kind].path)).toBe(kind)
+  })
+})
+
+describe('replaceBulbBlock', () => {
+  const bulb = `---
+format: typebulb/v1
+name: Plot
+---
+
+Some prose the author left between blocks.
+
+**data.txt**
+
+\`\`\`txt
+old data
+\`\`\`
+
+**insight.json**
+
+\`\`\`json
+{"old": true}
+\`\`\`
+`
+
+  it('replaces fence content surgically, preserving prose and sibling blocks', () => {
+    const out = replaceBulbBlock(bulb, 'insight', '{"new": 1}')
+    expect(out).toContain('Some prose the author left between blocks.')
+    expect(out).toContain('old data')
+    expect(out).toContain('{"new": 1}')
+    expect(out).not.toContain('{"old": true}')
+    expect(toBulbData(parseBulb(out)!).insight).toBe('{"new": 1}')
+  })
+
+  it('appends the block when absent', () => {
+    const noInsight = replaceBulbBlock(bulb.replace(/\*\*insight[\s\S]*$/, ''), 'insight', '{"a": 1}')
+    expect(toBulbData(parseBulb(noInsight)!).insight).toBe('{"a": 1}')
+  })
+
+  it('grows the fence when the new content contains backtick runs', () => {
+    const out = replaceBulbBlock(bulb, 'data', 'has a ``` fence inside')
+    expect(toBulbData(parseBulb(out)!).data).toBe('has a ``` fence inside')
+  })
+
+  it('leaves an unterminated block untouched', () => {
+    const broken = '---\nformat: typebulb/v1\nname: P\n---\n\n**data.txt**\n\n```txt\nruns to eof'
+    expect(replaceBulbBlock(broken, 'data', 'x')).toBe(broken)
   })
 })

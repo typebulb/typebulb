@@ -26,6 +26,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
 - **Local caching** — Resolver metadata and CDN package bytes are cached under `~/.typebulb/cache/`, so repeat runs don't re-hit the network and warm runs work offline.
 - **`tb.ai()`** — a bulb's own code calling AI providers at runtime (chatbots, agents, experiments). `tb.models()` lists available models. Set API keys in `.env` (see below). Requires `--trust`.
+- **`tb.infer()`** — one-shot runtime inference over the bulb's own blocks (`infer.md` + `data.txt` → `insight.json`), with a confirmation modal, streaming, and share/save of a good run. Requires `--trust`.
 - **Restricted by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces a Restricted run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
 - **Agent mirror** — a browser view of your coding agent's sessions, rendering embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs. On Pi it also carries a prompt panel, so the user can drive their pi sessions from the mirror directly. `typebulb agent` brings it up, auto-detecting your harness (Claude Code or Pi) — see [Agent Harness Support](#agent-harness-support). `typebulb skill` prints this whole README as an Agent Skill the agent can read and save.
@@ -75,7 +76,7 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 | `**styles.css**` | CSS. |
 | `**config.json**` | `dependencies` and a `description`. |
 | `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
-| `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()` — a typebulb.com feature; not supported locally. |
+| `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()`: instructions + example output. `tb.insight()` reads the result. Requires `--trust` locally. |
 | `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
 | `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Mostly plain Node — log with `console.log` — but `tb.ai`/`tb.ai.stream`/`tb.models` are callable here too (under `--trust`). **Local only.** |
 
@@ -161,30 +162,34 @@ Or install globally:
 npm install -g typebulb
 ```
 
-## The `tb.*` API, by target
+## The `tb.*` API
 
-`tb` is a pre-declared global your code can use without importing. What each call does, and where it works:
+`tb` is a pre-declared global your code can use without importing. One access rule covers the whole
+table: the *Needs trust* rows are the privileged tier — locally they 403 until the run is trusted
+(`--trust`), and they are exactly the calls an **embedded** bulb doesn't have at all (an embed can
+never be trusted; the call throws `"not available in an embedded bulb"`). Everything else works
+everywhere.
 
-| API | What it does | Local | Embedded |
-|-----|--------------|:-----:|:--------:|
-| `tb.data(n)` / `tb.json(n)` | Read data chunk `n` from the `data.txt` block — raw string, or parsed JSON | ✅ | ✅ |
-| `tb.insight()` | Read the `insight.json` block as JSON | ✅ | ✅ |
-| `tb.theme` | Get/set the light/dark override; `undefined` follows the OS | ✅ | ✅ |
-| `tb.mode` | Runtime mode — `'local'` (CLI) or `'embedded'` (sandboxed iframe); `'editor'`/`'published'` on typebulb.com | ✅ | ✅ |
-| `tb.proxy(url)` | Rewrite a CDN URL to load through the host origin (Web Worker / WASM) | ✅ | ✅ |
-| `tb.dump(...)` | Log values (incl. lazy / device-backed tensors) to the browser console | ✅ | ✅ |
-| `tb.copy(text)` | Copy text to the clipboard | ✅ | ✅ |
-| `tb.url()` | Get the bulb URL (the served localhost URL, locally) | ✅ | ✅ |
-| `tb.models()` | List available AI models (for dynamic model selectors); returns `[]` when embedded (no host AI) | ✅ | ✅ |
-| `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | ✅ | ✅ |
-| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send` — inert when embedded (no sender) | ✅ | ✅ |
-| `tb.fs.read/readBytes/write` | Read and write local files | ✅ `--trust` | ❌ |
-| `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | ✅ `--trust` | ❌ |
-| `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | ✅ `--trust` | ❌ |
-| `tb.ai.stream({ … })` | Streaming AI — `for await` an `AsyncIterable<{ kind, text }>` of deltas | ✅ `--trust` | ❌ |
-| `tb.infer()` | One-shot LLM call driven by the `infer.md` block | ❌ | ❌ |
+| API | What it does | Needs trust |
+|-----|--------------|:-----------:|
+| `tb.data(n)` / `tb.json(n)` | Read data chunk `n` from the `data.txt` block — raw string, or parsed JSON | |
+| `tb.insight()` | Read the `insight.json` block as JSON | |
+| `tb.theme` | Get/set the light/dark override; `undefined` follows the OS | |
+| `tb.mode` | Runtime mode — `'local'` (CLI) or `'embedded'` (sandboxed iframe); `'editor'`/`'published'` on typebulb.com | |
+| `tb.proxy(url)` | Rewrite a CDN URL to load through the host origin (Web Worker / WASM) | |
+| `tb.dump(...)` | Log values (incl. lazy / device-backed tensors) to the browser console | |
+| `tb.copy(text)` | Copy text to the clipboard | |
+| `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
+| `tb.models()` | List available AI models (for dynamic model selectors); returns `[]` when embedded (no host AI) | |
+| `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | |
+| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send` — inert when embedded (no sender) | |
+| `tb.fs.read/readBytes/write` | Read and write local files | yes |
+| `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | yes |
+| `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | yes |
+| `tb.ai.stream({ … })` | Streaming AI — `for await` an `AsyncIterable<{ kind, text }>` of deltas | yes |
+| `tb.infer()` | One-shot LLM call driven by the `infer.md` block — opens a confirmation modal, streams, updates `tb.insight()` | yes |
 
-- **❌ (embedded):** the call throws `"not available in an embedded bulb"` — an embed is a client-only sandboxed iframe with **no persistent storage** either (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
+- **Embeds also have no persistent storage** (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail — a client-only sandboxed iframe), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
 - **`tb.proxy` only rewrites allow-listed CDNs** — `esm.sh`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`; any other host 403s. Serve a WASM/worker asset (a tesseract or ffmpeg core, a pdf.js worker) from one of these.
 
 ## Portability back to typebulb.com
@@ -207,7 +212,7 @@ To keep this skill on hand across sessions, run `npx typebulb skill` and copy it
 
 ### When agents should output local vs embedded bulbs
 
-- **First, can it even embed?** A bulb needing `tb.ai`, `tb.fs`, or `server.ts` must be **local** — embeds are client-only, so those calls fail there. The choice below is only for client-only bulbs.
+- **First, can it even embed?** A bulb needing `tb.ai`, `tb.infer`, `tb.fs`, or `server.ts` must be **local** — embeds are client-only, so those calls fail there. The choice below is only for client-only bulbs.
 - **Is anyone watching?** An embed only renders live when the agent mirror is open; with none it shows as raw text. `npx typebulb agent` starts the mirror if needed and prints its link — share it with the user; don't make the user start anything.
 - **Something to see right now, in the flow of the conversation** — a chart of some numbers, a quick simulation, an illustrative widget. → **embedded**: emit it in a `bulb` block so it renders live inline.
 - **A tool worth keeping** — something to reuse, run on its own, or refine over several turns. → **local**: write a `.bulb.md` file run with `npx typebulb`. An embedded block is throwaway and can't be edited in place, so it's the wrong fit for anything iterative.
@@ -216,7 +221,7 @@ To keep this skill on hand across sessions, run `npx typebulb skill` and copy it
 
 To render a bulb live inline, wrap the **entire** bulb — frontmatter and all blocks — in a fenced code block whose opening line is **four backticks immediately followed by `bulb`**, and whose closing line is four backticks. Four, not three, so the bulb's own triple-backtick code fences nest inside without prematurely closing the outer block.
 
-The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and Restricted unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`, no storage.
+The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and Restricted unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`/`tb.infer`, no storage.
 
 **Iterating on an embed?** Re-emit under the *same* `name:` to refine it (a different `name:` starts a separate bulb) — the mirror keeps the latest version live and folds each earlier one into an expandable stub in place, so the transcript shows the bulb's evolution, not a stack of repeated renders. Same move fixes a broken embed.
 

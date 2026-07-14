@@ -4,6 +4,7 @@ import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile, serverModulePath } from '../pipeline.js'
+import { replaceBulbBlock, CHUNK_SEPARATOR } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
@@ -13,7 +14,7 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
  * Web mode: compile the bulb, serve it on localhost, and (in watch mode) wire
- * hot reload. Owns the full server lifecycle — the mutable `html`/`serverExports`
+ * hot reload. Owns the full server lifecycle — the mutable `html`/`bulb`/`serverExports`
  * cells the reload closure swaps and the request handlers read via getters stay
  * local to this function. Runs until SIGINT/SIGTERM.
  */
@@ -77,6 +78,16 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       reloadEmitter,
       messageEmitter,
       getServerExports: () => serverExports,
+      getBulbBlocks: () => ({ infer: bulb.infer, insight: bulb.insight, code: bulb.code, config: bulb.config, data: bulb.data }),
+      // "Save to bulb" (TB-Inference.md): promote a run from runtime state to source. Surgical
+      // block replacement, never a parse→serialize round trip (which drops inter-block prose).
+      // Under watch, this write triggers the recompile+reload that re-serves the new defaults.
+      saveInferenceResult: async (data, insightJson) => {
+        let text = await fs.readFile(bulbPath, 'utf-8')
+        text = replaceBulbBlock(text, 'data', data.join(CHUNK_SEPARATOR))
+        text = replaceBulbBlock(text, 'insight', insightJson)
+        await fs.writeFile(bulbPath, text)
+      },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
       trusted: args.trust,
       trustHint,
@@ -114,6 +125,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
             const result = await loadAndCompile(bulbPath, true, args.trust, local)
             html = result.html
             serverExports = result.serverExports
+            bulb = result.bulb
             // New run boundary (only on a successful recompile — a compile error keeps the old run
             // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
             runId++

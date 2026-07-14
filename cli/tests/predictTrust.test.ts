@@ -8,7 +8,7 @@ import { predictTrust } from '../src/bulb/predictTrust.js'
  * positives, the ungated-log carve-out, and that benign client-only code stays clean.
  */
 describe('predictTrust', () => {
-  const bulb = (code: string, server = '') => ({ code, server })
+  const bulb = (code: string, server = '', infer = '') => ({ code, server, infer })
 
   it('flags a server.ts block structurally, regardless of code', () => {
     expect(predictTrust(bulb('export default () => null', 'export const x = 1'))).toBe('server-side code (server.ts)')
@@ -27,6 +27,11 @@ describe('predictTrust', () => {
   it('flags tb.server.<fn> but NOT the ungated tb.server.log', () => {
     expect(predictTrust(bulb('await tb.server.query(1)'))).toBe('server-side code (server.ts)')
     expect(predictTrust(bulb('tb.server.log("hi")'))).toBeUndefined()
+  })
+
+  it('flags an infer.md block structurally, and tb.infer usage in code', () => {
+    expect(predictTrust(bulb('render()', '', 'Score each item 1-10.'))).toBe('AI (your API keys)')
+    expect(predictTrust(bulb('await tb.infer()'))).toBe('AI (your API keys)')
   })
 
   it('returns undefined for benign client-only bulbs (a clean scan is not "safe")', () => {

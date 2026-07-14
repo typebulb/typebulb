@@ -11,6 +11,18 @@ export {
 } from './aiProviders.js'
 export { parseSseBlock, consumeSseStream, consumeSseStreamGen, consumeStreamText, streamAiChunks } from './sseParser.js'
 
+// Inference layer shared with typebulb.com: prompt template, JSON sanitizer, #tb= result encoding.
+export {
+  buildInferencePrompt,
+  sanitizeJsonOutput,
+  encodeToHash,
+  decodeFromHash,
+  hashContainsTb,
+  type InferenceScriptContent,
+  type SanitizeResult,
+  type InferenceResult
+} from './inference.js'
+
 // Per-provider wire DTOs + provider implementations.
 export * from './providers/chatCompletions.js'
 export * from './providers/anthropic.js'

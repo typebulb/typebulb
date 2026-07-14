@@ -74,8 +74,9 @@ ${typebulbShim}
 ${embedProtocol}
 
 <script type="module">
+globalThis.__tbEntryRan = true; /* import graph resolved — the load-failure backstop's signal (imports hoist above this line) */
+await globalThis.__tbBoot; /* #tb= fragment restore, set by the shim when present (TB-Inference.md) */
 ${escapeScript(code)}
-globalThis.__tbEntryRan = true; /* load-failure backstop — see embedProtocol */
 </script>
 </body>
 </html>`

@@ -4,8 +4,8 @@ import { startServer, type ServerInstance } from '../src/serve/server.js'
 
 /**
  * Default-deny contract (TB-Security.md, Trust Invariant 1): a server
- * started without `trusted` must hard-deny the three privileged endpoints
- * (/__fs, /__api, /__ai) regardless of how the request arrives — the server-side
+ * started without `trusted` must hard-deny the five privileged endpoints
+ * (/__fs, /__api, /__ai, /__infer, /__infer-save) regardless of how the request arrives — the server-side
  * half of the gate, independent of the sandboxed-frame origin isolation. Benign
  * routes (the page, the CDN proxy) stay open.
  */
@@ -59,6 +59,20 @@ describe('untrusted launch denies the privileged endpoints', () => {
   it('403s /__ai', async () => {
     const r = await fetch(url('/__ai'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('403s /__infer', async () => {
+    const r = await fetch(url('/__infer'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: ['x'] }),
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('403s /__infer-save', async () => {
+    const r = await fetch(url('/__infer-save'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hash: '#tb=1:x' }),
     })
     expect(r.status).toBe(403)
   })
