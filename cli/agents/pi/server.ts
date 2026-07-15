@@ -13,6 +13,7 @@ export const displayName = adapter.displayName
 export const { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
+export * from '../core/server/git.js'
 
 // The /model palette's local-Ollama sync (TB-Agent-Composer-Toolkit.md Piece 5) — mirror RPCs on
 // typebulb's side (probe + models.json write), not pi passthroughs; pi-barrel-only.

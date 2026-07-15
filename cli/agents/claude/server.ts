@@ -22,6 +22,7 @@ export const displayName = adapter.displayName
 export const { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
+export * from '../core/server/git.js'
 export * from './server/switcher.js'
 
 // Test surface (imported by name from './server.js'): the Claude cleaning/schema helpers and the

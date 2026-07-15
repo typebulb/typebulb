@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock,
+  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -245,6 +245,21 @@ describe('parseConfig', () => {
   })
   it('reads dependencies', () => {
     expect(parseConfig('{"dependencies":{"react":"^19"}}').dependencies).toEqual({ react: '^19' })
+  })
+})
+
+describe('extractDescription', () => {
+  it('missing/empty → default', () => {
+    expect(extractDescription(undefined)).toBe('A Typebulb bulb.')
+    expect(extractDescription('{}')).toBe('A Typebulb bulb.')
+  })
+  it('strips markdown and flattens newlines', () => {
+    expect(extractDescription('{"description":"Uses the **Boids algorithm** by [Craig](https://x.com)\\nwith `code`."}'))
+      .toBe('Uses the Boids algorithm by Craig with code.')
+  })
+  it('truncates to 200 chars', () => {
+    const desc = 'x'.repeat(250)
+    expect(extractDescription(JSON.stringify({ description: desc }))).toHaveLength(200)
   })
 })
 

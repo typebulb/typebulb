@@ -3,7 +3,8 @@ import { joinUrl, getProvider } from '../src/aiProviders.js'
 import type { ProviderProtocol } from '../src/protocol.js'
 
 /**
- * Guards the shared production URL-construction path (web chat, inference, tb.ai, CLI).
+ * Guards the providers' production wire behavior (web chat, inference, tb.ai, CLI): URL
+ * construction, and the Gemini effort-dial translation.
  *
  * The non-negotiable from the URL-cleanup work order: switching off the `new URL(absolutePath,
  * base)` clobber to a prefix-preserving `joinUrl` must NOT change any provider's URL for its
@@ -80,5 +81,44 @@ describe('a prefixed / gateway base keeps its prefix', () => {
   it('anthropic through an Azure-style deployment prefix', () => {
     expect(urlFor('anthropic', 'https://x.example.com/openai/deployments/foo'))
       .toBe('https://x.example.com/openai/deployments/foo/v1/messages')
+  })
+})
+
+/**
+ * Guards the Gemini effort-dial translation: 3.x+ models must get the semantic `thinkingLevel`
+ * enum (clamped to each family's supported values), 2.5-era models and unversioned aliases the
+ * numeric budget. Sending the wrong one (or both) is a 400 upstream.
+ */
+describe('gemini effort → thinking config translation', () => {
+  const thinkingConfig = (model: string, effort?: 0 | 1 | 2 | 3) => {
+    const p: any = getProvider('gemini').buildPayload(
+      [{ role: 'user', content: 'hi' }], model, { effort, webSearch: false }, false)
+    return p.generationConfig?.thinkingConfig
+  }
+
+  it('3.5 flash gets the full four-level dial', () => {
+    expect(thinkingConfig('gemini-3.5-flash', 0)).toEqual({ thinkingLevel: 'minimal' })
+    expect(thinkingConfig('gemini-3.5-flash', 1)).toEqual({ includeThoughts: true, thinkingLevel: 'low' })
+    expect(thinkingConfig('gemini-3.5-flash', 2)).toEqual({ includeThoughts: true, thinkingLevel: 'medium' })
+    expect(thinkingConfig('gemini-3.5-flash', 3)).toEqual({ includeThoughts: true, thinkingLevel: 'high' })
+  })
+
+  it('pre-3.5 3.x floors minimal at low (`minimal` is 3.5+)', () => {
+    expect(thinkingConfig('gemini-3-flash-preview', 0)).toEqual({ thinkingLevel: 'low' })
+    expect(thinkingConfig('gemini-3.1-pro-preview', 0)).toEqual({ thinkingLevel: 'low' })
+  })
+
+  it('2.5-era keeps numeric budgets (0 drops includeThoughts)', () => {
+    expect(thinkingConfig('gemini-2.5-flash', 0)).toEqual({ thinkingBudget: 0 })
+    expect(thinkingConfig('gemini-2.5-flash', 1)).toEqual({ includeThoughts: true, thinkingBudget: 1024 })
+    expect(thinkingConfig('gemini-2.5-flash', 3)).toEqual({ includeThoughts: true, thinkingBudget: -1 })
+  })
+
+  it('unversioned aliases fall back to budgets (Google back-compat remaps them)', () => {
+    expect(thinkingConfig('gemini-flash-latest', 2)).toEqual({ includeThoughts: true, thinkingBudget: 8192 })
+  })
+
+  it('omitted effort sends no thinking config at all', () => {
+    expect(thinkingConfig('gemini-3.5-flash', undefined)).toBeUndefined()
   })
 })

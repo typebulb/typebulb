@@ -9,6 +9,9 @@ import hljsCss from 'highlight.js/lib/languages/css'
 import hljsJson from 'highlight.js/lib/languages/json'
 import hljsMarkdown from 'highlight.js/lib/languages/markdown'
 import hljsPlaintext from 'highlight.js/lib/languages/plaintext'
+import hljsPython from 'highlight.js/lib/languages/python'
+import hljsBash from 'highlight.js/lib/languages/bash'
+import hljsYaml from 'highlight.js/lib/languages/yaml'
 import { parseBulb, findEmbeddedBulbs } from '../../../src/render.js'
 import type { Msg } from './types.js'
 
@@ -19,11 +22,11 @@ import type { Msg } from './types.js'
 // html:false — the code view must show a bulb's literal markup, never let it render.
 const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
 
-// Syntax highlighting for the code view: a custom hljs core build registering only
-// the grammars a bulb actually uses — keeps the dep to ~tens of KB vs hljs's full
-// ~1MB bundle. esbuild bundles these into the mirror's client.js (no import map, no
+// Syntax highlighting for the code view and the diff doc: a custom hljs core build registering only
+// the grammars a bulb uses plus the diff view's common file types — keeps the dep to ~tens of KB vs
+// hljs's full ~1MB bundle. esbuild bundles these into the mirror's client.js (no import map, no
 // proxy — the mirror is CLI code, not a bulb). No hljs theme stylesheet either — token
-// colors come from our own CSS vars (.bulb-code .hljs-*) so they follow the host
+// colors come from our own CSS vars (.bulb-code/.diff-doc-body .hljs-*) so they follow the host
 // light/dark theme instead of baking a palette.
 hljs.registerLanguage('typescript', hljsTypescript)
 hljs.registerLanguage('xml', hljsXml)
@@ -31,20 +34,63 @@ hljs.registerLanguage('css', hljsCss)
 hljs.registerLanguage('json', hljsJson)
 hljs.registerLanguage('markdown', hljsMarkdown)
 hljs.registerLanguage('plaintext', hljsPlaintext)
+hljs.registerLanguage('python', hljsPython)
+hljs.registerLanguage('bash', hljsBash)
+hljs.registerLanguage('yaml', hljsYaml)
 
-// Fence tag → registered grammar. tsx/ts fold into typescript (covers the TS
-// superset; JSX is close enough for a read view), html into xml. Anything unknown
-// or absent falls back to escaped plaintext (always registered, so never throws).
+// Fence tag OR file extension → registered grammar (the diff doc keys by extension; fences by tag —
+// the vocabularies coincide). js/jsx fold into typescript (the superset grammar reads plain JS fine),
+// html/svg into xml. Anything unknown or absent falls back to escaped plaintext (always registered,
+// so never throws).
 const HLJS_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', typescript: 'typescript',
-  html: 'xml', xml: 'xml',
+  js: 'typescript', jsx: 'typescript', mjs: 'typescript', cjs: 'typescript',
+  html: 'xml', xml: 'xml', svg: 'xml',
   css: 'css', json: 'json',
   md: 'markdown', markdown: 'markdown',
+  py: 'python', python: 'python',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  yml: 'yaml', yaml: 'yaml',
   text: 'plaintext', txt: 'plaintext', plaintext: 'plaintext',
 }
 function highlightCode(code: string, lang: string): string {
   const name = HLJS_LANG[(lang || '').toLowerCase()] ?? 'plaintext'
   return `<pre class="hljs"><code>${hljs.highlight(code, { language: name }).value}</code></pre>`
+}
+
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// Whole-text highlight split back into per-line HTML — for surfaces that render line-by-line (the
+// diff doc): highlighting must run over the FULL text so multi-line constructs (block comments,
+// template literals) lex correctly, but each line ships as its own element, so any spans still open
+// at a newline are closed there and re-opened on the next line (hljs emits only <span>/</span>, and
+// escapes text, so every literal `<` in its output is a tag). Guarantees one entry per input line —
+// on any surprise (grammar throw, line-count drift) it falls back to escaped plain text.
+export function highlightToLines(code: string, tag: string): string[] {
+  const src = code.split('\n')
+  try {
+    const name = HLJS_LANG[(tag || '').toLowerCase()] ?? 'plaintext'
+    const html = hljs.highlight(code, { language: name, ignoreIllegals: true }).value
+    const lines: string[] = []
+    const stack: string[] = []
+    let cur = ''
+    for (let i = 0; i < html.length; i++) {
+      const ch = html[i]
+      if (ch === '<') {
+        const end = html.indexOf('>', i)
+        const t = html.slice(i, end + 1)
+        if (t[1] === '/') stack.pop(); else stack.push(t)
+        cur += t
+        i = end
+      } else if (ch === '\n') {
+        lines.push(cur + '</span>'.repeat(stack.length))
+        cur = stack.join('')
+      } else cur += ch
+    }
+    lines.push(cur + '</span>'.repeat(stack.length))
+    if (lines.length === src.length) return lines
+  } catch {}
+  return src.map(escapeHtml)
 }
 
 // Plain markdown for the code view: renders a bulb's .bulb.md source (file labels +

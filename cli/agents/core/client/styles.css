@@ -178,13 +178,13 @@ body {
    session list). Wrap = positioning context; the popover anchors bottom/right and
    grows up-and-left — the chips sit in the right-aligned cluster, so left:0 would
    run them off the viewport's right edge. */
-.token-wrap, .sid-wrap, .servers-wrap, .model-wrap { position: relative; display: inline-block; }
+.token-wrap, .sid-wrap, .servers-wrap, .model-wrap, .gitdiff-wrap { position: relative; display: inline-block; }
 /* Each pill renders its wrap unconditionally, emitting an empty div when it has
    nothing to show (no tokens / no session / nothing running). An empty wrap is
    still a flex child, so .statusbar-actions' gap lands on both its sides —
    doubling the visible gap between its neighbours. Collapse the empties so the
    cluster spaces evenly regardless of which pills are present. */
-.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty { display: none; }
+.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty, .gitdiff-wrap:empty { display: none; }
 .picker, .servers-pop {
   --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
                               mismatched cap reads as a glitch; .picker grows to it, .servers-pop
@@ -913,6 +913,73 @@ a.server-port:hover { text-decoration: underline; }
   color: var(--fg);
 }
 .bulb-log-text { white-space: pre-wrap; word-break: break-word; }
+
+/* ── Git diff pill + menu (TB-Agent-Mirror.md): a `± N` chip (custom two-color glyph, icons.ts, +
+   changed-file count) that exists only when the tree is dirty — presence is the signal, so the glyph
+   keeps its red/green at rest (no grayscale: the chip can't be "idle", a clean tree removes it) and
+   the accent border stays reserved for latched, like every pill. Picking a menu row swaps the
+   transcript for a full-context unified diff. Flex like the square glyph pills (an svg mis-seats
+   under the word-pill text-box trim), width freed for the count. ── */
+/* Three classes to out-specify .pill.glyph's fixed square (width: var(--pill-h); padding: 0) —
+   this is the one glyph pill that carries content beside its icon, so its width must be free. */
+.pill.glyph.gitdiff-pill { width: auto; padding: 0 .45rem; gap: .3rem; }
+/* 2:3, the cropped viewBox's aspect — a square box would re-add the side margins. */
+.gitdiff-pill .icon { width: 8px; height: 12px; }
+.gitdiff-count { font-size: var(--pill-font); font-variant-numeric: tabular-nums; }
+.gitdiff-pop { width: min(480px, calc(100vw - 2rem)); }
+.gitdiff-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.gitdiff-row { display: flex; align-items: center; gap: .55rem; flex: none; min-height: var(--menu-row-h); padding: .05rem .45rem; border-radius: 6px; font-size: .85rem; cursor: pointer; }
+.gitdiff-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.gitdiff-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.gitdiff-row.viewing .gitdiff-path { color: var(--accent); }
+/* One status letter, VS Code's palette: modified/renamed amber, added/untracked green, deleted red. */
+.gitdiff-status { flex: none; width: 1rem; text-align: center; font: 600 .74rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); }
+.gitdiff-status.s-M, .gitdiff-status.s-R { color: var(--warn); }
+.gitdiff-status.s-A, .gitdiff-status.s-U { color: var(--diff-add); }
+.gitdiff-status.s-D { color: var(--err); }
+.gitdiff-path { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gitdiff-counts { flex: none; display: inline-flex; gap: .35rem; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.gitdiff-counts .count-add { color: var(--diff-add); }
+.gitdiff-counts .count-del { color: var(--err); }
+
+/* The diff doc — takes the transcript's slot in .chat (same flex geometry as .messages). Full-bleed
+   like a code surface (no --content-max column: diff lines want the width); the body is the scroll
+   surface, its bottom padding clearing the overlaid statusbar like .messages' does. The ± markers and
+   red/green bands are the shared .udiff-* rules the tool cards use. */
+.diff-doc { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none; }
+.diff-doc-head { display: flex; align-items: center; gap: .6rem; padding: .5rem 1.75rem .4rem; font-size: .8rem; border-bottom: 1px solid var(--border); }
+.diff-doc-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); cursor: pointer; }
+.diff-doc-path:hover { text-decoration: underline; }
+.diff-doc-head .bulb-log-back { margin-left: auto; }
+.diff-doc-body {
+  flex: 1; min-height: 0; overflow: auto;
+  scrollbar-gutter: stable both-edges;
+  padding: .75rem 1.75rem 2.5rem;
+  font: .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+.diff-doc-empty, .diff-doc-trunc { color: var(--muted); padding: .4rem 0; }
+/* The wrong-cwd empty state (Root.#cwdHint): centered over the empty transcript. */
+.cwd-hint { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: .5rem; padding: 2rem; color: var(--muted); font-size: .9rem; max-width: 40rem; margin-inline: auto; }
+.cwd-hint-head { font-weight: 600; color: var(--fg); }
+.cwd-hint-dir { color: var(--accent); }
+/* With token colors under them, the full-strength (24%) bands compete — red tokens on a red band
+   turn to mud — so the doc view's bands drop to a tint: polarity is still carried per-line by the
+   gutter ± glyphs and at file scale by the ruler. Scoped: the tool-card hunks keep 24%, where the
+   unhighlighted band is the only signal. Del a touch stronger than add — red-leaning tokens
+   camouflage against red tint more than anything does against green. */
+.diff-doc-body .udiff-add { background: color-mix(in srgb, var(--diff-add) 10%, transparent); }
+.diff-doc-body .udiff-del { background: color-mix(in srgb, var(--err) 13%, transparent); }
+/* The overview ruler — VS Code's scrollbar change-marks, owned since the native scrollbar can't be
+   painted: a thin track beside the scrollbar (17px clears Windows Chromium's classic bar — plain px
+   on a desktop-only surface, the menus' own stance), red/green marks at each change run's fractional
+   position, min-height so a one-line change stays visible. The wrapper keeps it overlaid rather than
+   scrolling with the body. Marks are pointer-inert so a click anywhere on the track jumps. */
+.diff-doc-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.diff-ruler { position: absolute; top: 2px; bottom: 2px; right: 17px; width: 6px; cursor: pointer; z-index: 5; }
+.diff-ruler-mark { position: absolute; left: 0; right: 0; min-height: 3px; border-radius: 1px; pointer-events: none; }
+.diff-ruler-mark.add { background: var(--diff-add); opacity: .8; }
+.diff-ruler-mark.del { background: var(--err); opacity: .8; }
 /* messages */
 .messages {
   flex: 1;
@@ -1364,24 +1431,25 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   background: transparent;
   overflow-x: auto;
 }
-/* hljs token colors for the code view, mapped to the bulb's own theme vars (no hljs
+/* hljs token colors for the code view AND the diff doc (one palette, or the same file reads as two
+   languages across surfaces), mapped to the bulb's own theme vars (no hljs
    theme stylesheet) so highlighting follows light/dark rather than baking a palette
    that would clash in dark mode. Minimal token set — enough for legible TS/HTML/CSS/
    JSON/markdown without chasing every grammar scope. */
-.bulb-code .hljs-comment, .bulb-code .hljs-quote { color: var(--muted); font-style: italic; }
-.bulb-code .hljs-keyword, .bulb-code .hljs-literal, .bulb-code .hljs-built_in { color: var(--accent); }
-.bulb-code .hljs-tag, .bulb-code .hljs-name, .bulb-code .hljs-selector-tag { color: var(--accent); }
-.bulb-code .hljs-string, .bulb-code .hljs-regexp, .bulb-code .hljs-meta .hljs-string {
+.bulb-code .hljs-comment, .diff-doc-body .hljs-comment, .bulb-code .hljs-quote, .diff-doc-body .hljs-quote { color: var(--muted); font-style: italic; }
+.bulb-code .hljs-keyword, .diff-doc-body .hljs-keyword, .bulb-code .hljs-literal, .diff-doc-body .hljs-literal, .bulb-code .hljs-built_in, .diff-doc-body .hljs-built_in { color: var(--accent); }
+.bulb-code .hljs-tag, .diff-doc-body .hljs-tag, .bulb-code .hljs-name, .diff-doc-body .hljs-name, .bulb-code .hljs-selector-tag, .diff-doc-body .hljs-selector-tag { color: var(--accent); }
+.bulb-code .hljs-string, .diff-doc-body .hljs-string, .bulb-code .hljs-regexp, .diff-doc-body .hljs-regexp, .bulb-code .hljs-meta .hljs-string, .diff-doc-body .hljs-meta .hljs-string {
   color: color-mix(in srgb, var(--diff-add) 85%, var(--fg));
 }
-.bulb-code .hljs-number { color: color-mix(in srgb, var(--accent) 55%, var(--fg)); }
-.bulb-code .hljs-attr, .bulb-code .hljs-attribute, .bulb-code .hljs-property, .bulb-code .hljs-type {
+.bulb-code .hljs-number, .diff-doc-body .hljs-number { color: color-mix(in srgb, var(--accent) 55%, var(--fg)); }
+.bulb-code .hljs-attr, .diff-doc-body .hljs-attr, .bulb-code .hljs-attribute, .diff-doc-body .hljs-attribute, .bulb-code .hljs-property, .diff-doc-body .hljs-property, .bulb-code .hljs-type, .diff-doc-body .hljs-type {
   color: color-mix(in srgb, var(--accent) 75%, var(--fg));
 }
-.bulb-code .hljs-title, .bulb-code .hljs-title.function_, .bulb-code .hljs-section {
+.bulb-code .hljs-title, .diff-doc-body .hljs-title, .bulb-code .hljs-title.function_, .diff-doc-body .hljs-title.function_, .bulb-code .hljs-section, .diff-doc-body .hljs-section {
   color: var(--fg); font-weight: 600;
 }
-.bulb-code .hljs-symbol, .bulb-code .hljs-bullet, .bulb-code .hljs-punctuation { color: var(--muted); }
+.bulb-code .hljs-symbol, .diff-doc-body .hljs-symbol, .bulb-code .hljs-bullet, .diff-doc-body .hljs-bullet, .bulb-code .hljs-punctuation, .diff-doc-body .hljs-punctuation { color: var(--muted); }
 /* Draft-streaming bulb card (#draftBulbCard): the code view wearing a progress header — never a
    live mount; the durable row's BulbEmbed takes this slot when the entry lands. Cap tighter than
    .bulb-code's resting 480px: ambient progress, not reading material. */

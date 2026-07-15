@@ -20,9 +20,15 @@ export const icons = {
 // when Material has nothing right; same contract as a downloaded one: a single <svg>, currentColor,
 // full-bleed 16-viewBox). caret: the disclosure triangle every collapsible rotates via CSS.
 // fork: the abandoned-branch ⑂ (U+2442 renders tiny from fallback fonts; Material has no git-fork).
+// diff: the git-diff pill's ± — two-color by design (plus in --diff-add, minus in --err, the same
+// vars as the diff bands it opens; injected svg resolves CSS vars), which no single-color Material
+// glyph can be. The currentColor exemption: its own stroke colors ARE the point.
 const custom = {
   caret: '<svg viewBox="0 0 16 16"><path d="M4 1.5 L13 8 L4 14.5 Z" fill="currentColor"/></svg>',
   fork: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 2 V8 H12 V2 M8 8 V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></svg>',
+  // viewBox cropped to the ink (the stacked +/− is tall and narrow): a full 16-box in a square icon
+  // shell reads as phantom side padding in the pill.
+  diff: '<svg viewBox="4 2 8 12" fill="none"><path d="M5.25 6 H10.75 M8 3.25 V8.75" stroke="var(--diff-add)" stroke-width="1.8" stroke-linecap="round"/><path d="M5.25 12.5 H10.75" stroke="var(--err)" stroke-width="1.8" stroke-linecap="round"/></svg>',
 } as const
 
 export type IconName = keyof typeof icons | keyof typeof custom

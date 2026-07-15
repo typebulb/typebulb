@@ -22,3 +22,25 @@ export function parseConfig(config: string): BulbConfig {
     return {}
   }
 }
+
+const DEFAULT_DESCRIPTION = 'A Typebulb bulb.'
+
+/** Strip inline markdown (links, emphasis, code, headings) for plain-text contexts like meta descriptions. */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+}
+
+/** Plain-text description from a `config.json` string: markdown stripped, single line, ≤200 chars.
+ * Logic duplicated in client/_worker.js (edge runtime, no build step). */
+export function extractDescription(config: string | undefined): string {
+  const desc = parseConfig(config ?? '').description?.trim()
+  if (!desc) return DEFAULT_DESCRIPTION
+  const stripped = stripMarkdown(desc)
+  const truncated = stripped.length > 200 ? stripped.slice(0, 197) + '...' : stripped
+  return truncated.replace(/\n/g, ' ')
+}

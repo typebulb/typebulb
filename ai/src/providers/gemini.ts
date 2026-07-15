@@ -35,12 +35,17 @@ export interface GeminiGoogleSearchTool {
 
 export type GeminiTool = GeminiGoogleSearchTool
 
-// Thinking config — asks Gemini to run (and return) reasoning.
+export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high'
+
+// Thinking config — asks Gemini to run (and return) reasoning. `thinkingBudget` (2.5-era) and
+// `thinkingLevel` (3.x+) are mutually exclusive on the wire: sending both is a 400.
 export interface GeminiThinkingConfig {
   /** Surface thought summaries as `thought` parts in the response. */
   includeThoughts?: boolean
   /** Token budget for thinking; -1 = dynamic (model self-regulates depth). */
   thinkingBudget?: number
+  /** Semantic depth dial for Gemini 3.x+; replaces numeric budgets. */
+  thinkingLevel?: GeminiThinkingLevel
 }
 
 // Generation config
@@ -97,6 +102,8 @@ export class GeminiProvider extends AIProvider {
   readonly defaultBaseUrl = 'https://generativelanguage.googleapis.com'
   readonly path = '/v1beta/models'
 
+  private readonly budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1 }
+
   // ── Request building ─────────────────────────────────────────────
 
   override getPath(model: string, stream: boolean): string {
@@ -114,7 +121,7 @@ export class GeminiProvider extends AIProvider {
 
   buildPayload(
     messages: ChatMessageDto[],
-    _model: string,
+    model: string,
     opts: ChatRequestOpts,
     _stream: boolean
   ): GeminiRequestPayload {
@@ -139,24 +146,19 @@ export class GeminiProvider extends AIProvider {
       }
     }
 
-    // Map the 1-3 reasoning dial to a thinking budget so the effort selector actually controls depth
-    // — mirroring how the OpenRouter path honors `effort` per level (native previously hardcoded
-    // `thinkingBudget: -1`, always thinking maximally and ignoring the dial, which made native Gemini
-    // look like it "always reasons" while OpenRouter respected the dial). `low` gets a small budget
-    // (often below the summary threshold → blank, matching OpenRouter's `effort:'low'`); `high` uses
-    // `-1` (dynamic, always in-range, no per-model max risk). `includeThoughts` streams thought
-    // summaries as `thought` parts, which the parser maps to AiChunk `{ kind: "reasoning" }`.
     const effort = opts?.effort
     if (effort !== undefined) {
-      // 0 = minimal → thinkingBudget 0: disables thinking on 2.5 Flash/Lite (2.5 Pro can't disable and
-      // clamps up; Gemini 3.x wants `thinking_level` — a separate migration). At budget 0 there are no
-      // thoughts to stream, so `includeThoughts` is dropped.
-      const budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1 }
-      const thinkingBudget = budgetMap[effort]
+      // Generation-gated like anthropic.ts: 3.x+ takes Google's semantic `thinkingLevel`; 2.5-era
+      // and unrecognized aliases stay on numeric budgets (2.5's native dial, and the safe fallback —
+      // Google back-compat remaps budgets on 3.x). Low's small budget often streams blank reasoning
+      // (intended); `includeThoughts` streams thought summaries as `thought` parts (parser maps
+      // them to reasoning), and at effort 0 there is nothing to stream, so it's dropped.
+      const version = this.geminiVersion(model)
+      const dial: GeminiThinkingConfig = version !== null && version >= 3
+        ? { thinkingLevel: this.thinkingLevelFor(version, effort) }
+        : { thinkingBudget: this.budgetMap[effort] }
       payload.generationConfig = {
-        thinkingConfig: thinkingBudget === 0
-          ? { thinkingBudget: 0 }
-          : { includeThoughts: true, thinkingBudget },
+        thinkingConfig: effort === 0 ? dial : { includeThoughts: true, ...dial },
       }
     }
 
@@ -228,6 +230,20 @@ export class GeminiProvider extends AIProvider {
   }
 
   // ── Private helpers ──────────────────────────────────────────────
+
+  /** Major.minor from a versioned model name (`gemini-3.5-flash` → 3.5); null for aliases. */
+  private geminiVersion(model: string): number | null {
+    const m = model.match(/^gemini-(\d+(?:\.\d+)?)/)
+    return m ? Number(m[1]) : null
+  }
+
+  /** Dial → level, clamped to the family's supported enum: `minimal` is 3.5+; earlier 3.x floors at
+   *  `low`. (gemini-3-pro-preview's low|high-only enum would need a wider clamp, but Google retired
+   *  the model — 404 verified 2026-07-15.) */
+  private thinkingLevelFor(version: number, effort: EffortLevel): GeminiThinkingLevel {
+    const level = (['minimal', 'low', 'medium', 'high'] as const)[effort]
+    return level === 'minimal' && version < 3.5 ? 'low' : level
+  }
 
   private isGeminiResponse(json: unknown): json is GeminiResponseDto {
     return (

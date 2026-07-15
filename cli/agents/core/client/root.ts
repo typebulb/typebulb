@@ -1,8 +1,9 @@
-import { Component, div, type VElement } from 'domeleon'
+import { Component, div, span, type VElement } from 'domeleon'
 import { SessionPicker } from './sessionPicker.js'
 import { TokenPill } from './tokenPill.js'
 import { BulbsPill } from './bulbsPill.js'
 import { ProsePill } from './prosePill.js'
+import { DiffPill } from './diffPill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
 import type { ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
@@ -20,6 +21,7 @@ export class Root extends Component implements IRoot {
   tokenPill = new TokenPill()
   bulbsPill = new BulbsPill()
   prosePill = new ProsePill()
+  diffPill = new DiffPill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   cost = 0                                  // session spend: summed per-entry harness costs (IRoot.cost)
@@ -49,6 +51,10 @@ export class Root extends Component implements IRoot {
   #polling = false
   #started = false
   #title: string
+  // The server's wrong-cwd diagnosis (info().elsewhere): this cwd has no sessions but an in-repo
+  // ancestor does — rendered by #cwdHint over the empty transcript so a subfolder launch explains
+  // itself instead of reading as broken.
+  #elsewhere: { dir: string; count: number } | null = null
   #overlays: (() => VElement | null)[]
   #onPollTick?: () => void
 
@@ -74,6 +80,7 @@ export class Root extends Component implements IRoot {
   closePopups(except?: unknown) {
     if (this.sessionPicker !== except) this.sessionPicker.close()
     if (this.bulbsPill !== except) this.bulbsPill.close()
+    if (this.diffPill !== except) this.diffPill.close()
     for (const p of this.pills) if (p !== except) p.close?.()
   }
 
@@ -81,6 +88,7 @@ export class Root extends Component implements IRoot {
     const i = await tb.server.info()
     this.cwd = i.cwd
     this.ownPid = i.pid ?? 0
+    this.#elsewhere = i.elsewhere ?? null
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.ready = true
     this.updateTitle()
@@ -170,7 +178,10 @@ export class Root extends Component implements IRoot {
       // the composer below sits in flow under them — without it the absolute statusbar would anchor to
       // the app box and land on top of the panel. Identical geometry when there is no composer.
       div({ class: 'chat' },
-        this.messageList.view(),
+        // An open git-diff doc takes the transcript's slot — render-only, like prose mode; the
+        // transcript keeps draining underneath and returns intact on close.
+        this.diffPill.viewing ? this.diffPill.docView() : this.messageList.view(),
+        this.#cwdHint(),
         // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.
         ...this.#overlays.map(o => o()),
         this.statusbar(),
@@ -179,7 +190,22 @@ export class Root extends Component implements IRoot {
     )
   }
 
-  // Bottom strip: a right-aligned cluster. Left→right: the prose-mode toggle, then any injected pills
+  // The wrong-cwd empty state: shown only while nothing is attached (sessionId null) AND the server
+  // diagnosed sessions living at an in-repo ancestor. Answers the confusion where it arises — on the
+  // blank page itself — rather than a CLI line that scrolled away.
+  #cwdHint(): VElement | null {
+    const e = this.#elsewhere
+    if (!this.ready || this.sessionId !== null || !e) return null
+    return div({ class: 'cwd-hint' },
+      div({ class: 'cwd-hint-head' }, `No sessions for ${this.cwd}`),
+      div(`${e.count} session${e.count === 1 ? '' : 's'} exist for `,
+        span({ class: 'cwd-hint-dir' }, e.dir),
+        ' — this mirror was likely launched from a subfolder. Relaunch it from the project root.'),
+    )
+  }
+
+  // Bottom strip: a right-aligned cluster. Left→right: the prose-mode toggle and the git-diff pill
+  // (the two square glyph pills), then any injected pills
   // (Claude's model switcher — its default state is a glyph the size of the prose toggle, so the two
   // square glyph pills pair at the left; it's also the one pill whose width changes, glyph vs model
   // name, so keeping it leftmost means an override toggle only shifts the monkey, leaving
@@ -190,6 +216,7 @@ export class Root extends Component implements IRoot {
     return div({ class: 'statusbar' },
       div({ class: 'statusbar-actions' },
         this.prosePill.view(),
+        this.diffPill.view(),
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
         this.sessionPicker.view(),

@@ -1,9 +1,10 @@
 import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watchFile, unwatchFile, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmSync } from 'fs'
 import { stat } from 'fs/promises'
-import { join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { execFile } from 'child_process'
 import { errorMessage, projectCwd } from './context.js'
 import { EmbedStatusDedup } from './embedStatusLog.js'
+import { repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
@@ -474,8 +475,33 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // pid lets the breakouts UI exclude this host's own running server from the list.
     // `composer` is the capability flag the client gates the panel on — static per adapter
     // (TB-Agent-Composer.md): a missing binary surfaces as a first-send error, not a probe here.
-    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver }
+    // `elsewhere` is the wrong-cwd diagnosis for the client's empty state.
+    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, elsewhere: await sessionsElsewhere() }
   }
+
+  // Wrong-cwd diagnosis (TB-Agent-Mirror.md): zero sessions for this cwd while an ancestor INSIDE
+  // the repo has some is the signature of a subfolder launch (sessions key by exact cwd). Bounded by
+  // the git toplevel — above it, ancestor history (a sibling project's parent dir) proves nothing,
+  // so a genuinely-fresh project is never pointed at unrelated sessions.
+  async function sessionsElsewhere(): Promise<{ dir: string; count: number } | undefined> {
+    if (adapter.listSessionFiles(state.cwd).length) return undefined
+    const top = await repoRoot()
+    if (!top) return undefined
+    const topKey = resolve(top).toLowerCase()          // git prints forward slashes; compare normalized
+    for (let dir = resolve(state.cwd); dir.toLowerCase() !== topKey; ) {
+      const parent = dirname(dir)
+      if (parent === dir) return undefined             // hit the drive root without meeting the toplevel
+      dir = parent
+      const count = adapter.listSessionFiles(dir).length
+      if (count) return { dir, count }
+    }
+    return undefined
+  }
+
+  // The same diagnosis, once, in the terminal that launched — visible even if no browser opens.
+  void sessionsElsewhere().then(h => {
+    if (h) console.log(`No sessions for ${state.cwd} — ${h.count} exist for ${h.dir}. Launched from a subfolder? Relaunch from the project root.`)
+  }).catch(() => {})
 
   // The mirror host's embed-status forward (TB-Agent-Mirror-Embed.md, Iteration Invariant 7). The client
   // formats the line; we own the idempotency. console.log tees to `<pid>.log` (what `typebulb logs
