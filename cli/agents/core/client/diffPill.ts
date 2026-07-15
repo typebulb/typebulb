@@ -79,6 +79,9 @@ export class DiffPill extends ComboboxPill<never> {
   // re-injects) exactly when the content changed — the scroll container above it is stable, so the
   // user's scroll position rides through a live refresh.
   #docVersion = 0
+  // One-shot: openDiff arms it, the next injection consumes it — jump to the first change on OPEN
+  // only, never on a live-refresh re-inject (which would yank the reader mid-scroll).
+  #jumpOnInject = false
   protected keepOpenSelector = '.gitdiff-wrap'
   protected filterId = 'gitdiff-filter'
   protected listSelector = '.gitdiff-list'
@@ -129,6 +132,7 @@ export class DiffPill extends ComboboxPill<never> {
       const r = await tb.server.gitDiff(f.path)
       if (!r.ok) { console.error('[mirror] gitDiff failed:', r.error); return }
       this.#setDoc(f.path, f.status, r)
+      this.#jumpOnInject = true
       this.close()               // the popover closes; the pill stays latched via `viewing`
     } catch (err) { console.error('[mirror] gitDiff failed', err) }
   }
@@ -235,12 +239,23 @@ export class DiffPill extends ComboboxPill<never> {
             // One innerHTML injection per content version (see #docVersion) — the highlighted lines
             // are hljs output + our own escaping, never raw transcript/file text.
             : div({ class: 'diff-doc-code', key: `diff-code-${this.#docVersion}`,
-                onMounted: (el: Element) => { el.innerHTML = v.bodyHtml } }, ''),
+                onMounted: (el: Element) => { el.innerHTML = v.bodyHtml; this.#jumpToFirstChange(el) } }, ''),
           v.truncated ? div({ class: 'diff-doc-trunc' }, 'Diff truncated — file too large to show in full.') : null,
         ),
         v.kinds.length ? this.ruler(v.kinds) : null,
       ),
     )
+  }
+
+  // Land the fresh doc on its first change (a third from the top — "start reading here"), the way
+  // VS Code opens a diff. Real offsetTop off the injected DOM, so wrapped lines can't skew it (unlike
+  // the ruler's line-index fractions); scrollTop clamps itself for a change near the file top.
+  #jumpToFirstChange(el: Element) {
+    if (!this.#jumpOnInject) return
+    this.#jumpOnInject = false
+    const mark = el.querySelector('.udiff-add, .udiff-del') as HTMLElement | null
+    const body = el.closest('.diff-doc-body')
+    if (mark && body) body.scrollTop = mark.offsetTop - body.clientHeight / 3
   }
 
   // VS Code's overview ruler, minus the scrollbar dependency: a thin track hugging the pane's right
