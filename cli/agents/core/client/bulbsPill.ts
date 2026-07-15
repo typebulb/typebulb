@@ -3,12 +3,19 @@ import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { pathKey, basename, bulbBasename, relTime } from './util.js'
-import type { RunningServer, BulbFile, BulbRow, BulbHit } from './types.js'
+import type { RunningServer, BulbFile, BulbRow, BulbHit, SampleBulb } from './types.js'
 
 // Launch/stop icons through icons.ts (material play/stop, filled): svgs centre reliably where
 // font glyphs don't, and currentColor lets the button's own colour flow through.
 const iconPlay = () => icon('play', 'btn-icon')
 const iconStop = () => icon('stop', 'btn-icon')
+
+// typebulbs/u/<user>/ mirrors the site's /u/<user>/ URL shape, so the folder names the owner
+// (TB-Agent-Mirror.md; full story: server launcher.ts samples section). A remote row's path is
+// samplePath (already pathKey-shaped), so the same derivations cover remote and downloaded rows.
+const samplePath = (slug: string) => `typebulbs/u/samples/${slug}.bulb.md`
+const rowUser = (r: BulbRow): string | undefined => pathKey(r.path).match(/typebulbs\/u\/([^/]+)\//)?.[1]
+const rowUserUrl = (r: BulbRow, user: string) => `https://typebulb.com/u/${user}/${bulbBasename(r.path)}/full`
 
 // Status-bar bulb launcher + off-switch. Lists every *.bulb.md in the project (MRU-first,
 // type to filter) so a bulb you just authored is one click from running — no trip to the
@@ -24,6 +31,7 @@ const iconStop = () => icon('stop', 'btn-icon')
 export class BulbsPill extends ComboboxPill<BulbHit> {
   files: BulbFile[] = []
   servers: RunningServer[] = []
+  samples: SampleBulb[] = []
   protected keepOpenSelector = '.servers-wrap'
   protected filterId = 'bulb-filter'
   protected listSelector = '.bulb-list'
@@ -48,7 +56,10 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
   protected onActivate(i: number) {
     const r = this.rows()[i]
-    if (r) r.running ? window.open(r.running.url, '_blank', 'noopener') : this.launch(r.path)
+    if (!r) return
+    if (r.running) window.open(r.running.url, '_blank', 'noopener')
+    else if (r.remote) this.downloadAndLaunch(r)
+    else this.launch(r.path)
   }
 
   override onAttached() {
@@ -68,7 +79,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // pill-click path (refresh, pin newest into view, arm the closer); the dim lifts on close or row-hover.
   spotlight(pid?: number) { this.spotlightPid = pid; this.show() }
 
-  refresh() { return Promise.all([this.refreshServers(), this.refreshFiles()]) }
+  refresh() { return Promise.all([this.refreshServers(), this.refreshFiles(), this.refreshSamples()]) }
 
   // Running registry only. Re-render on any change that the UI shows — count, identity, AND
   // the per-server flags the rows/modal key off (`denied`/`predicted` drive the elevation modal;
@@ -106,15 +117,39 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     }
   }
 
+  // typebulb.com's curated sample catalog (server-cached 1h; offline → empty). No interval of its
+  // own: the set changes on the site's cadence, not the project's — refresh() re-asks on attach
+  // and each menu open.
+  async refreshSamples() {
+    try {
+      const samples = await tb.server.listSamples() as SampleBulb[]
+      const changed = samples.length !== this.samples.length || samples.some((s, i) => s.slug !== this.samples[i]?.slug)
+      this.samples = samples
+      if (changed) { this.update(); this.keepBottom() }
+    } catch (err) {
+      console.error('[mirror] samples refresh failed', err)
+    }
+  }
+
   // Project files ∪ running servers, keyed by path. The host's own file (and byte-identical copies)
   // are already dropped server-side in listBulbFiles; its own running server is dropped here by pid.
   // A running server outside the project still shows so the off-switch stays unified. MRU = max(file
   // mtime, server startedAt).
   merged(): BulbRow[] {
     const byKey = new Map<string, BulbRow>()
-    for (const f of this.files) {
-      byKey.set(pathKey(f.path), { path: f.path, name: f.name, recent: f.mtime, trusted: f.trusted })
+    const fileKeys = this.files.map(f => pathKey(f.path))
+    // Catalog samples with no local file yet: recent 0 sorts them to the far end, away from the
+    // newest-at-bottom anchor. Once downloaded, the local file's row takes over (suffix match —
+    // file paths are absolute, a sample's path is project-relative) and the remote row vanishes.
+    for (const smp of this.samples) {
+      const rel = samplePath(smp.slug)
+      if (!fileKeys.some(k => k.endsWith('/' + rel))) {
+        byKey.set(rel, { path: rel, name: smp.name, recent: 0, remote: smp })
+      }
     }
+    this.files.forEach((f, i) => {
+      byKey.set(fileKeys[i], { path: f.path, name: f.name, recent: f.mtime, trusted: f.trusted })
+    })
     for (const s of this.servers) {
       if (s.pid === this.parent.ownPid) continue
       const k = pathKey(s.file)
@@ -175,6 +210,26 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       if (cap) { this.pendingLaunch = { path, name: this.displayName(path), cap }; this.update(); return }
     }
     await this.doLaunch(path)
+  }
+
+  // Play on a remote catalog row: download the sample into typebulbs/u/samples/, then run the
+  // ordinary launch flow (trust scan included) on the new local file. The remote row's rel path
+  // keys the shimmer; refreshFiles swaps the row to the local absolute-path file, so re-find it
+  // by suffix before launching to keep the shimmer + trust modal on the row actually displayed.
+  async downloadAndLaunch(r: BulbRow) {
+    const key = pathKey(r.path)
+    this.launching.add(key); this.update()
+    try {
+      const res = await tb.server.downloadSample(r.remote!.slug) as { ok: boolean; file?: string; error?: string }
+      if (!res.ok || !res.file) { console.error('[mirror] downloadSample failed', res.error); return }
+      await this.refreshFiles()
+      const local = this.files.find(f => pathKey(f.path).endsWith('/' + pathKey(res.file!)))?.path ?? res.file
+      await this.launch(local)
+    } catch (err) {
+      console.error('[mirror] downloadSample failed', err)
+    } finally {
+      this.launching.delete(key); this.update()
+    }
   }
 
   // The actual spawn. `trust` true → launch trusted + remember it (the pre-launch "Launch Trusted"
@@ -294,16 +349,21 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
 
   view() {
     const running = this.servers.filter(s => s.pid !== this.parent.ownPid).length
-    const launchable = this.files.length > 0   // self + byte-identical copies already dropped in listBulbFiles
+    // Remote samples count as launchable, so the chip shows even in a bulb-less project —
+    // deliberate (an empty project is where samples help most); offline, the catalog is empty
+    // and the old hide-when-idle behavior returns. (files: self + copies already dropped server-side.)
+    const launchable = this.files.length > 0 || this.samples.length > 0
     if (!launchable && running === 0) return div({ class: 'servers-wrap' })   // nothing to do → no chip
-    const label = running > 0 ? `${running} running` : 'bulbs'
     const denial = this.pendingDenial()
     return div({ class: 'servers-wrap' },
+      // Idle: a square glyph pill (the 💡 alone, grayscale at rest like the prose monkey); with
+      // bulbs running the count rides along as a word pill. `on` latches while the menu is open
+      // (the diff pill's convention).
       button({
-        class: 'pill',
+        class: ['pill', running > 0 ? '' : 'glyph', this.open ? 'on' : ''],
         title: 'Launch a project bulb · stop a running one',
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
-      }, label),
+      }, running > 0 ? `${running}💡` : span({ class: 'glyph-img' }, '💡')),
       this.open ? this.popup() : null,
       // Pre-launch offer (proactive) wins the slot if present — it's the one blocking a launch;
       // the reactive denial modal handles an already-running bulb that tripped the gate.
@@ -430,11 +490,16 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         } },
       s
         ? button({ class: 'server-stop', title: 'Stop this server', ariaLabel: 'Stop', onClick: (e: MouseEvent) => { e.stopPropagation(); this.stop(s.pid) } }, iconStop())
-        : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); this.launch(r.path) } }, iconPlay()),
+        : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: r.remote ? 'Download from typebulb.com & launch' : trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); r.remote ? this.downloadAndLaunch(r) : this.launch(r.path) } }, iconPlay()),
       // The name opens the bulb's .bulb.md in the editor (running or stopped). The live app is
       // reachable separately via the :port link; the play button launches. Not a launch trigger.
+      // A remote sample has no file yet, so its name is inert (description in the tooltip); the
+      // row's user link is the way to its typebulb.com page.
       div({ class: 'bulb-name-cell' },
-        span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
+        r.remote
+          ? span({ class: 'server-name stopped remote', title: r.remote.description }, r.name)
+          : span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
+        this.userLink(r),
         hitsBadge(r.hitCount),
       ),
       // Trust toggle. Shown for a running server (the live tier matters) or a trusted-remembered
@@ -448,10 +513,17 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         : span({ class: 'cell-empty' }),
       s
         ? a({ class: 'server-port', href: s.url, target: '_blank', rel: 'noopener noreferrer', title: `Open ${s.url}` }, `:${s.port}`)
-        : span({ class: 'bulb-time' }, relTime(r.recent)),
+        : r.remote ? span({ class: 'cell-empty' }) : span({ class: 'bulb-time' }, relTime(r.recent)),
       // Full-text mode only: the first matching line, on a second subgrid row under the name column.
       snippetLine(r.snippet, this.filter.trim()),
     )
+  }
+
+  // The low-profile link back to a downloaded (or not-yet-downloaded) bulb's published page,
+  // reading its owner's slug — the logs-link register. Nothing for an ordinary project bulb.
+  userLink(r: BulbRow) {
+    const user = rowUser(r)
+    return user ? a({ class: 'sample-link', href: rowUserUrl(r, user), target: '_blank', rel: 'noopener noreferrer', title: `Open this bulb's page on typebulb.com` }, user) : null
   }
 
   // Trust toggle: one button showing the *current* tier (one word; clicking flips it). Shares the

@@ -363,6 +363,14 @@ export const typebulbShim = `
     // Filesystem - local CLI extension
     fs,
 
+    // The bulb's data folder, absolute (TB-FS.md) — for interop (paths handed to server.ts or
+    // spawned tools); tb.fs itself already resolves relative paths against it. Absent in an
+    // embed (no filesystem to name), where access throws like tb.fs.
+    get dir() {
+      if (isEmbedded || !window.__TB_DIR__) throw embedErr('tb.dir');
+      return window.__TB_DIR__;
+    },
+
     // Receive a value pushed from the terminal via \`typebulb send\` (data-in, the dual of the
     // ungated tb.server.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
     // sender; the handler is registered but never fires (cf. tb.models returning []).

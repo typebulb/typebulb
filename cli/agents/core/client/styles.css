@@ -813,6 +813,14 @@ a.server-port:hover { text-decoration: underline; }
 .bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
+/* Downloaded-bulb rows (TB-Agent-Mirror.md): the user link — the folder/user slug (`samples`) in
+   the logs-link register — marks the category and opens the bulb's published page. A remote
+   (not-yet-downloaded) row's name is additionally muted and inert (no file to open), and its
+   time column stays empty (no mtime to show). */
+.server-name.remote { color: var(--muted); cursor: default; }
+.server-name.remote:hover { text-decoration: none; }
+.sample-link { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; flex: none; }
+.sample-link:hover { color: var(--accent); text-decoration: underline; }
 /* The 1fr name column: name + (in full-text mode) its hit count read together, the badge
    right-aligned at the column's end by the name's flex:1 — the session row's preview/hits layout. */
 .bulb-name-cell { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }

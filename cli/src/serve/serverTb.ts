@@ -51,10 +51,13 @@ async function* tbAiStream(opts: TbAiOptions): AsyncGenerator<AiChunk> {
 }
 
 /** Install the server-side `tb` global. Idempotent — safe to call on every (re)import under watch. */
-export function installServerTb(): void {
+export function installServerTb(dir: string): void {
   const ai = Object.assign(tbAi, { stream: tbAiStream })
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     ai,
+    // The bulb's data folder, absolute (TB-FS.md) — server.ts writes beside the bulb via
+    // path.join(tb.dir, …) instead of guessing cwd-relative prefixes.
+    dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     hasOwnKeys,
     mode: 'local' as const,

@@ -3,7 +3,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
-import { loadAndCompile, serverModulePath } from '../pipeline.js'
+import { loadAndCompile, serverModulePath, bulbDataDir } from '../pipeline.js'
 import { replaceBulbBlock, CHUNK_SEPARATOR } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
@@ -74,6 +74,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     makeServerOptions: (port) => ({
       getHtml: () => html,
       basePath,
+      fsBase: bulbDataDir(bulbPath),
       port,
       reloadEmitter,
       messageEmitter,

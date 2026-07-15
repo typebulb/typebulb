@@ -135,8 +135,10 @@ const fs = `
   /**
    * Local filesystem access (CLI only).
    *
-   * Paths are resolved relative to the current working directory (where the CLI
-   * was launched), consistent with the .env cascade — not the bulb file's folder.
+   * Relative paths resolve against the bulb's data folder (\`tb.dir\` —
+   * \`<bulb-dir>/<filename-stem>/\`, created on demand), so
+   * \`tb.fs.write('results.json')\` lands beside the bulb. \`../\` reaches sibling
+   * bulbs' folders; everything stays confined to the project (the launch cwd).
    * Throws in editor/published mode.
    */
   fs: {
@@ -147,6 +149,16 @@ const fs = `
     /** Write text or raw bytes to a file. Creates parent directories if needed. */
     write(path: string, content: string | Uint8Array): Promise<boolean>;
   };`
+
+const dir = `
+  /**
+   * The bulb's data folder — absolute path to \`<bulb-dir>/<filename-stem>/\`.
+   *
+   * For interop only (handing a path to \`server.ts\` or a spawned tool):
+   * \`tb.fs\` already resolves relative paths against it, so bulb code writing
+   * its own files never needs it. CLI only — throws in editor/published/embedded mode.
+   */
+  readonly dir: string;`
 
 const clientOnlyMembers = `
   /**
@@ -254,7 +266,7 @@ export const clientTbTypings = `${aiChunkType}
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerProxy}${onMessage}${ai}${fs}${models}${theme}${mode}
+declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerProxy}${onMessage}${ai}${fs}${dir}${models}${theme}${mode}
 };
 `
 
@@ -266,6 +278,6 @@ export const serverTbTypings = `${aiChunkType}
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${ai}${models}${mode}
+declare const tb: {${ai}${dir}${models}${mode}
 };
 `

@@ -157,3 +157,49 @@ describe('local-only guards', () => {
     expect(await raw('/__fs/read', { ...json, Origin: `http://127.0.0.1:${server.port}` }, readBody)).toBe(200)
   })
 })
+
+// TB-FS.md: relative paths resolve against the bulb's data folder (fsBase); containment
+// stays the project (basePath) — `../` reaches siblings, escaping the project is denied.
+describe('data-folder resolution (fsBase)', () => {
+  let dataServer: ServerInstance
+  let project: string
+
+  beforeAll(async () => {
+    project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-fsbase-'))
+    fs.mkdirSync(path.join(project, 'typebulbs', 'other'), { recursive: true })
+    fs.writeFileSync(path.join(project, 'typebulbs', 'other', 'sibling.txt'), 'sibling', 'utf8')
+    dataServer = await startServer({
+      getHtml: () => '<html></html>',
+      basePath: project,
+      fsBase: path.join(project, 'typebulbs', 'foo'),
+      port: await freePort(),
+      trusted: true,
+    })
+  })
+
+  afterAll(() => {
+    dataServer?.close()
+    fs.rmSync(project, { recursive: true, force: true })
+  })
+
+  const durl = (p: string) => `http://127.0.0.1:${dataServer.port}${p}`
+  const dread = (p: string) =>
+    fetch(durl('/__fs/read'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
+
+  it('writes a relative path into the data folder (created on demand)', async () => {
+    const resp = await fetch(durl('/__fs/write?path=' + encodeURIComponent('results.json')), { method: 'POST', body: '{"ok":1}' })
+    expect(resp.ok).toBe(true)
+    expect(fs.readFileSync(path.join(project, 'typebulbs', 'foo', 'results.json'), 'utf8')).toBe('{"ok":1}')
+  })
+
+  it('reads a ../ sibling — contained by the project, not the data folder', async () => {
+    const resp = await dread('../other/sibling.txt')
+    expect(resp.ok).toBe(true)
+    expect(await resp.text()).toBe('sibling')
+  })
+
+  it('still denies escaping the project', async () => {
+    const resp = await dread('../'.repeat(8) + 'etc/passwd')
+    expect(resp.status).toBe(400)
+  })
+})

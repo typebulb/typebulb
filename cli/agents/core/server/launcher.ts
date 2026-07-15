@@ -3,6 +3,7 @@ import { join, isAbsolute } from 'path'
 import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
+import { extractDescription } from 'typebulb/format'
 
 // The mirror's bulb-side RPCs: open a cited file in the editor, promote an embedded bulb to a file
 // (breakout), and the status-bar launcher (list / launch / stop / trust / tail this project's bulbs).
@@ -161,4 +162,65 @@ export async function setBulbTrust(file: string, trust: boolean) {
 // writes the file, any host reads it — the same drain-from-offset shape as the transcript.
 export async function readBulbLog(pid: number, offset: number) {
   return readServerLog(pid, offset)
+}
+
+// ---- samples: typebulb.com's curated sample bulbs, downloadable on demand ----
+//
+// The catalog is the site's promotion set (the `samples` user's public bulbs, stubs variant —
+// specs/SEO.md), minus `welcome` (a homepage duplicate, not a sample). A sample becomes a file
+// only on a play click (downloadSample), landing under `typebulbs/u/samples/` — the `u/<user>/`
+// segment echoes the site's own URL structure, so the folder name IS the owner's slug (path
+// identity), unambiguous next to the sibling `typebulbs/<bulb>/` data-folder convention. Moving a
+// file out makes it an ordinary bulb; the folder belongs to the download — a re-download
+// overwrites, never merges.
+
+const SAMPLES_API = 'https://api.typebulb.com'
+const SAMPLES_TTL = 60 * 60 * 1000
+const CATALOG_TIMEOUT = 5000
+const DOWNLOAD_TIMEOUT = 15_000
+let samplesCache: { samples: { slug: string; name: string; description: string }[]; fetchedAt: number } | null = null
+let samplesFetch: Promise<{ slug: string; name: string; description: string }[]> | null = null
+
+// The catalog, cached like the model catalog (modelCatalog.ts): bounded fetch, stale-or-empty on
+// failure — an offline mirror degrades to a launcher without a samples section, never an error.
+// Single-flight: concurrent cold callers (attach + first menu open) share one request.
+export async function listSamples() {
+  if (samplesCache && Date.now() - samplesCache.fetchedAt <= SAMPLES_TTL) return samplesCache.samples
+  samplesFetch ??= fetchSamples().finally(() => { samplesFetch = null })
+  return samplesFetch
+}
+
+async function fetchSamples() {
+  try {
+    const res = await fetch(`${SAMPLES_API}/api/scripts/u/samples?stubs`, { signal: AbortSignal.timeout(CATALOG_TIMEOUT) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const bulbs = await res.json() as { slug: string; name: string; config?: string }[]
+    const samples = bulbs
+      .filter(b => b.slug !== 'welcome')
+      .map(b => ({ slug: b.slug, name: b.name, description: extractDescription(b.config) }))
+    samplesCache = { samples, fetchedAt: Date.now() }
+    return samples
+  } catch {
+    return samplesCache?.samples ?? []
+  }
+}
+
+// Fetch one sample's serialized markdown (the `.md` route — the same bytes a .bulb.md holds) and
+// write it under typebulbs/u/samples/. The slug crosses the RPC boundary from the client, so pin it
+// to slug shape before it touches a path. Returns the rel path for the caller to launch.
+export async function downloadSample(slug: string) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return { ok: false, error: 'bad slug' }
+  let md: string
+  try {
+    const res = await fetch(`${SAMPLES_API}/api/scripts/u/samples/${slug}.md`, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT) })
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+    md = await res.text()
+  } catch (e) {
+    return { ok: false, error: (e as Error)?.message ?? String(e) }
+  }
+  const dir = join('typebulbs', 'u', 'samples')
+  mkdirSync(join(projectCwd, dir), { recursive: true })
+  const rel = join(dir, `${slug}.bulb.md`)
+  writeFileSync(join(projectCwd, rel), md)
+  return { ok: true, file: rel }
 }

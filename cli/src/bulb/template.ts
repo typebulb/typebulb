@@ -23,11 +23,14 @@ export interface RenderOptions {
    *  standalone top-level page (the CLI server). Only the standalone page gets a
    *  `html, body { height: 100% }` chain — see the `pageHeight` note in renderHtml. */
   embedded?: boolean
+  /** The bulb's data folder, absolute (TB-FS.md) — injected as window.__TB_DIR__ for tb.dir.
+   *  Omitted for embeds (no filesystem) and hosts without a bulb file. */
+  dir?: string
 }
 
 /** Render a bulb to a complete HTML page */
 export function renderHtml(options: RenderOptions): string {
-  const { name, code, css, html, data, insight, importMap, theme, embedded } = options
+  const { name, code, css, html, data, insight, importMap, theme, embedded, dir } = options
 
   // Default HTML if none provided
   const userHtml = html.trim() || '<div id="app"></div>'
@@ -66,6 +69,7 @@ ${userHtml}
 
 ${data.length > 0 ? `<script>window.__TB_DATA__ = ${escapeScript(JSON.stringify(data))};</script>` : ''}
 ${insight ? `<script>window.__TB_INSIGHT__ = ${escapeScript(JSON.stringify(insight))};</script>` : ''}
+${dir ? `<script>window.__TB_DIR__ = ${escapeScript(JSON.stringify(dir))};</script>` : ''}
 
 <script>
 ${typebulbShim}

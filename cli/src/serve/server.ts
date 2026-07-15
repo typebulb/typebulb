@@ -61,6 +61,10 @@ function errorMessage(e: unknown): string {
 export interface ServerOptions {
   getHtml: () => string
   basePath: string
+  /** Base for RELATIVE /__fs paths: the bulb's data folder (TB-FS.md). Containment stays
+   *  `basePath` (the project), so `../` reaches siblings but never escapes the project.
+   *  Absent (agent mirror, older tests) → falls back to basePath, the old cwd-relative rule. */
+  fsBase?: string
   port: number
   reloadEmitter?: EventEmitter
   /** Carries `typebulb send` pushes to connected pages as `message` SSE events (TB-CLI.md).
@@ -99,7 +103,9 @@ export interface ServerInstance {
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets } = options
+  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets } = options
+  // Relative /__fs paths resolve here (the bulb's data folder — TB-FS.md); containment stays basePath.
+  const fsRoot = fsBase ?? basePath
 
   const app = new Hono()
 
@@ -224,7 +230,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.post('/__fs/read', async (c) => {
     try {
       const { path: reqPath } = await c.req.json<{ path: string }>()
-      const resolved = resolvePath(reqPath, basePath)
+      const resolved = resolvePath(reqPath, fsRoot, basePath)
       const data = await fs.readFile(resolved)
       return new Response(new Uint8Array(data), {
         headers: { 'Content-Type': 'application/octet-stream' },
@@ -241,7 +247,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     try {
       const reqPath = c.req.query('path')
       if (!reqPath) return c.json({ error: 'Missing path' }, 400)
-      const resolved = resolvePath(reqPath, basePath)
+      const resolved = resolvePath(reqPath, fsRoot, basePath)
 
       // Ensure parent directory exists
       await fs.mkdir(path.dirname(resolved), { recursive: true })
@@ -625,14 +631,15 @@ function contentTypeFor(filePath: string): string {
   }
 }
 
-/** Resolve a path relative to base, with security check */
-function resolvePath(requestedPath: string, basePath: string): string {
-  // Resolve the path relative to basePath
+/** Resolve a path relative to `basePath`, contained to `containRoot` (default: basePath itself).
+ *  The split serves the fs routes: resolution against the bulb's data folder, containment
+ *  against the project (TB-FS.md) — an ergonomics split, not a widened envelope. */
+function resolvePath(requestedPath: string, basePath: string, containRoot = basePath): string {
   const resolved = path.resolve(basePath, requestedPath)
 
   // Security: ensure resolved path is within base directory. The separator
   // boundary stops a sibling-prefix escape (e.g. base `…/dist` vs `…/dist-evil`).
-  const normalizedBase = path.normalize(basePath)
+  const normalizedBase = path.normalize(containRoot)
   const normalizedResolved = path.normalize(resolved)
 
   if (normalizedResolved !== normalizedBase && !normalizedResolved.startsWith(normalizedBase + path.sep)) {

@@ -16,6 +16,13 @@ export async function findBulbFile(dir: string): Promise<string | null> {
   return bulbFile ? path.join(dir, bulbFile) : null
 }
 
+/** A bulb's data folder — the sibling dir named for the filename stem, absolute (TB-FS.md).
+ *  Relative tb.fs paths resolve here; tb.dir exposes it to bulb code. */
+export function bulbDataDir(bulbPath: string): string {
+  const abs = path.resolve(bulbPath)
+  return path.join(path.dirname(abs), path.basename(abs).replace(/\.bulb\.md$/, ''))
+}
+
 /**
  * Read a .bulb.md file from disk and pre-parse the bits the rest of the CLI
  * always needs together: the structured `LocalBulb` (subscripts plus the
@@ -64,10 +71,10 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   const serverPath = serverModulePath(bulbPath)
   await fs.writeFile(serverPath, code, 'utf-8')
 
-  // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models) before it runs — its free `tb`
+  // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models / tb.dir) before it runs — its free `tb`
   // reference resolves to this, the same way the browser shim provides one. Must precede the import
   // (server.ts top-level code runs on import). Only reached under trust (this import is trust-gated).
-  installServerTb()
+  installServerTb(bulbDataDir(bulbPath))
 
   // Cache-bust with query param so re-imports pick up changes
   const fileUrl = `${pathToFileURL(serverPath).href}?t=${Date.now()}`
@@ -127,6 +134,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     data: dataChunks,
     insight: bulb.insight,
     importMap,
+    dir: bulbDataDir(bulbPath),
     watch,
   })
 
