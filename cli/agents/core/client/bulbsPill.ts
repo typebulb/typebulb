@@ -51,13 +51,17 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   #logTimer?: ReturnType<typeof setInterval>
   // The just-broken-out server's pid — its launcher row stays bright while the rest dim (see spotlight()).
   spotlightPid?: number
+  // Whether the samples-catalog fold is expanded — per-open view state like filter/highlight,
+  // reset in onClosed, never persisted (TB-Agent-Mirror.md).
+  samplesOpen = false
 
   protected search(query: string) { return tb.server.searchBulbs(query) as Promise<BulbHit[]> }
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
   protected onActivate(i: number) {
     const r = this.rows()[i]
     if (!r) return
-    if (r.running) window.open(r.running.url, '_blank', 'noopener')
+    if (r.sampleGroup) this.toggleSamples()
+    else if (r.running) window.open(r.running.url, '_blank', 'noopener')
     else if (r.remote) this.downloadAndLaunch(r)
     else this.launch(r.path)
   }
@@ -166,7 +170,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // filter input at the anchored edge. The default filter matches name + path; full-text mode keeps
   // only the rows the server search hit, decorated with hit count + snippet — unlike the session
   // picker's results-only list, a search row here stays an ordinary row (launch/stop/trust intact),
-  // just fewer of them.
+  // just fewer of them. With no query, the catalog folds into one group row at the far end
+  // (recent -1 sorts it past the samples' 0) — collapsed by default; a typed filter reaches into
+  // the fold since remote rows match like any other, so find-by-name works without expanding.
   rows(): BulbRow[] {
     let rows = this.merged()
     if (this.searchActive) {
@@ -178,6 +184,13 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     } else {
       const q = this.filter.trim().toLowerCase()
       if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
+      else {
+        const n = rows.filter(r => r.remote).length
+        if (n) {
+          if (!this.samplesOpen) rows = rows.filter(r => !r.remote)
+          rows.push({ path: '::samples', name: 'samples from typebulb.com', recent: -1, sampleGroup: n })
+        }
+      }
     }
     return rows.sort((a, b) => a.recent - b.recent)
   }
@@ -193,7 +206,15 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   protected override onClosed() {
     super.onClosed()
     this.closeLog()
+    this.samplesOpen = false
     this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
+  }
+
+  // Expand/collapse the catalog in place. No pinToBottom: the fold sits at the list's top edge, so
+  // the user toggling it is looking there — yanking to the bottom would hide what they just opened.
+  toggleSamples() {
+    this.samplesOpen = !this.samplesOpen
+    this.update()
   }
 
   // Launch a stopped bulb — but PROBE TRUST FIRST so the offer precedes the tab. A
@@ -452,7 +473,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         ? this.emptyState('No bulbs in this project yet.')
         : div({ class: 'bulb-list', onScroll: () => this.onListScroll() },
             rows.map((r, i) => this.row(r, i, dimOthers && r.running?.pid !== spot))),
-      this.filterBox(this.merged().length, 'bulb'),
+      // Count the project's own bulbs, not the folded catalog — 4 bulbs, not 54. Also the honest
+      // full-text figure: searchBulbs's corpus is project files only.
+      this.filterBox(this.merged().filter(r => !r.remote).length, 'bulb'),
     )
   }
 
@@ -473,7 +496,16 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     )
   }
 
+  // Row hover: move the keyboard cursor there; hovering the spotlit (just-broken-out) row also
+  // lifts the spotlight dim. Shared by ordinary rows and the fold header.
+  hoverRow(i: number, s?: RunningServer) {
+    const lift = s !== undefined && s.pid === this.spotlightPid
+    if (lift) this.spotlightPid = undefined
+    if (this.highlighted !== i || lift) { this.highlighted = i; this.update() }
+  }
+
   row(r: BulbRow, i: number, dimmed = false) {
+    if (r.sampleGroup) return this.groupRow(r, i, dimmed)
     const s = r.running
     const showing = s && this.openLog?.pid === s.pid
     // Running tier is authoritative; otherwise the remembered decision the next launch uses.
@@ -483,11 +515,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // row-to-row. Right-anchored, so the rightmost column (time/port) always aligns; the others
     // stack inward from it.
     return div({ class: ['server-row', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
-        onMouseEnter: () => {
-          const lift = s !== undefined && s.pid === this.spotlightPid   // hovering the new bulb's row lifts its spotlight
-          if (lift) this.spotlightPid = undefined
-          if (this.highlighted !== i || lift) { this.highlighted = i; this.update() }
-        } },
+        onMouseEnter: () => this.hoverRow(i, s) },
       s
         ? button({ class: 'server-stop', title: 'Stop this server', ariaLabel: 'Stop', onClick: (e: MouseEvent) => { e.stopPropagation(); this.stop(s.pid) } }, iconStop())
         : button({ class: ['bulb-launch', this.launching.has(pathKey(r.path)) ? 'launching shimmer' : ''], title: r.remote ? 'Download from typebulb.com & launch' : trusted ? 'Launch (trusted — remembered)' : 'Launch (restricted)', ariaLabel: 'Launch', onClick: (e: MouseEvent) => { e.stopPropagation(); r.remote ? this.downloadAndLaunch(r) : this.launch(r.path) } }, iconPlay()),
@@ -524,6 +552,18 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   userLink(r: BulbRow) {
     const user = rowUser(r)
     return user ? a({ class: 'sample-link', href: rowUserUrl(r, user), target: '_blank', rel: 'noopener noreferrer', title: `Open this bulb's page on typebulb.com` }, user) : null
+  }
+
+  // The catalog's fold header — a full-width row (caret + muted label) in the ordinary row slot, so
+  // the keyboard cursor and highlight treat it like any other row; Enter/click toggles the fold.
+  groupRow(r: BulbRow, i: number, dimmed: boolean) {
+    return div({ class: ['server-row', 'sample-group', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
+        title: this.samplesOpen ? 'Collapse the samples' : 'Runnable sample bulbs from typebulb.com — click to browse',
+        onMouseEnter: () => this.hoverRow(i),
+        onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleSamples() } },
+      icon('caret', ['caret-tri', this.samplesOpen ? 'open' : '']),
+      span({ class: 'sample-group-label' }, `${r.name} (${r.sampleGroup})`),
+    )
   }
 
   // Trust toggle: one button showing the *current* tier (one word; clicking flips it). Shares the

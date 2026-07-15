@@ -139,5 +139,6 @@ export interface BulbHit { path: string; hitCount: number; snippet: string }
 // present ⇒ live (open link + stop); absent ⇒ stopped (launch). `recent` = MRU sort key.
 // `trusted` = a remembered trust decision (applies to the next launch). `hitCount`/`snippet`
 // are the full-text decoration, set only on search-mode rows. `remote` = a catalog sample not yet
-// downloaded (its `path` is the project-relative path the download will land at).
-export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: SampleBulb }
+// downloaded (its `path` is the project-relative path the download will land at). `sampleGroup` =
+// the samples-catalog fold header (the count it folds), a synthetic row with no bulb behind it.
+export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: SampleBulb; sampleGroup?: number }

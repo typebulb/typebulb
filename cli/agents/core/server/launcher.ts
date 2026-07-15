@@ -194,9 +194,15 @@ async function fetchSamples() {
   try {
     const res = await fetch(`${SAMPLES_API}/api/scripts/u/samples?stubs`, { signal: AbortSignal.timeout(CATALOG_TIMEOUT) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const bulbs = await res.json() as { slug: string; name: string; config?: string }[]
+    const bulbs = await res.json() as { slug: string; name: string; config?: string; order?: number; createdAt?: string }[]
+    // The site's own listing order for /u/<user> (foreignScriptList.ts): curated `order` ascending,
+    // unordered last, newest-created first within a tie. The API sends updatedAt-desc, which churns
+    // on every sample edit; the client keeps this order (stable sort over equal MRU keys).
+    const ord = (b: { order?: number }) => b.order ?? Number.MAX_SAFE_INTEGER
+    const created = (b: { createdAt?: string }) => Date.parse(b.createdAt ?? '') || 0
     const samples = bulbs
       .filter(b => b.slug !== 'welcome')
+      .sort((a, b) => ord(a) - ord(b) || created(b) - created(a))
       .map(b => ({ slug: b.slug, name: b.name, description: extractDescription(b.config) }))
     samplesCache = { samples, fetchedAt: Date.now() }
     return samples
