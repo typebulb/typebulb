@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, isAbsolute } from 'path'
-import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies } from '../../../src/servers.js'
+import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { extractDescription } from 'typebulb/format'
@@ -174,7 +174,11 @@ export async function readBulbLog(pid: number, offset: number) {
 // file out makes it an ordinary bulb; the folder belongs to the download — a re-download
 // overwrites, never merges.
 
+// Two origins by necessity: the JSON catalog only exists on the API origin (the site's edge
+// worker doesn't proxy it), while the download rides the public raw-markdown shape pullBulb
+// speaks (/u/<user>/<slug>.md — TB-Push-Pull.md Invariant 2).
 const SAMPLES_API = 'https://api.typebulb.com'
+const SITE_ORIGIN = 'https://typebulb.com'
 const SAMPLES_TTL = 60 * 60 * 1000
 const CATALOG_TIMEOUT = 5000
 const DOWNLOAD_TIMEOUT = 15_000
@@ -211,22 +215,117 @@ async function fetchSamples() {
   }
 }
 
-// Fetch one sample's serialized markdown (the `.md` route — the same bytes a .bulb.md holds) and
-// write it under typebulbs/u/samples/. The slug crosses the RPC boundary from the client, so pin it
-// to slug shape before it touches a path. Returns the rel path for the caller to launch.
+// One sample's markdown into typebulbs/u/samples/ — a pull with force on (the folder belongs to
+// the download, so overwrite is the semantic). Pinned to the prod origin like the catalog it
+// came from (SAMPLES_API) — the curated pair must not split across origins.
 export async function downloadSample(slug: string) {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return { ok: false, error: 'bad slug' }
-  let md: string
+  if (!SLUG_RE.test(slug)) return { ok: false, error: 'bad slug' }
+  return pullTo(SITE_ORIGIN, 'samples', slug, true)
+}
+
+// ---- push/pull: the user's own typebulb.com bulbs in the launcher (TB-Push-Pull.md, Mirror surface) ----
+//
+// Everything here is gated on TYPEBULB_TOKEN in the project's .env cascade — no token, no group, no
+// push. Token and origin are read FRESH per call (readEnvVar) so a mid-session .env edit takes
+// effect without a mirror restart. Origin honors TYPEBULB_ORIGIN like the CLI verbs do.
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/
+const MY_BULBS_TTL = 5 * 60 * 1000
+type RemoteBulbInfo = { slug: string; name: string; description: string }
+let myBulbsCache: { key: string; user: string; bulbs: RemoteBulbInfo[]; fetchedAt: number } | null = null
+let myBulbsFetch: Promise<{ user?: string; bulbs: RemoteBulbInfo[] }> | null = null
+
+const remoteOrigin = () => readEnvVar('TYPEBULB_ORIGIN', projectCwd) || SITE_ORIGIN
+const remoteToken = () => readEnvVar('TYPEBULB_TOKEN', projectCwd)
+
+// The launcher's "your typebulb.com bulbs" group — the samples catalog generalized to the token's
+// user. Same cache discipline as listSamples (single-flight, stale-or-empty on failure), keyed on
+// origin+token so an .env swap invalidates. Uses the authed /api/scripts/list (includes unlisted
+// and private, which the public ?stubs listing can't see).
+export async function listMyBulbs(): Promise<{ user?: string; bulbs: RemoteBulbInfo[] }> {
+  const token = remoteToken()
+  if (!token) return { bulbs: [] }
+  const key = `${remoteOrigin()}\n${token}`
+  if (myBulbsCache?.key === key && Date.now() - myBulbsCache.fetchedAt <= MY_BULBS_TTL) {
+    return { user: myBulbsCache.user, bulbs: myBulbsCache.bulbs }
+  }
+  myBulbsFetch ??= fetchMyBulbs(key, token).finally(() => { myBulbsFetch = null })
+  return myBulbsFetch
+}
+
+// A JSON API GET that REFUSES an SPA-shell 200 — on typebulb.com the Pages edge answers /api/*
+// with the app HTML (only the public /u/…​.md shape is proxied), so a non-JSON content-type means
+// "wrong origin", not "empty data".
+async function apiJson<T>(origin: string, path: string, headers: Record<string, string>): Promise<T> {
+  const res = await fetch(`${origin}${path}`, { headers, signal: AbortSignal.timeout(CATALOG_TIMEOUT) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (!res.headers.get('content-type')?.includes('json')) throw new Error('not json')
+  return res.json() as Promise<T>
+}
+
+async function fetchMyBulbs(key: string, token: string) {
+  const headers = { Authorization: `Bearer ${token}` }
   try {
-    const res = await fetch(`${SAMPLES_API}/api/scripts/u/samples/${slug}.md`, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT) })
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
-    md = await res.text()
+    // Resolve the JSON API origin: dev (TYPEBULB_ORIGIN=localhost) serves /api/* directly; the
+    // production site doesn't, so fall back to the api. subdomain — the same derivation the edge
+    // worker itself makes (`https://api.${hostname}`).
+    let api = remoteOrigin()
+    let me: { slug: string }
+    try {
+      me = await apiJson<{ slug: string }>(api, '/api/me', headers)
+    } catch {
+      const u = new URL(api)
+      api = `${u.protocol}//api.${u.host}`
+      me = await apiJson<{ slug: string }>(api, '/api/me', headers)
+    }
+    const scripts = await apiJson<{ slug: string; name: string; config?: string }[]>(api, '/api/scripts/list', headers)
+    const bulbs = scripts.map(b => ({ slug: b.slug, name: b.name, description: extractDescription(b.config) }))
+    myBulbsCache = { key, user: me.slug, bulbs, fetchedAt: Date.now() }
+    return { user: me.slug, bulbs }
+  } catch {
+    return myBulbsCache?.key === key ? { user: myBulbsCache.user, bulbs: myBulbsCache.bulbs } : { bulbs: [] }
+  }
+}
+
+// Pull one bulb (any owner) into its conventional path — TYPEBULB_ORIGIN-honoring, conflict-guarded
+// (a differing local file comes back as `conflict` for the client's overwrite confirm, whose yes
+// retries with force — the one conflict resolution, Invariant 1).
+export async function pullRemoteBulb(userSlug: string, slug: string, force = false) {
+  if (!SLUG_RE.test(slug) || !SLUG_RE.test(userSlug)) return { ok: false, error: 'bad slug' }
+  return pullTo(remoteOrigin(), userSlug, slug, force)
+}
+
+// The shared pull core: fetch into typebulbs/u/<owner>/, map pullBulb's outcomes to the RPC shape.
+// Slugs cross the RPC boundary from the client, so callers pin them to slug shape (SLUG_RE) before
+// they touch a path. Returns the rel path for the caller to launch.
+async function pullTo(origin: string, userSlug: string, slug: string, force: boolean) {
+  const rel = bulbRelPath(userSlug, slug)
+  try {
+    const out = await pullBulb(
+      { origin, userSlug, slug, dest: join(projectCwd, rel) },
+      { force, token: remoteToken(), timeoutMs: DOWNLOAD_TIMEOUT },
+    )
+    if (out.kind === 'conflict') return { ok: false, conflict: true, error: 'local file differs from the site copy' }
+    if (out.kind === 'http-error') return { ok: false, error: `HTTP ${out.status}` }
+    if (out.kind === 'not-markdown') return { ok: false, error: `not a bulb (${out.contentType ?? 'no content-type'})` }
+    return { ok: true, file: rel, upToDate: out.kind === 'up-to-date' }
   } catch (e) {
     return { ok: false, error: (e as Error)?.message ?? String(e) }
   }
-  const dir = join('typebulbs', 'u', 'samples')
-  mkdirSync(join(projectCwd, dir), { recursive: true })
-  const rel = join(dir, `${slug}.bulb.md`)
-  writeFileSync(join(projectCwd, rel), md)
-  return { ok: true, file: rel }
+}
+
+// Push one conventional local file to the site as the token's user. A 409 comes back as
+// `conflict` for the same confirm-then-force flow.
+export async function pushLocalBulb(relPath: string, force = false) {
+  const token = remoteToken()
+  if (!token) return { ok: false, error: 'no TYPEBULB_TOKEN in .env' }
+  try {
+    const target = parsePullTarget(relPath, projectCwd, remoteOrigin())
+    const out = await pushBulb(target, { token, force, timeoutMs: DOWNLOAD_TIMEOUT })
+    if (out.kind === 'conflict') return { ok: false, conflict: true, error: out.message }
+    if (out.kind === 'http-error') return { ok: false, error: `HTTP ${out.status}: ${out.message}` }
+    return { ok: true, created: out.created, serverStripped: out.serverStripped }
+  } catch (e) {
+    return { ok: false, error: (e as Error)?.message ?? String(e) }
+  }
 }

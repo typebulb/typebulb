@@ -41,6 +41,8 @@ typebulb agent:{claude|pi}     Open a named harness's mirror in the foreground �
 typebulb skill                 Print this README as an Agent Skill on stdout
 typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
 typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust
+typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
+typebulb push <file>           Upload a local bulb to typebulb.com as you (needs TYPEBULB_TOKEN in .env)
 typebulb check [file.bulb.md]  Type-check a bulb without running it
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
@@ -192,10 +194,6 @@ everywhere.
 
 - **Embeds also have no persistent storage** (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail — a client-only sandboxed iframe), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
 - **`tb.proxy` only rewrites allow-listed CDNs** — `esm.sh`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`; any other host 403s. Serve a WASM/worker asset (a tesseract or ffmpeg core, a pdf.js worker) from one of these.
-
-## Portability back to typebulb.com
-
-A local `.bulb.md` can be re-imported into typebulb.com. If it has a `**server.ts**` block you'll be warned on import, since `server.ts` is only meaningful locally.
 
 ## Agent Harness Support
 
@@ -422,6 +420,15 @@ Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoni
 ### Proxying Claude
 
 The user can proxy claude with the agent mirror's model switcher, to any model on [OpenRouter](https://openrouter.ai) model instead of Anthropic. This lets the user use OpenRouter models with Claude Code's harness.
+
+## Push & Pull (typebulb.com)
+
+One bulb per command, between typebulb.com and its conventional local file — the path IS the remote identity: `typebulbs/u/ben/birds.bulb.md` ↔ `typebulb.com/u/ben/birds`.
+
+- **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place). Unlisted and public bulbs need no login. A local file with real changes is refused; `--force` overwrites it.
+- **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.
+- **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm.
+- `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
 
 ## Charts
 

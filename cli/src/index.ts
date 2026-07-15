@@ -33,6 +33,8 @@ import { runModels } from './commands/models.js'
 import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
+import { runPull } from './commands/pull.js'
+import { runPush } from './commands/push.js'
 import { ensureHarnessSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -105,6 +107,16 @@ async function main(): Promise<void> {
   }
   if (args.subcommand === 'models') {
     await runModels(args.mode)
+    return
+  }
+  if (args.subcommand === 'pull') {
+    // The argument is a URL or a not-yet-existing local path — never a resolved bulb file, so
+    // dispatch before file resolution (TB-Push-Pull.md).
+    await runPull(args.file || undefined, { force: args.force, mode: args.mode })
+    return
+  }
+  if (args.subcommand === 'push') {
+    await runPush(args.file || undefined, { force: args.force, mode: args.mode })
     return
   }
   if (args.subcommand === 'agent') {

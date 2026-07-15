@@ -33,3 +33,10 @@ export { resolveLocalProvider, sendTbAi } from './serve/localProvider.js'
 // (agents/pi/server/piExtension.ts) points at the same artifacts `typebulb skill` and
 // `typebulb agent` emit — through this public entry, per the agent-boundary rule.
 export { bundledReadmePath, bundledDescriptionPath } from './skill.js'
+// One-bulb transfer from a typebulb host (TB-Push-Pull.md) — the mirror's sample download is a
+// pull with force on, so it shares this instead of its own fetch-and-write.
+export { pullBulb, bulbRelPath, parsePullTarget, type PullTarget, type PullOutcome } from './commands/pull.js'
+export { pushBulb, type PushOutcome } from './commands/push.js'
+// Fresh per-call read of one .env-cascade key — the mirror server reads TYPEBULB_TOKEN/ORIGIN
+// through this so a mid-session .env edit takes effect without a mirror restart.
+export { readEnvVar } from './env.js'

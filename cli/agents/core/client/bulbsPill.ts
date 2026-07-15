@@ -3,7 +3,7 @@ import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { pathKey, basename, bulbBasename, relTime } from './util.js'
-import type { RunningServer, BulbFile, BulbRow, BulbHit, SampleBulb } from './types.js'
+import type { RunningServer, BulbFile, BulbRow, BulbHit, RemoteBulb } from './types.js'
 
 // Launch/stop icons through icons.ts (material play/stop, filled): svgs centre reliably where
 // font glyphs don't, and currentColor lets the button's own colour flow through.
@@ -31,7 +31,11 @@ const rowUserUrl = (r: BulbRow, user: string) => `https://typebulb.com/u/${user}
 export class BulbsPill extends ComboboxPill<BulbHit> {
   files: BulbFile[] = []
   servers: RunningServer[] = []
-  samples: SampleBulb[] = []
+  samples: RemoteBulb[] = []
+  // The token user's own typebulb.com bulbs (listMyBulbs) + who they are. Empty/undefined without
+  // a TYPEBULB_TOKEN in the project .env — the push/pull surface simply doesn't exist then.
+  mine: RemoteBulb[] = []
+  myUser?: string
   protected keepOpenSelector = '.servers-wrap'
   protected filterId = 'bulb-filter'
   protected listSelector = '.bulb-list'
@@ -54,6 +58,15 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // Whether the samples-catalog fold is expanded — per-open view state like filter/highlight,
   // reset in onClosed, never persisted (TB-Agent-Mirror.md).
   samplesOpen = false
+  mineOpen = false
+  // A push/pull that hit the conflict guard, awaiting the one-gesture overwrite confirm
+  // (TB-Push-Pull.md, Mirror surface): yes retries with force.
+  pendingOverwrite?: { heading: string; body: string; yesLabel: string; onYes: () => void }
+  // In-flight / just-landed sync verbs, keyed `${pathKey}:${verb}` — transient, in-memory: the
+  // shimmer while the PUT/GET runs, a ~1s ✓ on success. The click's heartbeat; success stays
+  // otherwise silent (Mirror surface).
+  syncBusy = new Set<string>()
+  syncDone = new Set<string>()
 
   protected search(query: string) { return tb.server.searchBulbs(query) as Promise<BulbHit[]> }
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
@@ -61,6 +74,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     const r = this.rows()[i]
     if (!r) return
     if (r.sampleGroup) this.toggleSamples()
+    else if (r.mineGroup) this.toggleMine()
     else if (r.running) window.open(r.running.url, '_blank', 'noopener')
     else if (r.remote) this.downloadAndLaunch(r)
     else this.launch(r.path)
@@ -83,7 +97,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // pill-click path (refresh, pin newest into view, arm the closer); the dim lifts on close or row-hover.
   spotlight(pid?: number) { this.spotlightPid = pid; this.show() }
 
-  refresh() { return Promise.all([this.refreshServers(), this.refreshFiles(), this.refreshSamples()]) }
+  refresh() { return Promise.all([this.refreshServers(), this.refreshFiles(), this.refreshSamples(), this.refreshMine()]) }
 
   // Running registry only. Re-render on any change that the UI shows — count, identity, AND
   // the per-server flags the rows/modal key off (`denied`/`predicted` drive the elevation modal;
@@ -126,12 +140,26 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // and each menu open.
   async refreshSamples() {
     try {
-      const samples = await tb.server.listSamples() as SampleBulb[]
+      const samples = await tb.server.listSamples() as RemoteBulb[]
       const changed = samples.length !== this.samples.length || samples.some((s, i) => s.slug !== this.samples[i]?.slug)
       this.samples = samples
       if (changed) { this.update(); this.keepBottom() }
     } catch (err) {
       console.error('[mirror] samples refresh failed', err)
+    }
+  }
+
+  // The token user's own bulbs (server-cached 5min; no token / offline → empty). Same cadence
+  // as samples: refresh() re-asks on attach and each menu open.
+  async refreshMine() {
+    try {
+      const { user, bulbs } = await tb.server.listMyBulbs() as { user?: string; bulbs: RemoteBulb[] }
+      const changed = user !== this.myUser || bulbs.length !== this.mine.length || bulbs.some((b, i) => b.slug !== this.mine[i]?.slug)
+      this.myUser = user
+      this.mine = bulbs
+      if (changed) { this.update(); this.keepBottom() }
+    } catch (err) {
+      console.error('[mirror] my-bulbs refresh failed', err)
     }
   }
 
@@ -142,11 +170,15 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   merged(): BulbRow[] {
     const byKey = new Map<string, BulbRow>()
     const fileKeys = this.files.map(f => pathKey(f.path))
-    // Catalog samples with no local file yet: recent 0 sorts them to the far end, away from the
-    // newest-at-bottom anchor. Once downloaded, the local file's row takes over (suffix match —
-    // file paths are absolute, a sample's path is project-relative) and the remote row vanishes.
-    for (const smp of this.samples) {
-      const rel = samplePath(smp.slug)
+    // Remote bulbs (samples catalog + the token user's own) with no local file yet: recent 0 sorts
+    // them to the far end, away from the newest-at-bottom anchor. Once pulled, the local file's row
+    // takes over (suffix match — file paths are absolute, a remote's path is project-relative) and
+    // the remote row vanishes. The owner rides in the path (Invariant 4), so one loop serves both.
+    const remotes: [string, RemoteBulb][] = [
+      ...this.samples.map(s => [samplePath(s.slug), s] as [string, RemoteBulb]),
+      ...(this.myUser ? this.mine.map(b => [`typebulbs/u/${this.myUser}/${b.slug}.bulb.md`, b] as [string, RemoteBulb]) : []),
+    ]
+    for (const [rel, smp] of remotes) {
       if (!fileKeys.some(k => k.endsWith('/' + rel))) {
         byKey.set(rel, { path: rel, name: smp.name, recent: 0, remote: smp })
       }
@@ -185,10 +217,18 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       const q = this.filter.trim().toLowerCase()
       if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
       else {
-        const n = rows.filter(r => r.remote).length
-        if (n) {
-          if (!this.samplesOpen) rows = rows.filter(r => !r.remote)
-          rows.push({ path: '::samples', name: 'samples from typebulb.com', recent: -1, sampleGroup: n })
+        // Two folds, one per remote catalog; ownership rides in the row's path (rowUser).
+        const isSample = (r: BulbRow) => !!r.remote && rowUser(r) === 'samples'
+        const isMine = (r: BulbRow) => !!r.remote && rowUser(r) !== 'samples'
+        const ns = rows.filter(isSample).length
+        const nm = rows.filter(isMine).length
+        if (ns) {
+          if (!this.samplesOpen) rows = rows.filter(r => !isSample(r))
+          rows.push({ path: '::samples', name: 'samples from typebulb.com', recent: -1, sampleGroup: ns })
+        }
+        if (nm) {
+          if (!this.mineOpen) rows = rows.filter(r => !isMine(r))
+          rows.push({ path: '::mine', name: `your typebulb.com bulbs`, recent: -2, mineGroup: nm })
         }
       }
     }
@@ -207,6 +247,8 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     super.onClosed()
     this.closeLog()
     this.samplesOpen = false
+    this.mineOpen = false
+    this.pendingOverwrite = undefined
     this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
   }
 
@@ -214,6 +256,11 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // the user toggling it is looking there — yanking to the bottom would hide what they just opened.
   toggleSamples() {
     this.samplesOpen = !this.samplesOpen
+    this.update()
+  }
+
+  toggleMine() {
+    this.mineOpen = !this.mineOpen
     this.update()
   }
 
@@ -233,24 +280,74 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     await this.doLaunch(path)
   }
 
-  // Play on a remote catalog row: download the sample into typebulbs/u/samples/, then run the
-  // ordinary launch flow (trust scan included) on the new local file. The remote row's rel path
-  // keys the shimmer; refreshFiles swaps the row to the local absolute-path file, so re-find it
-  // by suffix before launching to keep the shimmer + trust modal on the row actually displayed.
+  // Play on a remote catalog row: pull the bulb into typebulbs/u/<owner>/, then run the
+  // ordinary launch flow (trust scan included) on the new local file. Samples keep their
+  // unconditional-overwrite semantics (downloadSample); the user's own bulbs go through the
+  // conflict-guarded pull (no local file exists for a remote row, so no conflict in practice).
+  // The remote row's rel path keys the shimmer; refreshFiles swaps the row to the local
+  // absolute-path file, so re-find it by suffix before launching to keep the shimmer + trust
+  // modal on the row actually displayed.
   async downloadAndLaunch(r: BulbRow) {
     const key = pathKey(r.path)
     this.launching.add(key); this.update()
     try {
-      const res = await tb.server.downloadSample(r.remote!.slug) as { ok: boolean; file?: string; error?: string }
-      if (!res.ok || !res.file) { console.error('[mirror] downloadSample failed', res.error); return }
+      const user = rowUser(r)
+      const res = (user === 'samples'
+        ? await tb.server.downloadSample(r.remote!.slug)
+        : await tb.server.pullRemoteBulb(user, r.remote!.slug)) as { ok: boolean; file?: string; error?: string }
+      if (!res.ok || !res.file) { console.error('[mirror] remote pull failed', res.error); return }
       await this.refreshFiles()
       const local = this.files.find(f => pathKey(f.path).endsWith('/' + pathKey(res.file!)))?.path ?? res.file
       await this.launch(local)
     } catch (err) {
-      console.error('[mirror] downloadSample failed', err)
+      console.error('[mirror] remote pull failed', err)
     } finally {
       this.launching.delete(key); this.update()
     }
+  }
+
+  // ---- push/pull verbs on local rows (TB-Push-Pull.md, Mirror surface) ----
+  // Pull is valid wherever a remote exists (any u/<owner>/ row); push where the row is the token
+  // user's and a local file exists. A conflict raises the one-gesture overwrite confirm; its yes
+  // retries with force. Success is silent — the row/list is the confirmation.
+
+  // One verb's full protocol: shimmer while the RPC runs, the overwrite confirm on a conflict
+  // (yes = retry with force), a ✓ beat on success, console on failure. The two verbs differ only
+  // in the RPC and which side the confirm offers to overwrite.
+  async syncRow(r: BulbRow, verb: 'pull' | 'push', force = false) {
+    const key = `${pathKey(r.path)}:${verb}`
+    this.syncBusy.add(key); this.update()
+    try {
+      const res = (verb === 'pull'
+        ? await tb.server.pullRemoteBulb(rowUser(r)!, bulbBasename(r.path), force)
+        : await tb.server.pushLocalBulb(r.path, force)) as { ok: boolean; conflict?: boolean; error?: string }
+      if (res.ok) this.tickDone(key)
+      else if (res.conflict) {
+        this.pendingOverwrite = {
+          ...(verb === 'pull'
+            ? { heading: `“${r.name}” has local changes`,
+                body: `Your local file differs from the typebulb.com copy. Overwrite the local file with the site's version?`,
+                yesLabel: 'Overwrite local' }
+            : { heading: `The site copy of “${r.name}” changed`,
+                body: `It changed since your last sync. Overwrite the typebulb.com copy with your local file?`,
+                yesLabel: 'Overwrite site copy' }),
+          onYes: () => this.syncRow(r, verb, true),
+        }
+      } else console.error(`[mirror] ${verb} failed`, res.error)
+    } catch (err) {
+      console.error(`[mirror] ${verb} failed`, err)
+    } finally {
+      this.syncBusy.delete(key)
+    }
+    // Pull changes local files; push changes the remote listing's world (e.g. a create).
+    await (verb === 'pull' ? this.refreshFiles() : this.refreshMine())
+    this.update()
+  }
+
+  // The success tick: ✓ for a beat, then back to the arrow. Purely visual, never persisted.
+  tickDone(key: string) {
+    this.syncDone.add(key)
+    setTimeout(() => { this.syncDone.delete(key); this.update() }, 1200)
   }
 
   // The actual spawn. `trust` true → launch trusted + remember it (the pre-launch "Launch Trusted"
@@ -388,8 +485,26 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       this.open ? this.popup() : null,
       // Pre-launch offer (proactive) wins the slot if present — it's the one blocking a launch;
       // the reactive denial modal handles an already-running bulb that tripped the gate.
-      this.pendingLaunch ? this.launchModal(this.pendingLaunch) : denial ? this.denialModal(denial) : null,
+      this.pendingLaunch ? this.launchModal(this.pendingLaunch)
+        : this.pendingOverwrite ? this.overwriteModal(this.pendingOverwrite)
+        : denial ? this.denialModal(denial) : null,
     )
+  }
+
+  // The push/pull conflict confirm (TB-Push-Pull.md, Mirror surface): the CLI's stateless guard
+  // given a yes/no face — yes IS --force. Reuses the trust-modal chrome (same interrupt register).
+  overwriteModal(p: { heading: string; body: string; yesLabel: string; onYes: () => void }) {
+    const clear = () => { this.pendingOverwrite = undefined; this.update() }
+    return this.trustModal({
+      heading: p.heading,
+      body: p.body,
+      warn: 'There is no undo — the overwritten side\'s changes are gone.',
+      noLabel: 'Cancel',
+      yesLabel: p.yesLabel,
+      onNo: clear,
+      onYes: () => { this.pendingOverwrite = undefined; p.onYes() },
+      onDismiss: clear,
+    })
   }
 
   // Shared modal chrome for both trust prompts (TB-Security.md). It lives here, in the
@@ -505,7 +620,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   }
 
   row(r: BulbRow, i: number, dimmed = false) {
-    if (r.sampleGroup) return this.groupRow(r, i, dimmed)
+    if (r.sampleGroup || r.mineGroup) return this.groupRow(r, i, dimmed)
     const s = r.running
     const showing = s && this.openLog?.pid === s.pid
     // Running tier is authoritative; otherwise the remembered decision the next launch uses.
@@ -530,6 +645,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         this.userLink(r),
         hitsBadge(r.hitCount),
       ),
+      this.syncCell(r),
       // Trust toggle. Shown for a running server (the live tier matters) or a trusted-remembered
       // stopped bulb; a plain restricted stopped bulb shows an empty cell — "restricted" is the
       // implicit default and repeating it down every row is noise — but the cell still holds its grid
@@ -554,15 +670,40 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     return user ? a({ class: 'sample-link', href: rowUserUrl(r, user), target: '_blank', rel: 'noopener noreferrer', title: `Open this bulb's page on typebulb.com` }, user) : null
   }
 
-  // The catalog's fold header — a full-width row (caret + muted label) in the ordinary row slot, so
+  // push/pull verbs, one cell so the grid stays one column wider: pull ↓ where a remote exists
+  // (any u/<owner>/ path), push ↑ where the bulb is the token user's and local. A remote row's
+  // play already pulls, so it gets an empty cell; so does an ordinary project bulb (no remote).
+  syncCell(r: BulbRow) {
+    const user = rowUser(r)
+    if (!user || r.remote) return span({ class: 'cell-empty' })
+    const verb = (name: 'pull' | 'push', title: string) => {
+      const key = `${pathKey(r.path)}:${name}`
+      const busy = this.syncBusy.has(key)
+      const done = this.syncDone.has(key)
+      return button({ class: ['sync-btn', busy ? 'busy shimmer' : '', done ? 'done' : ''], title, ariaLabel: name,
+        onClick: (e: MouseEvent) => { e.stopPropagation(); if (!busy) this.syncRow(r, name) } },
+        icon(done ? 'check' : name, 'btn-icon-sm'))
+    }
+    return span({ class: 'sync-cell' },
+      verb('pull', `Pull — update the local file from typebulb.com/u/${user}`),
+      user === this.myUser
+        ? verb('push', 'Push — upload this file to typebulb.com')
+        : null,
+    )
+  }
+
+  // A catalog's fold header — a full-width row (caret + muted label) in the ordinary row slot, so
   // the keyboard cursor and highlight treat it like any other row; Enter/click toggles the fold.
   groupRow(r: BulbRow, i: number, dimmed: boolean) {
+    const mine = !!r.mineGroup
+    const open = mine ? this.mineOpen : this.samplesOpen
+    const toggle = () => mine ? this.toggleMine() : this.toggleSamples()
     return div({ class: ['server-row', 'sample-group', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
-        title: this.samplesOpen ? 'Collapse the samples' : 'Runnable sample bulbs from typebulb.com — click to browse',
+        title: open ? 'Collapse' : mine ? 'Your bulbs on typebulb.com — click to browse; play pulls one into the project' : 'Runnable sample bulbs from typebulb.com — click to browse',
         onMouseEnter: () => this.hoverRow(i),
-        onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleSamples() } },
-      icon('caret', ['caret-tri', this.samplesOpen ? 'open' : '']),
-      span({ class: 'sample-group-label' }, `${r.name} (${r.sampleGroup})`),
+        onClick: (e: MouseEvent) => { e.stopPropagation(); toggle() } },
+      icon('caret', ['caret-tri', open ? 'open' : '']),
+      span({ class: 'sample-group-label' }, `${r.name} (${r.sampleGroup ?? r.mineGroup})`),
     )
   }
 

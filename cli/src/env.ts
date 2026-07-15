@@ -53,6 +53,18 @@ function* parseEnv(content: string): Generator<[string, string]> {
   }
 }
 
+/** One key's current value from the cascade files, read FRESH (files win over process.env here —
+ *  the inverse of loadEnv — because the caller is a long-lived server and the user edits `.env`
+ *  mid-session; a boot-time process.env would go stale). Falls back to process.env. */
+export function readEnvVar(key: string, cwd: string = process.cwd()): string | undefined {
+  for (const file of cascade()) {
+    let content: string
+    try { content = readFileSync(path.resolve(cwd, file), 'utf-8') } catch { continue }
+    for (const [k, v] of parseEnv(content)) if (k === key) return v
+  }
+  return process.env[key]
+}
+
 /** Env keys a server source statically references via `process.env.X` / `process.env['X']`.
  *  A hint for the missing-env warning, same spirit as predictTrust — dynamic access slips through. */
 export function referencedEnvKeys(serverSource: string): string[] {

@@ -810,7 +810,7 @@ a.server-port:hover { text-decoration: underline; }
    the popover cap, plain auto rows compress to each row's min-height contribution, so a full-text
    row's snippet line bleeds under the next row as overlapping text. max-content tracks never
    compress; the list scrolls, rows keep their content height. */
-.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
 /* Downloaded-bulb rows (TB-Agent-Mirror.md): the user link — the folder/user slug (`samples`) in
@@ -865,6 +865,22 @@ a.server-port:hover { text-decoration: underline; }
 .bulb-launch.launching { visibility: visible; border-color: var(--fold-marker); }
 .server-stop { color: var(--muted); }
 .server-stop:hover { color: var(--err); border-color: var(--err); }
+/* push/pull verbs (TB-Push-Pull.md, Mirror surface): borderless quiet icons in one cell —
+   frequency earns mutedness, so like the play button they're hover/keyboard-revealed
+   (visibility reserves the slot; columns never shift). Accent on hover marks the live control. */
+.sync-cell { display: inline-flex; gap: .15rem; justify-self: center; }
+.sync-btn {
+  font: inherit; appearance: none; margin: 0; padding: 0 .1rem; cursor: pointer;
+  background: transparent; border: none; color: var(--muted);
+  display: inline-flex; align-items: center; visibility: hidden;
+}
+.server-row:hover .sync-btn, .server-row.active .sync-btn { visibility: visible; }
+.sync-btn:hover { color: var(--accent); }
+/* In-flight: stays visible (hover-independent) and shimmers, same contract as .bulb-launch.launching;
+   the ✓ beat after success likewise holds its slot so the arrow's return doesn't shift columns. */
+.sync-btn.busy, .sync-btn.done { visibility: visible; }
+.sync-btn.done { color: var(--fold-marker); }
+.btn-icon-sm { width: 13px; height: 13px; }
 /* Elevation prompt (VS-Code-Workspace-Trust style) — a modal over the whole view, since a
    denied capability is worth interrupting for. Backdrop dims; the card holds the choice. */
 .trust-back {

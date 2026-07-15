@@ -5,7 +5,7 @@ import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send' | 'pull' | 'push'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -37,6 +37,9 @@ export interface CliArgs {
   trust: boolean
   /** Force Restricted for this run even if the bulb is remembered-trusted (overrides the store). */
   noTrust: boolean
+  /** `pull --force`: overwrite a local file that differs from the fetched bulb (the only
+   *  conflict resolution — TB-Push-Pull.md Invariant 1). */
+  force: boolean
   /** `--mode <name>`: also load `.env.<name>` (+ `.env.<name>.local`) on top of the base cascade.
    *  Free-form; selects nothing by default (TB-Env.md). */
   mode?: string
@@ -83,6 +86,7 @@ export function parseArgs(args: string[]): CliArgs {
     server: false,
     trust: false,
     noTrust: false,
+    force: false,
     follow: false,
     clear: false,
     help: false,
@@ -94,7 +98,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send', 'pull', 'push'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -132,6 +136,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.trust = true
     } else if (arg === '--no-trust') {
       result.noTrust = true
+    } else if (arg === '--force') {
+      result.force = true
     } else if (arg === '--mode') {
       const m = args[++i]
       if (!m || m.startsWith('-')) {
@@ -299,6 +305,16 @@ Usage:
                                  work on demand (msg is JSON-or-string; omit it
                                  for a bare trigger). Needs no --trust. Add
                                  --wait to ride through a hot-reload reconnect.
+   typebulb pull <url|file>       Fetch a bulb from typebulb.com into
+                                  typebulbs/u/<user>/<slug>.bulb.md (a local file
+                                  at that path re-pulls in place). Unlisted and
+                                  public bulbs need no login; a differing local
+                                  file is refused unless --force.
+    typebulb push <file>           Upload a typebulbs/u/<user>/<slug>.bulb.md to
+                                   typebulb.com as you (needs TYPEBULB_TOKEN in
+                                   .env, minted on the settings page). Refused if
+                                   the remote changed since your last pull/push,
+                                   unless --force. A new slug is created unlisted.
   typebulb wait [file|agent]     Block until the target server logs a new line,
                                  print it, exit (2: timeout; 3: server died).
                                  For agents: run it in the background — the exit
@@ -325,6 +341,9 @@ Options:
   -n, --lines <n>             Print only the last n lines (logs)
   --match <substring>         Only lines containing this literal substring end
                               the wait — not a regex (wait)
+  --force                     Overwrite the side the command writes to: a
+                              differing local file (pull), or a remote that
+                              changed since your last sync (push)
   --timeout <sec>             Give up after this long; exit 2 — bounds only a
                               manual (foreground) bulb wait, default 1800 (wait)
   --wait[=ms]                 For 'send': if no page is connected yet (e.g. the

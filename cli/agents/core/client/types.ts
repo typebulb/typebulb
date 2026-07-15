@@ -130,15 +130,16 @@ export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: st
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }
-// A typebulb.com catalog sample (tb.server.listSamples): a muted launcher row while no local file
-// exists — play downloads it to typebulbs/u/samples/ and launches (see server launcher.ts samples section).
-export interface SampleBulb { slug: string; name: string; description: string }
+// A typebulb.com remote bulb (tb.server.listSamples / listMyBulbs): a muted launcher row while no
+// local file exists — play pulls it to typebulbs/u/<user>/ and launches (server launcher.ts).
+export interface RemoteBulb { slug: string; name: string; description: string }
 // One full-text hit over a project bulb file (searchBulbs), joined onto its BulbRow for display.
 export interface BulbHit { path: string; hitCount: number; snippet: string }
 // One launcher row: a project bulb and/or a running server, merged by path. `running`
 // present ⇒ live (open link + stop); absent ⇒ stopped (launch). `recent` = MRU sort key.
 // `trusted` = a remembered trust decision (applies to the next launch). `hitCount`/`snippet`
-// are the full-text decoration, set only on search-mode rows. `remote` = a catalog sample not yet
-// downloaded (its `path` is the project-relative path the download will land at). `sampleGroup` =
-// the samples-catalog fold header (the count it folds), a synthetic row with no bulb behind it.
-export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: SampleBulb; sampleGroup?: number }
+// are the full-text decoration, set only on search-mode rows. `remote` = a remote bulb not yet
+// pulled (its `path` is the project-relative path the pull will land at — the owner rides in the
+// path, TB-Push-Pull.md Invariant 4). `sampleGroup`/`mineGroup` = the two catalog fold headers
+// (the count each folds), synthetic rows with no bulb behind them.
+export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: RemoteBulb; sampleGroup?: number; mineGroup?: number }

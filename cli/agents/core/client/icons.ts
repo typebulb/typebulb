@@ -25,6 +25,12 @@ export const icons = {
 // glyph can be. The currentColor exemption: its own stroke colors ARE the point.
 const custom = {
   caret: '<svg viewBox="0 0 16 16"><path d="M4 1.5 L13 8 L4 14.5 Z" fill="currentColor"/></svg>',
+  // push/pull (TB-Push-Pull.md, Mirror surface): arrow out of / into a tray — the upload/download
+  // pair, sharing one baseline tray so the two read as siblings at 14px.
+  push: '<svg viewBox="0 0 16 16" fill="none"><path d="M8 11 V3 M4.75 6.25 L8 3 L11.25 6.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 14 H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  pull: '<svg viewBox="0 0 16 16" fill="none"><path d="M8 3 V11 M4.75 7.75 L8 11 L11.25 7.75" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 14 H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  // the sync verbs' transient success tick (bulbsPill syncCell) — same stroke register as the arrows.
+  check: '<svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5 L6.5 12 L13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   fork: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 2 V8 H12 V2 M8 8 V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></svg>',
   // viewBox cropped to the ink (the stacked +/− is tall and narrow): a full 16-box in a square icon
   // shell reads as phantom side padding in the pill.
