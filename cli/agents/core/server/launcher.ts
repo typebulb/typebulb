@@ -241,7 +241,9 @@ const remoteToken = () => readEnvVar('TYPEBULB_TOKEN', projectCwd)
 // The launcher's "your typebulb.com bulbs" group — the samples catalog generalized to the token's
 // user. Same cache discipline as listSamples (single-flight, stale-or-empty on failure), keyed on
 // origin+token so an .env swap invalidates. Uses the authed /api/scripts/list (includes unlisted
-// and private, which the public ?stubs listing can't see).
+// and private, which the public ?stubs listing can't see) — but that list is the SPA's bootstrap
+// feed (own + seen-foreign + samples + templates), never "my bulbs": fetchMyBulbs partitions it
+// by each row's own userSlug, the same cut the site client's applyStubs makes (TB-Push-Pull.md).
 export async function listMyBulbs(): Promise<{ user?: string; bulbs: RemoteBulbInfo[] }> {
   const token = remoteToken()
   if (!token) return { bulbs: [] }
@@ -278,8 +280,12 @@ async function fetchMyBulbs(key: string, token: string) {
       api = `${u.protocol}//api.${u.host}`
       me = await apiJson<{ slug: string }>(api, '/api/me', headers)
     }
-    const scripts = await apiJson<{ slug: string; name: string; config?: string }[]>(api, '/api/scripts/list', headers)
-    const bulbs = scripts.map(b => ({ slug: b.slug, name: b.name, description: extractDescription(b.config) }))
+    const scripts = await apiJson<{ slug: string; name: string; config?: string; userSlug?: string; isTemplate?: boolean }[]>(api, '/api/scripts/list', headers)
+    // Keep only the token user's own non-template rows — consumed raw, the feed's samples/seen/
+    // template rows land mislabeled as the user's (dead links, doubles of already-local samples).
+    const bulbs = scripts
+      .filter(b => b.userSlug === me.slug && !b.isTemplate)
+      .map(b => ({ slug: b.slug, name: b.name, description: extractDescription(b.config) }))
     myBulbsCache = { key, user: me.slug, bulbs, fetchedAt: Date.now() }
     return { user: me.slug, bulbs }
   } catch {

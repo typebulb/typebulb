@@ -55,10 +55,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   #logTimer?: ReturnType<typeof setInterval>
   // The just-broken-out server's pid — its launcher row stays bright while the rest dim (see spotlight()).
   spotlightPid?: number
-  // Whether the samples-catalog fold is expanded — per-open view state like filter/highlight,
-  // reset in onClosed, never persisted (TB-Agent-Mirror.md).
-  samplesOpen = false
-  mineOpen = false
+  // Expanded remote folds, keyed by owner slug ('samples', the token user) — per-open view state
+  // like filter/highlight, reset in onClosed, never persisted (TB-Agent-Mirror.md).
+  openFolds = new Set<string>()
   // A push/pull that hit the conflict guard, awaiting the one-gesture overwrite confirm
   // (TB-Push-Pull.md, Mirror surface): yes retries with force.
   pendingOverwrite?: { heading: string; body: string; yesLabel: string; onYes: () => void }
@@ -73,8 +72,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   protected onActivate(i: number) {
     const r = this.rows()[i]
     if (!r) return
-    if (r.sampleGroup) this.toggleSamples()
-    else if (r.mineGroup) this.toggleMine()
+    if (r.group) this.toggleFold(r.group.user)
     else if (r.running) window.open(r.running.url, '_blank', 'noopener')
     else if (r.remote) this.downloadAndLaunch(r)
     else this.launch(r.path)
@@ -217,19 +215,15 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       const q = this.filter.trim().toLowerCase()
       if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
       else {
-        // Two folds, one per remote catalog; ownership rides in the row's path (rowUser).
-        const isSample = (r: BulbRow) => !!r.remote && rowUser(r) === 'samples'
-        const isMine = (r: BulbRow) => !!r.remote && rowUser(r) !== 'samples'
-        const ns = rows.filter(isSample).length
-        const nm = rows.filter(isMine).length
-        if (ns) {
-          if (!this.samplesOpen) rows = rows.filter(r => !isSample(r))
-          rows.push({ path: '::samples', name: 'samples from typebulb.com', recent: -1, sampleGroup: ns })
-        }
-        if (nm) {
-          if (!this.mineOpen) rows = rows.filter(r => !isMine(r))
-          rows.push({ path: '::mine', name: `your typebulb.com bulbs`, recent: -2, mineGroup: nm })
-        }
+        // One fold per remote owner slug (the typebulbs/u/<slug> partition); ownership rides in
+        // the row's path (rowUser). 'samples' and the token user are today's two instances.
+        const owners = [...new Set(rows.filter(r => r.remote).map(r => rowUser(r)!))]
+        owners.forEach((user, i) => {
+          const inFold = (r: BulbRow) => !!r.remote && rowUser(r) === user
+          const count = rows.filter(inFold).length
+          if (!this.openFolds.has(user)) rows = rows.filter(r => !inFold(r))
+          rows.push({ path: `::${user}`, name: this.foldLabel(user), recent: -1 - i, group: { user, count } })
+        })
       }
     }
     return rows.sort((a, b) => a.recent - b.recent)
@@ -246,22 +240,29 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   protected override onClosed() {
     super.onClosed()
     this.closeLog()
-    this.samplesOpen = false
-    this.mineOpen = false
+    this.openFolds.clear()
     this.pendingOverwrite = undefined
     this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
   }
 
-  // Expand/collapse the catalog in place. No pinToBottom: the fold sits at the list's top edge, so
+  // Expand/collapse a fold in place. No pinToBottom: the fold sits at the list's top edge, so
   // the user toggling it is looking there — yanking to the bottom would hide what they just opened.
-  toggleSamples() {
-    this.samplesOpen = !this.samplesOpen
+  toggleFold(user: string) {
+    if (!this.openFolds.delete(user)) this.openFolds.add(user)
     this.update()
   }
 
-  toggleMine() {
-    this.mineOpen = !this.mineOpen
-    this.update()
+  // The fold header's texts; any owner beyond the two curated names (a future foreign fold)
+  // falls back to their slug.
+  foldLabel(user: string): string {
+    return user === 'samples' ? 'samples from typebulb.com'
+      : user === this.myUser ? 'your typebulb.com bulbs'
+      : `${user} on typebulb.com`
+  }
+  foldTitle(user: string): string {
+    return user === 'samples'
+      ? 'Runnable sample bulbs from typebulb.com — click to browse'
+      : `${user === this.myUser ? 'Your' : `${user}'s`} bulbs on typebulb.com — click to browse; play pulls one into the project`
   }
 
   // Launch a stopped bulb — but PROBE TRUST FIRST so the offer precedes the tab. A
@@ -620,7 +621,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   }
 
   row(r: BulbRow, i: number, dimmed = false) {
-    if (r.sampleGroup || r.mineGroup) return this.groupRow(r, i, dimmed)
+    if (r.group) return this.groupRow(r, i, dimmed)
     const s = r.running
     const showing = s && this.openLog?.pid === s.pid
     // Running tier is authoritative; otherwise the remembered decision the next launch uses.
@@ -695,15 +696,14 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // A catalog's fold header — a full-width row (caret + muted label) in the ordinary row slot, so
   // the keyboard cursor and highlight treat it like any other row; Enter/click toggles the fold.
   groupRow(r: BulbRow, i: number, dimmed: boolean) {
-    const mine = !!r.mineGroup
-    const open = mine ? this.mineOpen : this.samplesOpen
-    const toggle = () => mine ? this.toggleMine() : this.toggleSamples()
+    const { user, count } = r.group!
+    const open = this.openFolds.has(user)
     return div({ class: ['server-row', 'sample-group', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
-        title: open ? 'Collapse' : mine ? 'Your bulbs on typebulb.com — click to browse; play pulls one into the project' : 'Runnable sample bulbs from typebulb.com — click to browse',
+        title: open ? 'Collapse' : this.foldTitle(user),
         onMouseEnter: () => this.hoverRow(i),
-        onClick: (e: MouseEvent) => { e.stopPropagation(); toggle() } },
+        onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleFold(user) } },
       icon('caret', ['caret-tri', open ? 'open' : '']),
-      span({ class: 'sample-group-label' }, `${r.name} (${r.sampleGroup ?? r.mineGroup})`),
+      span({ class: 'sample-group-label' }, `${r.name} (${count})`),
     )
   }
 

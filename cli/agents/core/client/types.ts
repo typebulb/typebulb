@@ -140,6 +140,6 @@ export interface BulbHit { path: string; hitCount: number; snippet: string }
 // `trusted` = a remembered trust decision (applies to the next launch). `hitCount`/`snippet`
 // are the full-text decoration, set only on search-mode rows. `remote` = a remote bulb not yet
 // pulled (its `path` is the project-relative path the pull will land at — the owner rides in the
-// path, TB-Push-Pull.md Invariant 4). `sampleGroup`/`mineGroup` = the two catalog fold headers
-// (the count each folds), synthetic rows with no bulb behind them.
-export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: RemoteBulb; sampleGroup?: number; mineGroup?: number }
+// path, TB-Push-Pull.md Invariant 4). `group` = a catalog fold header (one per remote owner slug,
+// folding `count` rows), a synthetic row with no bulb behind it.
+export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: RemoteBulb; group?: { user: string; count: number } }
