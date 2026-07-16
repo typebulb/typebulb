@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/core/client/markdown.js'
+import { mdRenderToHtml, mdUserRenderToHtml } from '../agents/core/client/markdown.js'
 
 /**
  * Raw HTML is parsed (html:true) but funnelled through a tiny tag allowlist in markdown.ts, so the
@@ -57,8 +57,8 @@ describe('safe-HTML allowlist', () => {
     expect(html).toContain('&amp;nope')     // bare & before a non-entity word is escaped
   })
 
-  it('renders raw HTML as literal source in a user turn (gated like svg/mermaid/tables)', () => {
-    const html = mdRenderToHtml(details, { userMessage: true })
+  it('renders raw HTML as literal source in a user turn (the user parser keeps html off)', () => {
+    const html = mdUserRenderToHtml(details)
     expect(html).not.toContain('<details>')
     expect(html).toContain('&lt;details&gt;')
   })

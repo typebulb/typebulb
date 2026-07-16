@@ -17,8 +17,8 @@
  * Error channel: pi tools THROW on failure (the runtime renders it as an isError tool result), so
  * the apply helpers return `{ ok, message }` and execute throws the message. Semantics port the
  * published matchu-patchu-mcp server's applyCore; the one addition is multi-file mode when
- * `filePath` is omitted (P2: Patcher.Apply is pure, and no byte lands unless the whole changeset
- * carries zero errors on both channels — per-file and patch-scoped).
+ * `filePath` is omitted (P2: Patcher.Apply is pure, and no byte lands unless every file applies
+ * with zero errors — misdirected hunks arrive as FileMismatch report entries in Files).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -64,13 +64,13 @@ const fuzzNote = (fuzz: number) => (fuzz > 0 ? ` (applied with fuzz factor ${fuz
 
 /**
  * The file keys a diff's headers name, exactly as the patcher will group hunks: an Apply with no
- * input files reports every header key as a patch-scoped FileMismatch, so discovery rides the
- * lib's own parser (`a/`/`b/` stripping and all) — matching in the real pass holds by construction.
+ * input files returns a FileMismatch report entry per header key, so discovery rides the lib's
+ * own parser (`a/`/`b/` stripping and all) — matching in the real pass holds by construction.
  */
 export function discoverDiffKeys(diff: string): string[] {
   const keys: string[] = []
-  for (const e of Patcher.Apply(diff, []).Errors) {
-    if (e.FileKey && !keys.includes(e.FileKey)) keys.push(e.FileKey)
+  for (const f of Patcher.Apply(diff, []).Files) {
+    if (f.Key && !keys.includes(f.Key)) keys.push(f.Key)
   }
   return keys
 }
@@ -105,7 +105,7 @@ function applyMulti(cwd: string, diff: string, dryRun: boolean): PatchOutcome {
 
   const inputs = keys.map(k => new PatchInputFile(k, readFileSync(resolve(cwd, k), 'utf-8')))
   const result = Patcher.Apply(diff, inputs)
-  const errors = [...result.Errors, ...result.Files.flatMap(f => f.Errors)]
+  const errors = result.Files.flatMap(f => f.Errors)
   if (errors.length > 0) return { ok: false, message: errorBlocks(errors) }
 
   const lines: string[] = []

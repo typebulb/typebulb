@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml, splitBulbSegments } from '../agents/core/client/markdown.js'
+import { mdRenderToHtml, mdUserRenderToHtml, splitBulbSegments } from '../agents/core/client/markdown.js'
 
 /**
  * A markdown table chops onto its own row like an svg/bulb embed: the `table_open`/`table_close`
  * render rules wrap it in the same `<div class="embed table-embed">` the fence rule stamps on svg/bulb,
- * so it inherits the stripe-chop. Gated to assistant turns — a table in a user prompt (env.userMessage)
- * stays a plain `<table>` inside the opaque user card, where the chop would clash. Spread (lane breakout)
+ * so it inherits the stripe-chop. Assistant-only — user turns render through the zero-preset allowlist
+ * parser, which doesn't parse tables at all, so a pasted table stays literal text. Spread (lane breakout)
  * is a mount-time measurement (fitTableEmbeds), so it's not visible in this DOM-less render
  * (TB-Agent-Mirror.md, "Rendering").
  */
@@ -20,10 +20,10 @@ describe('markdown table embed', () => {
     expect(html).toMatch(/<\/table>\s*<\/div>/)
   })
 
-  it('leaves a user-turn table as a plain table (no chop against the user card)', () => {
-    const html = mdRenderToHtml(table, { userMessage: true })
-    expect(html).toContain('<table>')
-    expect(html).not.toContain('table-embed')
+  it('leaves a user-turn table as literal text (tables are assistant markup)', () => {
+    const html = mdUserRenderToHtml(table)
+    expect(html).not.toContain('<table>')
+    expect(html).toContain('| a | b |')
   })
 
   it('does not start unspread — spread is decided at mount by measurement, not in the markup', () => {

@@ -108,22 +108,24 @@ type MdInlineState = Parameters<Parameters<typeof md.inline.ruler.before>[2]>[0]
 type MdBlockState = Parameters<Parameters<typeof md.block.ruler.before>[2]>[0]
 
 // Links open in a new tab: the bulb is a dashboard, in-place nav would lose
-// scroll / session. rel=noopener is standard tab-napping hygiene.
-const defaultLinkOpen: MdRenderRule = md.renderer.rules.link_open
-  ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
-md.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
-  tokens[idx].attrSet('target', '_blank')
-  tokens[idx].attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen(tokens, idx, opts, env, self)
+// scroll / session. rel=noopener is standard tab-napping hygiene. Shared by both
+// parsers — user turns carry linkified URLs and @mention links too.
+function applyLinkTargetRule(m: MarkdownIt) {
+  const dflt: MdRenderRule = m.renderer.rules.link_open
+    ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
+  m.renderer.rules.link_open = (tokens, idx, opts, env, self) => {
+    tokens[idx].attrSet('target', '_blank')
+    tokens[idx].attrSet('rel', 'noopener noreferrer')
+    return dflt(tokens, idx, opts, env, self)
+  }
 }
+applyLinkTargetRule(md)
 
 // A markdown table chops onto its own row like an svg/bulb embed, and can spread to the lane when it
 // overflows the column (see fitTableEmbeds). A table isn't a fence, so it can't ride the fence rule —
 // instead wrap it at the `table_open`/`table_close` boundary in the same `<div class="embed">` the
-// fence rule stamps on svg/bulb, so it inherits the stripe-chop for free. Gated to assistant turns
-// (env.userMessage unset): a table pasted in a user prompt renders as a plain `<table>` inside the
-// opaque user card, where the chop would clash — exactly like live svg/mermaid.
-const tableInEmbed = (env: unknown) => !(env as { userMessage?: boolean })?.userMessage
+// fence rule stamps on svg/bulb, so it inherits the stripe-chop for free. Assistant-only by
+// construction: user turns render through mdUser, which doesn't parse tables at all.
 const defaultTableOpen: MdRenderRule = md.renderer.rules.table_open
   ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
 md.renderer.rules.table_open = (tokens, idx, opts, env, self) => {
@@ -133,13 +135,12 @@ md.renderer.rules.table_open = (tokens, idx, opts, env, self) => {
   // flush against the next line (the bug). Nested inside, the bar rides above that padding, which then
   // separates it from the following prose — while the table itself stays at max-content width so it still
   // overflows and earns the bar (a plain block scroller would instead wrap the cells to fit, no bar).
-  return tableInEmbed(env) ? `<div class="embed table-embed"><div class="table-scroll">${open}` : open
+  return `<div class="embed table-embed"><div class="table-scroll">${open}`
 }
 const defaultTableClose: MdRenderRule = md.renderer.rules.table_close
   ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
 md.renderer.rules.table_close = (tokens, idx, opts, env, self) => {
-  const close = defaultTableClose(tokens, idx, opts, env, self)
-  return tableInEmbed(env) ? `${close}</div></div>` : close
+  return `${defaultTableClose(tokens, idx, opts, env, self)}</div></div>`
 }
 
 // Safe semantic HTML the agent emits naturally, rendered rather than escaped. This is the *no-chop*
@@ -195,13 +196,10 @@ function filterSafeHtml(fragment: string): string {
 }
 
 // Both raw-HTML render rules funnel here, so html:true never widens the surface past SAFE_HTML_TAGS.
-// Gated to assistant turns: a user prompt's raw HTML renders as its literal source (env.userMessage) —
-// the same call live svg/mermaid/tables make, since pasted markup reads better as source. KaTeX, svg and
-// mermaid never reach here (each owns its own token), so there is no whole-output sanitize to entangle.
-const renderRawHtml: MdRenderRule = (tokens, idx, _opts, env) => {
-  const raw = tokens[idx].content
-  return (env as { userMessage?: boolean })?.userMessage ? md.utils.escapeHtml(raw) : filterSafeHtml(raw)
-}
+// Assistant-only by construction: mdUser keeps html:false, so a user prompt's raw HTML renders as its
+// literal source without ever reaching this rule. KaTeX, svg and mermaid never reach here either (each
+// owns its own token), so there is no whole-output sanitize to entangle.
+const renderRawHtml: MdRenderRule = (tokens, idx) => filterSafeHtml(tokens[idx].content)
 md.renderer.rules.html_block = renderRawHtml
 md.renderer.rules.html_inline = renderRawHtml
 
@@ -243,8 +241,7 @@ function mathRule(state: MdInlineState, silent: boolean): boolean {
   }
   return false
 }
-md.inline.ruler.before('escape', 'math', mathRule)
-md.renderer.rules.math = (tokens, idx) => {
+const renderMath: MdRenderRule = (tokens, idx) => {
   const t = tokens[idx]
   try { return katex.renderToString(t.content, { displayMode: !!t.meta?.display, throwOnError: false }) }
   catch { return md.utils.escapeHtml(t.markup + t.content + t.markup) }
@@ -289,7 +286,15 @@ function mathBlockRule(state: MdBlockState, startLine: number, endLine: number, 
   token.map = [startLine, state.line]
   return true
 }
-md.block.ruler.before('lheading', 'math_block', mathBlockRule)
+// Both parsers carry the math rules — TeX delimiters are deliberate in a user prompt too. The
+// insertion anchors ('escape', 'lheading') exist in mdUser's rulers even though its zero preset
+// disables them, and a rule added afterwards is enabled regardless of the preset.
+function applyMathRules(m: MarkdownIt) {
+  m.inline.ruler.before('escape', 'math', mathRule)
+  m.block.ruler.before('lheading', 'math_block', mathBlockRule)
+  m.renderer.rules.math = renderMath
+}
+applyMathRules(md)
 
 // beautiful-mermaid decodes only XML + numeric entities (decodeXML), so named HTML
 // entities — &nbsp;, &mdash;, … — survive undecoded and then render as literal
@@ -313,17 +318,16 @@ function copyButton(src: string): string {
   return `<button class="overlay-pill copy-src" type="button" title="Copy source" data-src="${md.utils.escapeHtml(src)}">copy</button>`
 }
 
+// A fence rendered as source: the default <pre><code> wrapped so it gets the same hover copy pill.
+// The wrapper — not the <pre> — is the `.md` flow child; see `.code-block` CSS for the rhythm.
+const wrapCodeBlock = (inner: string, src: string) =>
+  `<div class="code-block copyable">${inner}${copyButton(src)}</div>`
+
 const defaultFence: MdRenderRule = md.renderer.rules.fence
   ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
 md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   const t = tokens[idx]
   const lang = (t.info ?? '').trim().toLowerCase()
-  // Live embeds (svg, mermaid) are an assistant medium — they render only in assistant turns. In a
-  // user turn (env.userMessage, set by userMarkdown) they fall through to a plain source code block:
-  // the svg chop and the mermaid lane-breakout both assume the transparent assistant flow and clash
-  // with the opaque, padded, rounded user card, and a user's pasted/quoted markup reads better as its
-  // literal source anyway. KaTeX/@mentions/links still render in user turns (those aren't gated here).
-  const live = !(env as { userMessage?: boolean })?.userMessage
   // Note: no `bulb` case here. Live embeds are split out of the text before markdown runs
   // (splitBulbSegments → BulbEmbed), so a ````bulb```` fence reaching markdown is illustrative
   // source — it falls through to defaultFence like any other unrecognised fence.
@@ -332,11 +336,13 @@ md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   // it goes through DOMPurify's svg profile first — geometry survives, the script
   // surface is stripped. Lets the agent draw anything (smiley, plot from an
   // equation) without an iframe, since it's static markup, not executed code.
-  if (lang === 'svg' && live) {
+  // Live embeds are assistant-only by construction: a user turn renders through mdUser, whose
+  // fence rule always emits a plain source block, so no gate is needed here.
+  if (lang === 'svg') {
     const safe = DOMPurify.sanitize(t.content, { USE_PROFILES: { svg: true, svgFilters: true } })
     return `<div class="embed svg-embed copyable">${safe}${copyButton(t.content)}</div>`
   }
-  if (lang === 'mermaid' && live) {
+  if (lang === 'mermaid') {
     try {
       // The library's internal theme vars share names with the bulb's (--fg/--bg/
       // --muted/--border/--accent), so passing var(--fg) here would emit a
@@ -358,10 +364,8 @@ md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
       return `<div class="mermaid copyable">${svg}${copyButton(t.content)}</div>`
     } catch { /* fall through to a plain code block */ }
   }
-  // Every other fence (code, an unrecognised language, or a non-live svg/mermaid in a user turn) is a
-  // copyable source block: the default <pre><code> wrapped so it gets the same hover copy pill. The
-  // wrapper — not the <pre> — is the `.md` flow child now; see `.code-block` CSS for the rhythm.
-  return `<div class="code-block copyable">${defaultFence(tokens, idx, opts, env, self)}${copyButton(t.content)}</div>`
+  // Every other fence (code, or an unrecognised language) is a copyable source block.
+  return wrapCodeBlock(defaultFence(tokens, idx, opts, env, self), t.content)
 }
 
 // Author classDef/style colors render as literal fill/stroke/color that override
@@ -462,24 +466,28 @@ function onMarkdownClick(e: Event) {
   tb.server.openFile(decodeURIComponent(path), lineMatch ? parseInt(lineMatch[1], 10) : undefined)
 }
 
-// The bare markdown→HTML pass, before the DOM post-passes in renderMarkdown. Exposed for unit tests
-// (it needs no DOM, so it runs under vitest's node env) — assert the rendered HTML of a snippet.
-export const mdRenderToHtml = (text: string, env?: { userMessage?: boolean }) => md.render(text, env)
+// The bare markdown→HTML passes, before the DOM post-passes in mountMarkdown. Exposed for unit tests
+// (no DOM needed, so they run under vitest's node env) — assert the rendered HTML of a snippet.
+export const mdRenderToHtml = (text: string) => md.render(text)
+export const mdUserRenderToHtml = (text: string) => mdUser.render(text)
 
-// Render markdown into the element via innerHTML. The click handler is bound natively here, not via
+// Mount rendered markdown into the element via innerHTML. The render thunk runs inside the try, so a
+// parser throw degrades to the raw text. The click handler is bound natively here, not via
 // domeleon's `onClick`: the anchors are raw innerHTML the vdom never sees, so a delegated handler
 // wouldn't fire. onMarkdownClick is a stable ref, so re-mounts don't stack duplicate listeners.
-export const renderMarkdown = (text: string, env?: { userMessage?: boolean }) => (el: Element) => {
+const mountMarkdown = (render: () => string, fallback: string) => (el: Element) => {
   try {
-    el.innerHTML = md.render(text, env)
+    el.innerHTML = render()
     themeMermaidNodes(el)
     fitSvgEmbeds(el)
     fitTableEmbeds(el)
   } catch {
-    ;(el as HTMLElement).textContent = text
+    ;(el as HTMLElement).textContent = fallback
   }
   el.addEventListener('click', onMarkdownClick)
 }
+
+export const renderMarkdown = (text: string) => mountMarkdown(() => md.render(text), text)
 
 // A user prompt's @mentions become clickable links. The lookbehind requires a word
 // boundary before the @ so an email's @ (foo@bar.com) isn't mistaken for a mention.
@@ -501,13 +509,34 @@ const atMentionLink = (m: string): string => {
   return `[${m}](${body.replace(/\\/g, '/')})`
 }
 
-// User prompts render as markdown, same as the assistant. Two pre-passes first:
-// @mentions are rewritten to links (see atMentionLink), and merged consecutive sends
-// (see applyUser) are joined by a thematic break so the bubble still reads as one turn.
+// The user-turn parser. Assistant turns are authored markup; user turns are verbatim keystrokes — so
+// this instance starts from markdown-it's zero preset and enables ONLY constructs whose delimiters
+// are never typed by accident: fenced code, inline backticks, hard newlines, inline links (what
+// @mentions rewrite to), linkified URLs — plus the math rules ($…$ is deliberate too). Everything
+// markdown merely *infers* from ambient characters stays literal text: headings (ATX and setext — a
+// pasted lone `=` line used to promote the line above it to an <h1>), lists, blockquotes, emphasis,
+// tables, escapes (Windows paths keep their backslashes), raw HTML (html stays off). The enable-list
+// IS the principle — extend it only for a construct a user deliberately types, never to "improve"
+// how pasted markdown looks.
+const mdUser = new MarkdownIt('zero', { linkify: true, breaks: true })
+mdUser.enable(['fence', 'backticks', 'newline', 'link', 'linkify'])
+applyMathRules(mdUser)
+applyLinkTargetRule(mdUser)
+// Every user-turn fence renders as a plain copyable source block, never a live embed — svg/mermaid/
+// bulb are assistant media, and a pasted snippet should read literally.
+const defaultUserFence: MdRenderRule = mdUser.renderer.rules.fence
+  ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
+mdUser.renderer.rules.fence = (tokens, idx, opts, env, self) =>
+  wrapCodeBlock(defaultUserFence(tokens, idx, opts, env, self), tokens[idx].content)
+
+// User prompts render through mdUser. Two pre-passes first: @mentions are rewritten to links (see
+// atMentionLink), and merged consecutive sends (see applyUser) render as separate segments joined by
+// an injected <hr> — injected as HTML, not a `---` line, because mdUser deliberately doesn't parse hr.
 export const userMarkdown = (msg: Msg) => {
   const segs = msg.segments ?? [msg.text]
-  const src = segs.join('\n\n---\n\n').replace(AT_MENTION, atMentionLink)
-  return renderMarkdown(src, { userMessage: true })
+  return mountMarkdown(
+    () => segs.map(s => mdUser.render(s.replace(AT_MENTION, atMentionLink))).join('<hr>'),
+    msg.text)
 }
 
 // Split an assistant message into ordered markdown chunks and live bulb sources. Bulbs reach us two ways,

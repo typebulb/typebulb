@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mdRenderToHtml } from '../agents/core/client/markdown.js'
+import { mdRenderToHtml, mdUserRenderToHtml } from '../agents/core/client/markdown.js'
 
 /**
  * Display math `$$…$$` is a markdown-it BLOCK rule, not just the inline one. A `$$…$$` block whose
@@ -63,5 +63,31 @@ describe('display math block', () => {
     const html = mdRenderToHtml('$$\na = b\n\nprose\n\n$$\nc = d\n$$')
     expect(html).toContain('prose')
     expect(html.match(/katex-display/g)?.length).toBe(1)
+  })
+})
+
+/**
+ * User turns render through mdUser — a zero-preset allowlist (fences, backticks, newlines, links,
+ * math) so pasted text can never be promoted into structure it didn't have; assistant turns keep
+ * the full grammar (TB-Agent-Mirror.md, "Rendering").
+ */
+describe('user-turn renderer (zero-preset allowlist)', () => {
+  it('does not promote a pasted lone `=` line into a setext heading', () => {
+    // The shape copying rendered KaTeX out of a chat UI produces: fragment lines with bare `=` under text.
+    const html = mdUserRenderToHtml('a certain event (\np\n=\n1\np=1) gives zero surprise')
+    expect(html).not.toContain('<h1>')
+  })
+
+  it('keeps the deliberate constructs: fence, inline code, math, bare URL', () => {
+    expect(mdUserRenderToHtml('```\nconst x = 1\n```')).toContain('code-block')
+    expect(mdUserRenderToHtml('run `ls` now')).toContain('<code>ls</code>')
+    expect(mdUserRenderToHtml('so $a=b$ holds')).toContain('katex')
+    expect(mdUserRenderToHtml('see https://typebulb.com')).toContain('<a href="https://typebulb.com"')
+  })
+
+  it('leaves inferred structure literal: ATX heading, emphasis, list, blockquote', () => {
+    const html = mdUserRenderToHtml('# heading\n\n*emph* and _snake_case_\n\n- item\n\n> quote')
+    expect(html).not.toMatch(/<(h1|em|li|blockquote)>/)
+    expect(html).toContain('# heading')
   })
 })
