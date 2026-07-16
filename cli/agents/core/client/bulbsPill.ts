@@ -217,11 +217,14 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       else {
         // One fold per remote owner slug (the typebulbs/u/<slug> partition); ownership rides in
         // the row's path (rowUser). 'samples' and the token user are today's two instances.
+        // An open fold's items re-anchor just past their own header (-.5 - i), so they always sit
+        // directly under it — the contiguous shaded band depends on that adjacency.
         const owners = [...new Set(rows.filter(r => r.remote).map(r => rowUser(r)!))]
         owners.forEach((user, i) => {
           const inFold = (r: BulbRow) => !!r.remote && rowUser(r) === user
           const count = rows.filter(inFold).length
           if (!this.openFolds.has(user)) rows = rows.filter(r => !inFold(r))
+          else rows = rows.map(r => inFold(r) ? { ...r, recent: -0.5 - i } : r)
           rows.push({ path: `::${user}`, name: this.foldLabel(user), recent: -1 - i, group: { user, count } })
         })
       }
@@ -255,8 +258,8 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // The fold header's texts; any owner beyond the two curated names (a future foreign fold)
   // falls back to their slug.
   foldLabel(user: string): string {
-    return user === 'samples' ? 'samples from typebulb.com'
-      : user === this.myUser ? 'your typebulb.com bulbs'
+    return user === 'samples' ? 'Samples from typebulb.com'
+      : user === this.myUser ? 'Your typebulb.com bulbs'
       : `${user} on typebulb.com`
   }
   foldTitle(user: string): string {
@@ -630,7 +633,10 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // form a right-aligned cluster of fixed-width columns (trust · logs · time/port) that line up
     // row-to-row. Right-anchored, so the rightmost column (time/port) always aligns; the others
     // stack inward from it.
-    return div({ class: ['server-row', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
+    // fold-row: in the default folded view a remote row sits directly under its owner's header, so it
+    // joins the fold's shaded band. Not applied in filter/search modes, where rows appear headerless.
+    const inFold = !!r.remote && !this.searchActive && !this.filter.trim()
+    return div({ class: ['server-row', inFold ? 'fold-row' : '', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
         onMouseEnter: () => this.hoverRow(i, s) },
       s
         ? button({ class: 'server-stop', title: 'Stop this server', ariaLabel: 'Stop', onClick: (e: MouseEvent) => { e.stopPropagation(); this.stop(s.pid) } }, iconStop())
@@ -698,7 +704,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   groupRow(r: BulbRow, i: number, dimmed: boolean) {
     const { user, count } = r.group!
     const open = this.openFolds.has(user)
-    return div({ class: ['server-row', 'sample-group', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
+    return div({ class: ['server-row', 'sample-group', open ? 'open' : '', i === this.highlighted ? 'active' : '', dimmed ? 'dimmed' : ''],
         title: open ? 'Collapse' : this.foldTitle(user),
         onMouseEnter: () => this.hoverRow(i),
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleFold(user) } },

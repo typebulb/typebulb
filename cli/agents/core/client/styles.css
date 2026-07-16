@@ -817,16 +817,27 @@ a.server-port:hover { text-decoration: underline; }
    the logs-link register — marks the category and opens the bulb's published page. A remote
    (not-yet-downloaded) row's name is additionally muted and inert (no file to open), and its
    time column stays empty (no mtime to show). */
-.server-name.remote { color: var(--muted); cursor: default; }
+.server-name.remote { cursor: default; }
 .server-name.remote:hover { text-decoration: none; }
 .sample-link { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; flex: none; }
 .sample-link:hover { color: var(--accent); text-decoration: underline; }
-/* The samples-catalog fold header (bulbsPill.ts groupRow): caret in the button column, muted label
-   spanning the remaining tracks. Pitch, hover, and the keyboard highlight inherit from .server-row. */
+/* The remote fold (bulbsPill.ts groupRow / fold-row): the header and the remote rows within share
+   one veil step over the menu's panel bg (the picker-peek shade) as ONE contiguous band — each
+   row's ::before bridges the grid row-gap up to the row above, junction corners square off, and
+   only the band's outer corners round (the header's top; the last row's bottom, via :has). The
+   accent label marks the header. Single-class selectors on purpose: .server-row:hover/.active
+   outrank them, so the highlight tints still win. */
 .sample-group { cursor: pointer; color: var(--muted); }
-.sample-group:hover, .sample-group.active { color: var(--fg); }
+.sample-group, .fold-row { background: linear-gradient(var(--veil), var(--veil)), var(--panel); }
+.sample-group.open { border-radius: 6px 6px 0 0; }
+.fold-row { position: relative; border-radius: 0; }
+.fold-row::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -.15rem; height: .15rem;
+  background: linear-gradient(var(--veil), var(--veil)), var(--panel);
+}
+.fold-row:not(:has(+ .fold-row)) { border-radius: 0 0 6px 6px; }
 .sample-group .caret-tri { justify-self: center; }
-.sample-group-label { grid-column: 2 / -1; }
+.sample-group-label { grid-column: 2 / -1; color: var(--accent); }
 /* The 1fr name column: name + (in full-text mode) its hit count read together, the badge
    right-aligned at the column's end by the name's flex:1 — the session row's preview/hits layout. */
 .bulb-name-cell { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
