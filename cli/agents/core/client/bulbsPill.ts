@@ -649,6 +649,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         r.remote
           ? span({ class: 'server-name stopped remote', title: r.remote.description }, r.name)
           : span({ class: ['server-name', s ? '' : 'stopped'], title: `Open ${r.path}`, onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(r.path) } }, r.name),
+        // The run's --dir batch scope (TB-FS.md): where its tb.dir/state actually lives — without
+        // this, a scoped run and an unscoped one are indistinguishable rows.
+        s?.dir ? span({ class: 'bulb-dir', title: `Running with --dir ${s.dir} — its files land in that subfolder of the bulb's folder` }, s.dir) : null,
         this.userLink(r),
         hitsBadge(r.hitCount),
       ),

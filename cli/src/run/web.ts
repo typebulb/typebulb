@@ -93,7 +93,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       trusted: args.trust,
       trustHint,
     }),
-    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, predicted }),
+    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, dir: args.dir, mode: args.mode, predicted }),
   })
 
   if (args.trust) console.log('  trust: granted (filesystem, AI, server.ts enabled)')

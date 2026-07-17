@@ -44,9 +44,9 @@ export function findServer(servers: BulbServer[], arg: string, cwd?: string, cal
 const serverLabel = (s: BulbServer) => s.agent ?? path.basename(s.file)
 
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
- *  each server's live tier so an agent sees trusted-vs-restricted at a glance. */
+ *  each server's live tier and `--dir` batch scope so an agent sees both at a glance. */
 function printServerList(servers: BulbServer[], stream: (line: string) => void): void {
-  for (const s of servers) stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}  ${s.file}`)
+  for (const s of servers) stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.dir ? `  --dir ${s.dir}` : ''}  ${s.file}`)
 }
 
 /** No-arg form of `logs`/`stop`: list the running servers (or report none), then a per-command hint. */

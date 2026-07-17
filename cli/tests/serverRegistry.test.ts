@@ -222,6 +222,17 @@ describe('bulbServerCommand — the child is pinned to this package, not unpinne
     expect(bulbServerCommand('/x.bulb.md', { open: false }).args).toContain('--no-open')
   })
 
+  // Invocation scope rides the relaunch (TB-FS.md batch scoping): launchBulbServer inherits the
+  // replaced run's dir/mode into these opts, and the command must carry them to the child.
+  it('passes --dir and --mode with their values, and omits them by default', () => {
+    const args = bulbServerCommand('/x.bulb.md', { dir: 'batch2', mode: 'staging' }).args
+    expect(args.join(' ')).toContain('--dir batch2')
+    expect(args.join(' ')).toContain('--mode staging')
+    const bare = bulbServerCommand('/x.bulb.md').args
+    expect(bare).not.toContain('--dir')
+    expect(bare).not.toContain('--mode')
+  })
+
   it('agentViewerCommand pins the same bin and always passes --no-open', () => {
     const { command, args } = agentViewerCommand('claude')
     expect(command).toBe(process.execPath)

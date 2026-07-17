@@ -128,7 +128,7 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
 export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[]; fork?: { count: number; sub: Msg[] } }
 
-export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
+export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; dir?: string; predicted?: string; denied?: string }
 export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }
 // A typebulb.com remote bulb (tb.server.listSamples / listMyBulbs): a muted launcher row while no
 // local file exists — play pulls it to typebulbs/u/<user>/ and launches (server launcher.ts).
