@@ -61,7 +61,7 @@ function errorMessage(e: unknown): string {
 export interface ServerOptions {
   getHtml: () => string
   basePath: string
-  /** Base for RELATIVE /__fs paths: the bulb's data folder (TB-FS.md). Containment stays
+  /** Base for RELATIVE /__fs paths: the bulb's folder, or its --dir subfolder (TB-FS.md). Containment stays
    *  `basePath` (the project), so `../` reaches siblings but never escapes the project.
    *  Absent (agent mirror, older tests) → falls back to basePath, the old cwd-relative rule. */
   fsBase?: string
@@ -104,7 +104,7 @@ export interface ServerInstance {
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
   const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets } = options
-  // Relative /__fs paths resolve here (the bulb's data folder — TB-FS.md); containment stays basePath.
+  // Relative /__fs paths resolve here (the bulb's folder — TB-FS.md); containment stays basePath.
   const fsRoot = fsBase ?? basePath
 
   const app = new Hono()
@@ -632,7 +632,7 @@ function contentTypeFor(filePath: string): string {
 }
 
 /** Resolve a path relative to `basePath`, contained to `containRoot` (default: basePath itself).
- *  The split serves the fs routes: resolution against the bulb's data folder, containment
+ *  The split serves the fs routes: resolution against the bulb's folder, containment
  *  against the project (TB-FS.md) — an ergonomics split, not a widened envelope. */
 function resolvePath(requestedPath: string, basePath: string, containRoot = basePath): string {
   const resolved = path.resolve(basePath, requestedPath)

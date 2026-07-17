@@ -27,6 +27,7 @@ export async function runCall(
   spec: CallSpec,
   mode: string | undefined,
   local: ResolvedLocalOverride | undefined,
+  dir: string | undefined,
 ): Promise<void> {
   // Reserve stdout for the result: route every console write — the env banner, server.ts top-level
   // logs, and the invoked function's own console.* — to stderr for the whole call (Invariant 2).
@@ -53,7 +54,7 @@ export async function runCall(
 
   let exports: Record<string, Function>
   try {
-    exports = await importServerModule(bulb.server, bulbPath, local, config.dependencies)
+    exports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, dir)
   } catch (e) {
     fail(e instanceof Error ? e.message : String(e))
   }

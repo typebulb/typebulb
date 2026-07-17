@@ -16,11 +16,13 @@ export async function findBulbFile(dir: string): Promise<string | null> {
   return bulbFile ? path.join(dir, bulbFile) : null
 }
 
-/** A bulb's data folder — the sibling dir named for the filename stem, absolute (TB-FS.md).
- *  Relative tb.fs paths resolve here; tb.dir exposes it to bulb code. */
-export function bulbDataDir(bulbPath: string): string {
+/** A bulb's folder — the sibling dir named for the filename stem, absolute (TB-FS.md).
+ *  Relative tb.fs paths resolve here; tb.dir exposes it to bulb code. `sub` (the --dir flag)
+ *  scopes it to a subfolder for one invocation — the bulb's code stays batch-unaware. */
+export function bulbDataDir(bulbPath: string, sub?: string): string {
   const abs = path.resolve(bulbPath)
-  return path.join(path.dirname(abs), path.basename(abs).replace(/\.bulb\.md$/, ''))
+  const root = path.join(path.dirname(abs), path.basename(abs).replace(/\.bulb\.md$/, ''))
+  return sub ? path.join(root, sub) : root
 }
 
 /**
@@ -47,7 +49,7 @@ export function serverModulePath(bulbPath: string): string {
 }
 
 /** Compile server source, write to `.typebulb/<slug>.server.mjs`, and dynamic-import it */
-export async function importServerModule(serverSource: string, bulbPath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>): Promise<Record<string, Function>> {
+export async function importServerModule(serverSource: string, bulbPath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>, dir?: string): Promise<Record<string, Function>> {
   const compiled = transpile(serverSource, { serverOnly: true })
   if (compiled.error) {
     throw new Error(`Server compilation error: ${compiled.error}`)
@@ -74,7 +76,7 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models / tb.dir) before it runs — its free `tb`
   // reference resolves to this, the same way the browser shim provides one. Must precede the import
   // (server.ts top-level code runs on import). Only reached under trust (this import is trust-gated).
-  installServerTb(bulbDataDir(bulbPath))
+  installServerTb(bulbDataDir(bulbPath, dir))
 
   // Cache-bust with query param so re-imports pick up changes
   const fileUrl = `${pathToFileURL(serverPath).href}?t=${Date.now()}`
@@ -82,7 +84,7 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   return mod
 }
 
-export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined) {
+export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, dir?: string) {
   const { bulb, config } = await readBulb(bulbPath)
   const dataChunks = splitIntoChunks(bulb.data)
 
@@ -134,7 +136,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     data: dataChunks,
     insight: bulb.insight,
     importMap,
-    dir: bulbDataDir(bulbPath),
+    dir: bulbDataDir(bulbPath, dir),
     watch,
   })
 
@@ -148,7 +150,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // the privileged act — never run it without trust).
   let serverExports: Record<string, Function> | null = null
   if (bulb.server && trusted) {
-    serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies)
+    serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, dir)
   }
 
   return { html, bulb, serverExports }

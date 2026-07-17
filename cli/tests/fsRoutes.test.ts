@@ -5,6 +5,7 @@ import * as path from 'path'
 import * as net from 'net'
 import * as http from 'http'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
+import { bulbDataDir } from '../src/pipeline.js'
 
 /** Reserve an ephemeral port, then release it for the server to bind. */
 function freePort(): Promise<number> {
@@ -201,5 +202,16 @@ describe('data-folder resolution (fsBase)', () => {
   it('still denies escaping the project', async () => {
     const resp = await dread('../'.repeat(8) + 'etc/passwd')
     expect(resp.status).toBe(400)
+  })
+})
+
+// TB-FS.md "Batch scoping": --dir re-roots the bulb's folder to a subfolder; the bulb stays batch-unaware.
+describe('bulbDataDir (--dir scoping)', () => {
+  it('derives the sibling folder from the filename stem', () => {
+    expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'))).toBe(path.resolve('typebulbs', 'probe'))
+  })
+
+  it('scopes to a subfolder when given a --dir subpath', () => {
+    expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'), 'batch2')).toBe(path.resolve('typebulbs', 'probe', 'batch2'))
   })
 })

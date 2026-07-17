@@ -53,7 +53,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
 
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)
-  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local)
+  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, args.dir)
   reportEnv(envResult, bulbPath, bulb.server)
 
   // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
@@ -74,7 +74,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     makeServerOptions: (port) => ({
       getHtml: () => html,
       basePath,
-      fsBase: bulbDataDir(bulbPath),
+      fsBase: bulbDataDir(bulbPath, args.dir),
       port,
       reloadEmitter,
       messageEmitter,
@@ -123,7 +123,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
           if (seq !== compileSeq) return
           try {
             console.log('Recompiling...')
-            const result = await loadAndCompile(bulbPath, true, args.trust, local)
+            const result = await loadAndCompile(bulbPath, true, args.trust, local, args.dir)
             html = result.html
             serverExports = result.serverExports
             bulb = result.bulb

@@ -363,7 +363,7 @@ export const typebulbShim = `
     // Filesystem - local CLI extension
     fs,
 
-    // The bulb's data folder, absolute (TB-FS.md) — for interop (paths handed to server.ts or
+    // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to server.ts or
     // spawned tools); tb.fs itself already resolves relative paths against it. Absent in an
     // embed (no filesystem to name), where access throws like tb.fs.
     get dir() {

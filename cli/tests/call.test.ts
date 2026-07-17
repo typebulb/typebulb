@@ -47,6 +47,13 @@ describe('parseArgs: call subcommand', () => {
     expect(a.fn).toBe('query')
     expect(a.callArgs).toEqual(['select 1'])
   })
+
+  it('--dir scopes the run to a subfolder, normalizing a trailing slash', () => {
+    const a = parseArgs(['call', 'probe.bulb.md', 'run', '--dir', 'batch2/', '--trust'])
+    expect(a.dir).toBe('batch2')
+    expect(a.fn).toBe('run')
+    expect(a.callArgs).toEqual([])
+  })
 })
 
 describe('parsePositionalArgs: JSON-or-string heuristic', () => {

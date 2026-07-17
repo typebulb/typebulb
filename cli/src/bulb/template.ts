@@ -23,7 +23,7 @@ export interface RenderOptions {
    *  standalone top-level page (the CLI server). Only the standalone page gets a
    *  `html, body { height: 100% }` chain — see the `pageHeight` note in renderHtml. */
   embedded?: boolean
-  /** The bulb's data folder, absolute (TB-FS.md) — injected as window.__TB_DIR__ for tb.dir.
+  /** The bulb's folder, absolute (TB-FS.md) — injected as window.__TB_DIR__ for tb.dir.
    *  Omitted for embeds (no filesystem) and hosts without a bulb file. */
   dir?: string
 }

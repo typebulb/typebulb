@@ -135,7 +135,7 @@ const fs = `
   /**
    * Local filesystem access (CLI only).
    *
-   * Relative paths resolve against the bulb's data folder (\`tb.dir\` —
+   * Relative paths resolve against the bulb's folder (\`tb.dir\` —
    * \`<bulb-dir>/<filename-stem>/\`, created on demand), so
    * \`tb.fs.write('results.json')\` lands beside the bulb. \`../\` reaches sibling
    * bulbs' folders; everything stays confined to the project (the launch cwd).
@@ -152,7 +152,8 @@ const fs = `
 
 const dir = `
   /**
-   * The bulb's data folder — absolute path to \`<bulb-dir>/<filename-stem>/\`.
+   * The bulb's folder — absolute path to \`<bulb-dir>/<filename-stem>/\`
+   * (or its subfolder when the run is scoped with \`--dir\`).
    *
    * For interop only (handing a path to \`server.ts\` or a spawned tool):
    * \`tb.fs\` already resolves relative paths against it, so bulb code writing

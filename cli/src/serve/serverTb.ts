@@ -55,8 +55,8 @@ export function installServerTb(dir: string): void {
   const ai = Object.assign(tbAi, { stream: tbAiStream })
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     ai,
-    // The bulb's data folder, absolute (TB-FS.md) — server.ts writes beside the bulb via
-    // path.join(tb.dir, …) instead of guessing cwd-relative prefixes.
+    // The bulb's folder, absolute (TB-FS.md) — server.ts writes beside the bulb via
+    // path.join(tb.dir, …) instead of guessing cwd-relative prefixes. --dir scopes it.
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     hasOwnKeys,

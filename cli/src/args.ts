@@ -1,3 +1,4 @@
+import * as path from 'path'
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
 /** `send --wait` (no value) waits this long for a page to (re)attach. Sized to cover an
@@ -43,6 +44,11 @@ export interface CliArgs {
   /** `--mode <name>`: also load `.env.<name>` (+ `.env.<name>.local`) on top of the base cascade.
    *  Free-form; selects nothing by default (TB-Env.md). */
   mode?: string
+  /** `--dir <sub>`: scope the bulb's dir to a subfolder — `tb.dir` and relative `tb.fs` paths land
+   *  in `<bulb-folder>/<sub>` for this invocation (per-call under `call`; launch-scoped when
+   *  serving). Batch runs without the bulb knowing (TB-FS.md). Always a relative subpath —
+   *  absolute paths and `..` are rejected at parse, so "one folder per bulb" stays structural. */
+  dir?: string
   /** `logs --follow`: stream new console output until interrupted (default: snapshot). */
   follow: boolean
   /** `logs --clear`: truncate the target server's captured log instead of printing it. */
@@ -145,6 +151,18 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.mode = m
+    } else if (arg === '--dir') {
+      const d = args[++i]
+      if (!d || d.startsWith('-')) {
+        console.error("Missing value for --dir (a subfolder of the bulb's folder, e.g. --dir batch2)")
+        process.exit(1)
+      }
+      const sub = d.replace(/[\\/]+$/, '')
+      if (!sub || path.isAbsolute(sub) || sub.split(/[\\/]/).some(s => s === '' || s === '..')) {
+        console.error(`Invalid --dir value: ${d} (a relative subfolder of the bulb's folder — no absolute paths or '..')`)
+        process.exit(1)
+      }
+      result.dir = sub
     } else if (arg === '--follow' || arg === '-f') {
       result.follow = true
     } else if (arg === '--clear') {
@@ -366,6 +384,11 @@ Options:
   --mode <name>               Also load .env.<name> (+ .env.<name>.local) on top
                               of .env / .env.local. Free-form name; loads no mode
                               file by default.
+  --dir <sub>                 Scope the bulb's dir to a subfolder for this run:
+                              tb.dir and relative tb.fs paths land in
+                              <bulb-folder>/<sub>. Batch runs without touching
+                              the bulb's code (e.g. --dir batch2). Relative
+                              subpaths only — no absolute paths or '..'.
   --server                    Run server.ts only, no web server (needs --trust)
   --args <json-array>         For 'call': the whole argument list as one JSON
                               array (strict). '--args -' reads it from stdin,
