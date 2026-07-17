@@ -40,7 +40,9 @@ typebulb agent                 An agent's first command — auto-detects the har
 typebulb agent:{claude|pi}     Open a named harness's mirror in the foreground — the explicit form, or to override auto-detect
 typebulb skill                 Print this README as an Agent Skill on stdout
 typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
-typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust
+typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust.
+                               With --wait, a handler's non-undefined return prints on stdout (JSON; a bare string raw)
+typebulb send <file> tb:snapshot  Print the live page's rendered outline (roles, names, visible text)
 typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
 typebulb push <file>           Upload a local bulb to typebulb.com as you (needs TYPEBULB_TOKEN in .env)
 typebulb check [file.bulb.md]  Type-check a bulb without running it
@@ -185,7 +187,7 @@ everywhere.
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
 | `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when embedded (no host AI) | |
 | `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | |
-| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send` — inert when embedded (no sender) | |
+| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when embedded (no sender) | |
 | `tb.fs.read/readBytes/write` | Read and write local files | yes |
 | `tb.dir` | The bulb's folder (absolute path), where relative `tb.fs` paths land | |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | yes |
@@ -249,6 +251,14 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 - **Reading the log:** it appends across every reload, so `typebulb logs --run latest <file>` shows just the current run (no need to clear).
 - **When done:** Ctrl-C, or `typebulb stop <file>` — closing the terminal leaves the server running detached.
 
+#### Interrogating the live page
+
+`send --wait` is a round trip: the page's `tb.onMessage` handler runs and its non-`undefined` return value prints on stdout — JSON, or raw for a bare string. The delivery line stays on stderr, so the reply is what you parse.
+
+- **Structured selftest** — a handler that returns `{ count, verdict }` beats one that logs prose: `typebulb send <file> selftest --wait` prints the object as JSON, and you assert on fields instead of parsing `logs`. At most one handler, in one page, may return a value; a slow check needs `--wait=<ms>` above the 5s default.
+- **Rendered truth** — `typebulb send <file> tb:snapshot` prints the page's accessibility outline (roles, names, visible text) without disturbing its state. Use it when logs say ok but the screen might not, and as the first probe on a live page in a state you can't reproduce — a save would hot-reload and destroy it. (`tb:` messages are answered by the runtime, never your handlers, and imply `--wait`.)
+- **A page must be open** — `send` reports "no page connected" until someone opens the printed link; the CLI runs no browser of its own.
+
 ### Emitting a server-only bulb
 
 A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no port, absent from the launcher. Under `--trust` its code can use `tb.fs`, and call `tb.ai`, `tb.ai.stream`, and `tb.models` against your `.env` keys.
@@ -276,7 +286,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Batch runs: scope with `--dir`, don't hand-roll plumbing** — `--dir batch2` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batch2/`; the bulb's code stays batch-unaware, and an unscoped run sees batches as ordinary subfolders.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
-- **Self-testing client code** — to drive the *browser* side, gate the work behind `tb.onMessage(m => { if (m === 'selftest') run() })`, trigger it with `typebulb send <file> selftest --wait`, and read `run()`'s `tb.server.log(...)` back the same way. The client-side counterpart to instrumenting `server.ts`.
+- **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`, and every bare import declared in `config.json` `dependencies`.** Bare imports (`react`, `d3`, `three`, …) resolve from a CDN — no install step — but declaring them is **required, not optional**: an import missing from `dependencies` is a lint error that fails `npx typebulb check` *and* refuses to run. Declaring is also what pins versions and lets `check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`). So a bulb with imports must carry a `config.json` with a matching `dependencies` entry for each.

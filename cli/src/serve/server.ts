@@ -71,7 +71,8 @@ export interface ServerOptions {
   /** Carries `typebulb send` pushes to connected pages as `message` SSE events (TB-CLI.md).
    *  Created unconditionally by the web runner (unlike `reloadEmitter`, which is watch-only) so
    *  send works even under `--no-watch`. Each connected page adds one `message` listener, so its
-   *  `listenerCount('message')` is the count `/__send` reports back. */
+   *  `listenerCount('message')` is the count `/__send` reports back. Each event is an
+   *  `{ id?, payload }` envelope; `id` is present only when the sender awaits replies. */
   messageEmitter?: EventEmitter
   getServerExports?: () => Record<string, Function> | null
   /** The bulb's raw block sources for `tb.infer()` prompt building (TB-Inference.md): `code` is
@@ -210,14 +211,56 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // passes, a cross-site browser POST is refused, so no other page can inject into the bulb. The
   // body is forwarded verbatim; the shim interprets it (JSON-or-string). Returns the connected-page
   // count so `send` can report delivery — best-effort, never buffered (no listeners ⇒ the agent retries).
+  //
+  // The reply leg (TB-Interrogation.md): `?reply=<ms>` broadcasts under an id and holds the
+  // response until every page then connected has POSTed `/__send-reply` for that id, or the window
+  // elapses. Aggregation only — the one-reply rule is the CLI's to enforce — and still never a
+  // queue: zero connected pages resolves immediately, reply or not.
   if (messageEmitter) {
+    /** One held `/__send?reply` awaiting its pages' `/__send-reply` POSTs. */
+    type PendingSend = { expected: number; received: number; results: string[]; errors: string[]; finish: (timedOut: boolean) => void }
+    let sendSeq = 0
+    const pendingSends = new Map<number, PendingSend>()
     app.use('/__send', csrfGuard)
     app.post('/__send', async (c) => {
       let payload = ''
       try { payload = await c.req.text() } catch { /* empty body ⇒ a bare trigger */ }
+      const replyMs = Number(c.req.query('reply')) || 0
       const clients = messageEmitter.listenerCount('message')
-      messageEmitter.emit('message', payload)
-      return c.json({ clients })
+      if (replyMs <= 0 || clients === 0) {
+        messageEmitter.emit('message', { payload })
+        return c.json({ clients })
+      }
+      const id = ++sendSeq
+      const outcome = await new Promise<{ results: string[]; errors: string[]; timedOut: boolean }>(resolve => {
+        const entry = {
+          expected: clients, received: 0, results: [] as string[], errors: [] as string[],
+          finish: (timedOut: boolean) => {
+            clearTimeout(timer)
+            pendingSends.delete(id)
+            resolve({ results: entry.results, errors: entry.errors, timedOut })
+          },
+        }
+        const timer = setTimeout(() => entry.finish(true), replyMs)
+        pendingSends.set(id, entry)
+        messageEmitter.emit('message', { id, payload })
+      })
+      return c.json({ clients, ...outcome })
+    })
+
+    // The page's reply POST — same tier as /__send: data carried, no code run, CSRF-guarded.
+    app.use('/__send-reply', csrfGuard)
+    app.post('/__send-reply', async (c) => {
+      try {
+        const { id, results, errors } = await c.req.json<{ id: number; results?: string[]; errors?: string[] }>()
+        const entry = pendingSends.get(id)
+        if (entry) {
+          entry.results.push(...(results ?? []))
+          entry.errors.push(...(errors ?? []))
+          if (++entry.received >= entry.expected) entry.finish(false)
+        }
+      } catch { /* malformed reply — never error the page's fire-and-forget POST */ }
+      return c.json({ ok: true })
     })
   }
 
@@ -528,13 +571,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // Events SSE — one connection per page carrying two channels: `reload` (hot reload, watch-only)
   // and `message` (`typebulb send`). The page's shim opens this whenever it's served by the dev
-  // server. Registered if either channel is active. The message payload is JSON-encoded on the wire
-  // so a multi-line value can't break SSE's line framing; the shim JSON-decodes it back.
+  // server. Registered if either channel is active. A message rides its `{ id?, payload }` envelope
+  // JSON-encoded on the wire so a multi-line value can't break SSE's line framing; the shim decodes it.
   if (reloadEmitter || messageEmitter) {
     app.get('/__reload', (c) => {
       return streamSSE(c, async (stream) => {
         const onReload = () => { stream.writeSSE({ event: 'reload', data: '' }) }
-        const onMessage = (payload: string) => { stream.writeSSE({ event: 'message', data: JSON.stringify(payload) }) }
+        const onMessage = (envelope: { id?: number; payload: string }) => { stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }) }
         reloadEmitter?.on('reload', onReload)
         messageEmitter?.on('message', onMessage)
         stream.onAbort(() => {

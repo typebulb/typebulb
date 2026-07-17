@@ -63,26 +63,26 @@ function raw(p: string, headers: Record<string, string>, body = ''): Promise<num
 
 describe('typebulb send / __send', () => {
   it('re-emits the posted body to message listeners and reports the count', async () => {
-    const received: string[] = []
-    const listener = (payload: string) => received.push(payload)
+    const received: Array<{ id?: number; payload: string }> = []
+    const listener = (env: { id?: number; payload: string }) => received.push(env)
     emitter.on('message', listener)
     try {
       const resp = await fetch(url('/__send'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'hello' })
       expect(resp.ok).toBe(true)
       expect(await resp.json()).toEqual({ clients: 1 })
-      expect(received).toEqual(['hello'])
+      expect(received).toEqual([{ payload: 'hello' }])   // no ?reply ⇒ no id: fire-and-forget envelope
     } finally {
       emitter.removeListener('message', listener)
     }
   })
 
   it('delivers an empty body as a bare trigger', async () => {
-    let got: string | undefined
-    const listener = (payload: string) => { got = payload }
+    let got: { payload: string } | undefined
+    const listener = (env: { payload: string }) => { got = env }
     emitter.on('message', listener)
     try {
       await fetch(url('/__send'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '' })
-      expect(got).toBe('')
+      expect(got).toEqual({ payload: '' })
     } finally {
       emitter.removeListener('message', listener)
     }
@@ -102,8 +102,8 @@ describe('typebulb send / __send', () => {
   })
 
   // The wire's one non-obvious bit: a send is streamed as an SSE `message` event whose data is the
-  // payload JSON-*encoded*, so a multi-line value can't break SSE's newline framing (the shim
-  // JSON-decodes it back). Open the events SSE, send a multi-line message, assert the framed event.
+  // `{ id?, payload }` envelope JSON-*encoded*, so a multi-line value can't break SSE's newline
+  // framing (the shim decodes it back). Open the events SSE, send a multi-line message, assert framing.
   it('streams a send as a line-safe SSE `message` event', async () => {
     const u = new URL(url('/__reload'))
     let req: http.ClientRequest
@@ -125,7 +125,7 @@ describe('typebulb send / __send', () => {
     })
     req!.destroy()
     expect(framed).toContain('event: message')
-    expect(framed).toContain('data: ' + JSON.stringify('multi\nline'))   // "multi\nline" — one line
+    expect(framed).toContain('data: ' + JSON.stringify({ payload: 'multi\nline' }))   // envelope — one line
   })
 })
 
@@ -153,14 +153,19 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
   const file = path.resolve('send-wait.bulb.md')
   const captureLog = () => {
     const lines: string[] = []
-    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { lines.push(String(m)) })
-    return { lines, restore: () => spy.mockRestore() }
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { lines.push(String(m)) })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { lines.push(String(m)) })
+    return { lines, restore: () => { logSpy.mockRestore(); errSpy.mockRestore() } }
   }
 
   it('delivers once a page attaches mid-wait (no server-side buffering)', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
     const received: string[] = []
-    const listener = (p: string) => received.push(p)
+    // Ack like the shim's page side (no handler returned a value), so the reply hold resolves promptly.
+    const listener = (env: { id?: number; payload: string }) => {
+      received.push(env.payload)
+      if (env.id !== undefined) void fetch(url('/__send-reply'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results: [], errors: [] }) })
+    }
     // No listener at first (the reload gap); the page "re-attaches" ~400ms in.
     const attach = setTimeout(() => emitter.on('message', listener), 400)
     const { lines, restore } = captureLog()
@@ -182,5 +187,75 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
       restore(); await unregisterServer(process.ppid)
     }
     expect(lines.join('\n')).toContain('No page connected after 0.3s')
+  })
+})
+
+describe('the reply leg — a handler return prints on stdout (TB-Interrogation.md)', () => {
+  const file = path.resolve('send-reply.bulb.md')
+  type Envelope = { id?: number; payload: string }
+  /** A minimal stand-in for the shim's page side: receive the envelope, POST the reply (null: stay silent). */
+  const page = (reply: (env: Envelope) => { results?: string[]; errors?: string[] } | null) => {
+    const listener = (env: Envelope) => {
+      const body = reply(env)
+      if (body === null || env.id === undefined) return
+      void fetch(url('/__send-reply'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: env.id, results: [], errors: [], ...body }),
+      })
+    }
+    emitter.on('message', listener)
+    return () => emitter.removeListener('message', listener)
+  }
+  const capture = () => {
+    const out: string[] = []
+    const errs: string[] = []
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)) })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)) })
+    return { out, errs, restore: () => { logSpy.mockRestore(); errSpy.mockRestore() } }
+  }
+
+  it('prints a structured return as JSON on stdout; the delivery line moves to stderr', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const off = page(() => ({ results: [JSON.stringify({ count: 7, verdict: 'prime' })] }))
+    const { out, errs, restore } = capture()
+    try {
+      await runSend(file, 'selftest', 2000)
+    } finally { restore(); off(); await unregisterServer(process.ppid) }
+    expect(out).toEqual(['{"count":7,"verdict":"prime"}'])
+    expect(errs.join('\n')).toContain('Sent to 1 page')
+  })
+
+  it('prints a bare-string reply raw — a snapshot outline stays readable', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const off = page(() => ({ results: [JSON.stringify('- heading "7" [level=1]')] }))
+    const { out, restore } = capture()
+    try {
+      await runSend(file, 'tb:snapshot')   // tb:* implies --wait
+    } finally { restore(); off(); await unregisterServer(process.ppid) }
+    expect(out).toEqual(['- heading "7" [level=1]'])
+  })
+
+  it('rejects two replies — one reply owns stdout', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const off = page(() => ({ results: [JSON.stringify(1), JSON.stringify(2)] }))
+    const { out, errs, restore } = capture()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
+    try {
+      await expect(runSend(file, 'selftest', 2000)).rejects.toThrow('exit 1')
+    } finally { exit.mockRestore(); restore(); off(); await unregisterServer(process.ppid) }
+    expect(out).toEqual([])
+    expect(errs.join('\n')).toContain('one reply owns stdout')
+  })
+
+  it('a silent page keeps fire-and-forget behavior, with a timeout note on stderr', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const off = page(() => null)
+    const { out, errs, restore } = capture()
+    try {
+      await runSend(file, 'go', 1200)
+    } finally { restore(); off(); await unregisterServer(process.ppid) }
+    expect(out).toEqual([])
+    expect(errs.join('\n')).toContain('no reply within')
   })
 })

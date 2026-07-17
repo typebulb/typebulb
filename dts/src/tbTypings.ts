@@ -241,13 +241,15 @@ const onMessage = `
    * — so hot reloads don't re-trigger it while you edit, and an agent kicks off one run when ready.
    *
    * The message is the JSON-parsed value of what \`send\` was given (or the raw string if it isn't
-   * JSON; \`undefined\` for a bare \`typebulb send <file>\`). Returns an unsubscribe function. Inert in
+   * JSON; \`undefined\` for a bare \`typebulb send <file>\`). A non-\`undefined\` return value (awaited)
+   * becomes the reply \`send --wait\` prints on stdout — JSON-serializable, at most one handler
+   * replying — the structured read-back for self-tests. Returns an unsubscribe function. Inert in
    * an embedded bulb (no sender) — the handler is registered but never fires.
    *
-   * @param handler - Called with each pushed message.
+   * @param handler - Called with each pushed message; may return a JSON-serializable reply.
    * @returns An unsubscribe function.
    */
-  onMessage(handler: (message: any) => void): () => void;`
+  onMessage(handler: (message: any) => unknown): () => void;`
 
 const clientServerProxy = `
   /**

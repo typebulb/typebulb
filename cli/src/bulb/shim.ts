@@ -373,7 +373,8 @@ export const typebulbShim = `
 
     // Receive a value pushed from the terminal via \`typebulb send\` (data-in, the dual of the
     // ungated tb.server.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
-    // sender; the handler is registered but never fires (cf. tb.models returning []).
+    // sender; the handler is registered but never fires (cf. tb.models returning []). A handler's
+    // non-undefined return (awaited) becomes the reply \`send --wait\` prints (TB-Interrogation.md).
     onMessage: (handler) => {
       if (typeof handler === 'function') messageHandlers.add(handler);
       return () => messageHandlers.delete(handler);
@@ -389,6 +390,60 @@ export const typebulbShim = `
     set theme(v) { if (window.__tbTheme) window.__tbTheme.set(v); }
   });
 
+  // tb:snapshot — the page serializes its own accessibility outline (roles, names, visible text;
+  // the YAML-not-pixels shape) as the reply to \`typebulb send <file> tb:snapshot\`
+  // (TB-Interrogation.md). Heuristic by design: explicit role attr, a small
+  // implicit-role map, aria-label/alt/value then visible text for names — enough to catch
+  // text/structure divergence, which is what an agent can judge without pixels.
+  const IMPLICIT_ROLES = { BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', OPTION: 'option', IMG: 'img', NAV: 'navigation', MAIN: 'main', HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog', TABLE: 'table', TR: 'row', TH: 'columnheader', TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem', LABEL: 'label', P: 'paragraph', PROGRESS: 'progressbar', SUMMARY: 'button', FIGURE: 'figure', BLOCKQUOTE: 'blockquote', HR: 'separator' };
+  const INPUT_ROLES = { checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', button: 'button', submit: 'button', reset: 'button', hidden: '' };
+  const snapshot = () => {
+    const MAX_LINES = 400;
+    const squash = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+    const clip = (s) => (s.length > 200 ? s.slice(0, 200) + '…' : s);
+    const roleOf = (el) => {
+      const explicit = el.getAttribute('role');
+      if (explicit) return explicit;
+      const t = el.tagName;
+      if (t === 'A') return el.hasAttribute('href') ? 'link' : '';
+      if (t === 'INPUT') { const r = INPUT_ROLES[(el.getAttribute('type') || 'text').toLowerCase()]; return r === undefined ? 'textbox' : r; }
+      if (/^H[1-6]$/.test(t)) return 'heading';
+      return IMPLICIT_ROLES[t] || '';
+    };
+    const hiddenEl = (el) => {
+      if (el.hidden || el.getAttribute('aria-hidden') === 'true') return true;
+      const cs = getComputedStyle(el);
+      return cs.display === 'none' || cs.visibility === 'hidden';
+    };
+    const lines = [];
+    const walk = (node, depth) => {
+      for (let ch = node.firstChild; ch && lines.length <= MAX_LINES; ch = ch.nextSibling) {
+        if (ch.nodeType === 3) {
+          const t = squash(ch.nodeValue);
+          if (t) lines.push('  '.repeat(depth) + '- text: ' + clip(t));
+          continue;
+        }
+        if (ch.nodeType !== 1) continue;
+        const tag = ch.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE' || tag === 'NOSCRIPT' || tag === 'LINK' || tag === 'META') continue;
+        if (hiddenEl(ch)) continue;
+        const role = roleOf(ch);
+        if (!role) { walk(ch, depth); continue; }   // structural (div/span/…): descend transparently
+        const attr = (n) => squash(ch.getAttribute(n) || '');
+        const text = squash(ch.textContent);
+        const name = attr('aria-label') || (tag === 'IMG' ? attr('alt') : '') || (typeof ch.value === 'string' ? squash(ch.value) || attr('placeholder') : '') || text;
+        let line = role + (name ? ' "' + clip(name) + '"' : '');
+        const lv = role === 'heading' ? (attr('aria-level') || (/^H[1-6]$/.test(tag) ? tag.charAt(1) : '')) : '';
+        if (lv) line += ' [level=' + lv + ']';
+        lines.push('  '.repeat(depth) + '- ' + line);
+        if (!(name && name === text)) walk(ch, depth + 1);   // subtree ≡ name ⇒ the one line says it all
+      }
+    };
+    walk(document.body, 0);
+    if (lines.length > MAX_LINES) { lines.length = MAX_LINES; lines.push('- … (truncated)'); }
+    return lines.length ? lines.join('\\n') : '(empty page)';
+  };
+
   // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
   // 'message' delivers \`typebulb send\` pushes to tb.onMessage. Connect for a CLI-served page (http
   // origin, not an embed); a srcdoc embed or a file:// static export has no server, so onMessage just
@@ -399,11 +454,37 @@ export const typebulbShim = `
       console.log('[typebulb] Reloading...');
       window.location.reload();
     });
-    es.addEventListener('message', (e) => {
-      // Wire payload is JSON-encoded (SSE-line-safe); decode it, then interpret JSON-or-string.
-      let value;
-      try { value = parseMsg(JSON.parse(e.data)); } catch { value = undefined; }
-      messageHandlers.forEach((h) => { try { h(value); } catch (err) { console.error(err); } });
+    es.addEventListener('message', async (e) => {
+      // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved
+      // namespace (TB-Interrogation.md): answered by a built-in handler, never delivered to
+      // tb.onMessage. Each settled non-undefined return is a reply candidate — the CLI enforces the
+      // one-reply rule, the shim just reports what it collected.
+      let env;
+      try { env = JSON.parse(e.data) || {}; } catch { return; }
+      const errText = (err) => String((err && err.message) || err);
+      const results = []; const errors = [];
+      const keep = (v) => {
+        try {
+          const enc = JSON.stringify(v);
+          if (enc === undefined) throw new Error('unsupported value');
+          results.push(enc);
+        } catch (err) { errors.push('reply is not JSON-serializable: ' + errText(err)); }
+      };
+      const reservedCall = async () => {
+        if (env.payload === 'tb:snapshot') return snapshot();
+        throw new Error('unknown reserved message: ' + env.payload);
+      };
+      const value = parseMsg(env.payload);
+      const calls = typeof env.payload === 'string' && env.payload.indexOf('tb:') === 0
+        ? [reservedCall]
+        : Array.from(messageHandlers, (h) => async () => h(value));
+      for (const s of await Promise.allSettled(calls.map((f) => f()))) {
+        if (s.status === 'rejected') { console.error(s.reason); errors.push(errText(s.reason)); }
+        else if (s.value !== undefined) keep(s.value);
+      }
+      if (env.id !== undefined) {
+        try { fetch('/__send-reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results, errors }) }); } catch {}
+      }
     });
     es.onerror = () => {
       // Server closed, stop trying

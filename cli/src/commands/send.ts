@@ -1,5 +1,6 @@
 import * as path from 'path'
 import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
+import { DEFAULT_SEND_WAIT_MS } from '../args.js'
 
 /**
  * `typebulb send <file> [message]` — push a value from the terminal into a running bulb's page, where
@@ -13,13 +14,22 @@ import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
  * connected-page count the endpoint returns. Delivery is best-effort, never buffered: a send that
  * reaches no page (none open, or its SSE hasn't attached yet) is reported, not queued — retry.
  *
- * `--wait[=ms]` automates exactly that retry on the client side, for the post-edit self-test loop: a
+ * `--wait[=ms]` bounds the whole exchange (TB-Interrogation.md). First the reattach retry: a
  * hot reload aborts the page's SSE before the fresh page re-attaches, so the first POST can land on
- * zero listeners. We re-POST until a page attaches or the window elapses — never a server-side queue,
- * so the "never buffered" contract is intact (the no-op POSTs hit zero listeners; only the one that
- * finds a live page delivers, and we stop there).
+ * zero listeners; we re-POST until a page attaches or the window elapses — never a server-side queue,
+ * so the "never buffered" contract is intact. Then the reply leg: the delivering POST holds while the
+ * page awaits its handlers, and a non-`undefined` return prints on stdout (JSON; a bare string raw) —
+ * the delivery line stays on stderr so the reply owns stdout, `call`'s exact contract. One reply owns
+ * stdout: zero keeps the fire-and-forget behavior, more than one (extra handlers, extra pages) is an
+ * error, as is a handler throw. `tb:*` messages are shim-answered (never reach `tb.onMessage`) and
+ * imply `--wait` — a reply is their only purpose, so silence is an error for them alone.
  */
+interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean }
+
 export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
+  const reserved = message !== undefined && message.startsWith('tb:')
+  if (reserved && waitMs <= 0) waitMs = DEFAULT_SEND_WAIT_MS
+
   const abs = path.resolve(file)
   const server = serversForBulb(await listBulbServers(), abs)[0]
   if (!server) {
@@ -27,8 +37,8 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     process.exit(1)
   }
 
-  const post = async (): Promise<number> => {
-    const resp = await fetch(`${server.url}/__send`, {
+  const post = async (replyMs: number): Promise<SendOutcome> => {
+    const resp = await fetch(`${server.url}/__send${replyMs > 0 ? `?reply=${replyMs}` : ''}`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: message ?? '',
@@ -37,16 +47,15 @@ export async function runSend(file: string, message: string | undefined, waitMs 
       console.error(`send failed: HTTP ${resp.status} from ${server.url}/__send`)
       process.exit(1)
     }
-    const data = (await resp.json().catch(() => ({}))) as { clients?: number }
-    return data.clients ?? 0
+    return (await resp.json().catch(() => ({}))) as SendOutcome
   }
 
-  let clients = 0
+  let outcome: SendOutcome = {}
   try {
     const deadline = Date.now() + waitMs
     do {
-      clients = await post()
-      if (clients > 0 || Date.now() >= deadline) break
+      outcome = await post(waitMs > 0 ? Math.max(deadline - Date.now(), 1000) : 0)
+      if ((outcome.clients ?? 0) > 0 || Date.now() >= deadline) break
       await new Promise(r => setTimeout(r, 150))
     } while (true)
   } catch (e) {
@@ -54,7 +63,36 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     process.exit(1)
   }
 
-  if (clients > 0) console.log(`Sent to ${clients} page${clients === 1 ? '' : 's'}.`)
-  else if (waitMs > 0) console.log(`No page connected after ${waitMs / 1000}s — is the bulb open?`)
-  else console.log('Sent, but no page is connected yet — open the bulb and retry.')
+  const clients = outcome.clients ?? 0
+  const pages = `${clients} page${clients === 1 ? '' : 's'}`
+  if (clients === 0) {
+    if (waitMs > 0) console.error(`No page connected after ${waitMs / 1000}s — is the bulb open?`)
+    else console.error('Sent, but no page is connected yet — open the bulb and retry.')
+    if (reserved) process.exit(1)   // a tb:* message exists only for its reply
+    return
+  }
+
+  // Delivery is a status line; stdout belongs to the one reply.
+  console.error(`Sent to ${pages}.`)
+
+  const results = outcome.results ?? []
+  const errors = outcome.errors ?? []
+  for (const err of errors) console.error(`handler error: ${err}`)
+  if (errors.length) process.exit(1)
+  if (results.length > 1) {
+    console.error(`${results.length} replies from ${pages} — one reply owns stdout: at most one tb.onMessage handler, in one page, may return a value.`)
+    process.exit(1)
+  }
+  if (results.length === 1) {
+    // A bare-string reply prints raw (a tb:snapshot outline stays readable); everything else as JSON.
+    let decoded: unknown
+    try { decoded = JSON.parse(results[0]) } catch { decoded = undefined }
+    console.log(typeof decoded === 'string' ? decoded : results[0])
+  } else if (outcome.timedOut) {
+    if (reserved) {
+      console.error(`No reply to '${message}' within ${waitMs / 1000}s — reload the page and retry.`)
+      process.exit(1)
+    }
+    console.error(`(no reply within ${waitMs / 1000}s — a slow handler's return needs a larger --wait=ms)`)
+  }
 }

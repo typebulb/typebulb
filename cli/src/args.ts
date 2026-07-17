@@ -1,9 +1,10 @@
 import * as path from 'path'
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
-/** `send --wait` (no value) waits this long for a page to (re)attach. Sized to cover an
- *  npx-booted reload's reconnect window without a long hang when nothing is listening. */
-const DEFAULT_SEND_WAIT_MS = 5000
+/** `send --wait` (no value) waits this long for a page to (re)attach, then bounds the reply hold.
+ *  Sized to cover an npx-booted reload's reconnect window without a long hang when nothing is
+ *  listening. Exported: `tb:*` messages imply --wait (send.ts), defaulting to this window. */
+export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
   subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send' | 'pull' | 'push'
@@ -13,10 +14,10 @@ export interface CliArgs {
   /** `send <file> [message]`: the value to push into the running bulb's page (tb.onMessage).
    *  Optional — a bare `send <file>` delivers `undefined` (a pure trigger). */
   sendMessage?: string
-  /** `send --wait[=ms]`: if no page is connected yet (e.g. the page is mid hot-reload
-   *  reconnect), retry the push for up to this many ms before reporting. Absent ⇒ a single
-   *  best-effort attempt (the default, unchanged). Retry is client-side only — the server never
-   *  queues, so send's "best-effort, never buffered" contract holds. */
+  /** `send --wait[=ms]`: bound the whole exchange — retry the push while no page is connected
+   *  (e.g. mid hot-reload reconnect), then hold for the handlers' replies (TB-Interrogation.md).
+   *  Absent ⇒ a single best-effort fire-and-forget attempt (the default). Retry is client-side only —
+   *  the server never queues, so send's "best-effort, never buffered" contract holds. */
   sendWaitMs?: number
   /** `call`: positional args after `<fn>`, captured verbatim (each JSON-or-string-parsed at call time). */
   callArgs: string[]
@@ -319,10 +320,12 @@ Usage:
                                  without watching its terminal.
   typebulb send <file> [msg]     Push a message into a running bulb's page —
                                  its tb.onMessage(cb) handlers receive it. The
-                                 client-side twin of 'call'; use it to kick off
-                                 work on demand (msg is JSON-or-string; omit it
-                                 for a bare trigger). Needs no --trust. Add
-                                 --wait to ride through a hot-reload reconnect.
+                                 client-side twin of 'call'; msg is JSON-or-
+                                 string, omit it for a bare trigger. No --trust.
+                                 With --wait, a handler's non-undefined return
+                                 prints on stdout (JSON; a bare string raw).
+                                 msg 'tb:snapshot' instead prints the page's
+                                 rendered outline (roles, names, visible text).
    typebulb pull <url|file>       Fetch a bulb from typebulb.com into
                                   typebulbs/u/<user>/<slug>.bulb.md (a local file
                                   at that path re-pulls in place). Unlisted and
@@ -364,10 +367,11 @@ Options:
                               changed since your last sync (push)
   --timeout <sec>             Give up after this long; exit 2 — bounds only a
                               manual (foreground) bulb wait, default 1800 (wait)
-  --wait[=ms]                 For 'send': if no page is connected yet (e.g. the
-                              page is mid hot-reload), retry the push for up to
-                              ms (default 5000) before reporting. Use it right
-                              after an edit so the trigger rides the reload.
+  --wait[=ms]                 For 'send': bound the whole exchange — retry while
+                              no page is connected (a hot reload's gap), then
+                              hold for the handlers' replies (default 5000).
+                              Use it right after an edit, and for any send
+                              whose reply you read.
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Use a specific port (default: 3000)
   --open                      Force-open the external browser (default off
