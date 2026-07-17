@@ -368,7 +368,7 @@ export class ModelPill extends ComboboxPill<never> {
     // Default: the brand glyph stands in for the word (saving bar width). Active: the model name. External
     // override: a "custom route" label. The uncached cue is the amber border.
     const content = active ? label : ext ? 'custom route' : anthropicGlyph()
-    return div({ class: 'model-wrap' },
+    return div({ class: 'model-wrap pop-center' },
       button({
         class: ['pill', active || ext ? 'on' : 'glyph', uncached ? 'warn' : ''],
         title: tip,

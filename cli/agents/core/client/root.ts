@@ -204,19 +204,23 @@ export class Root extends Component implements IRoot {
     )
   }
 
-  // Bottom strip: a right-aligned cluster. Left→right: the prose-mode toggle and the git-diff pill
-  // (the two square glyph pills), then any injected pills
-  // (Claude's model switcher — its default state is a glyph the size of the prose toggle, so the two
-  // square glyph pills pair at the left; it's also the one pill whose width changes, glyph vs model
-  // name, so keeping it leftmost means an override toggle only shifts the monkey, leaving
-  // token/session/bulbs anchored to the right edge). Then the agent info (token count — which carries
-  // the working shimmer while the agent is mid-turn — and session picker), then the bulbs pill set
-  // apart on the right — it's about this project's bulbs.
+  // Bottom strip: a right-aligned cluster. Left→right: the git-diff pill, the prose-mode toggle,
+  // then any injected pills (Claude's model switcher — its default state is a glyph the size of the
+  // prose toggle, so the square glyph pills group at the left). Width-changers sit leftmost — growth
+  // in a right-aligned cluster pushes left — so the diff pill's viewing form (its widest state, and
+  // first so a doc toggle moves the least) shifts nothing, and the model switcher's glyph-vs-name
+  // toggle only shifts the glyph pills, leaving token/session/bulbs anchored to the right edge. Then
+  // the agent info (token count — which carries the working shimmer while the agent is mid-turn —
+  // and session picker), then the bulbs pill set apart on the right — it's about this project's bulbs.
+  // While a diff doc is open, the transcript-scoped pills (prose toggle, model switcher, session
+  // picker) hide via `doc-open` — CSS display, never unmounting, so the model pill's superSelect
+  // keeps its mount across doc open/close. Token pill stays: its working shimmer is the cue that
+  // the live diff may still be growing.
   statusbar() {
     return div({ class: 'statusbar' },
-      div({ class: 'statusbar-actions' },
-        this.prosePill.view(),
+      div({ class: ['statusbar-actions', this.diffPill.viewing ? 'doc-open' : ''] },
         this.diffPill.view(),
+        this.prosePill.view(),
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
         this.sessionPicker.view(),

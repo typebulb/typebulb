@@ -166,13 +166,35 @@ export class DiffPill extends ComboboxPill<never> {
     // Clean tree ⇒ no chip — but never yank it out from under an open menu/doc (a commit mid-view
     // zeroes the list; the surfaces close via their own affordances first).
     if (!this.repo || (n === 0 && !this.viewing && !this.open)) return div({ class: 'gitdiff-wrap' })
-    return div({ class: 'gitdiff-wrap' },
-      button({
-        class: ['pill', 'glyph', 'gitdiff-pill', this.viewing || this.open ? 'on' : ''],
+    return div({ class: 'gitdiff-wrap pop-center' },
+      this.viewing ? this.viewingPill() : button({
+        class: ['pill', 'glyph', 'gitdiff-pill', this.open ? 'on' : ''],
         title: `${n} changed file${n === 1 ? '' : 's'} — view a diff`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       }, icon('diff'), span({ class: 'gitdiff-count' }, String(n))),
       this.open ? this.popup() : null,
+    )
+  }
+
+  // The pill's viewing form: the doc's identity — status letter, path, ±counts — rides in the pill
+  // (the model pill precedent for a width-changing pill), with an × to close. The doc itself stays
+  // chrome-free, and the pill body still toggles the file menu, so switching files mid-review is
+  // one click. Inner spans stopPropagation: path opens the file, × closes the doc, body = menu.
+  viewingPill() {
+    const v = this.viewing!
+    const add = v.kinds.filter(k => k === 'add').length
+    const del = v.kinds.filter(k => k === 'del').length
+    return button({
+        class: ['pill', 'glyph', 'gitdiff-pill', 'viewing', 'on'],
+        title: `${this.files.length} changed file${this.files.length === 1 ? '' : 's'} — switch file`,
+        onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
+      },
+      span({ class: ['gitdiff-status', `s-${v.status}`] }, v.status),
+      span({ class: 'gitdiff-doc-path', title: `Open ${v.path}`,
+        onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(`${this.root}/${v.path}`) } }, v.path),
+      span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, `+${add}`), span({ class: 'count-del' }, `−${del}`)),
+      span({ class: 'gitdiff-close', title: 'Back to the conversation (Esc)',
+        onClick: (e: MouseEvent) => { e.stopPropagation(); this.closeDoc() } }, icon('close')),
     )
   }
 
@@ -215,22 +237,13 @@ export class DiffPill extends ComboboxPill<never> {
     )
   }
 
-  // The diff doc, rendered by Root in the transcript's place. Esc / ← returns to the conversation.
+  // The diff doc, rendered by Root in the transcript's place — chrome-free: its identity and close
+  // live in the statusbar pill (viewingPill). Esc returns to the conversation.
   docView() {
     const v = this.viewing!
-    const add = v.kinds.filter(k => k === 'add').length
-    const del = v.kinds.filter(k => k === 'del').length
     return div({ class: 'diff-doc', tabIndex: 0,
         onMounted: (el: Element) => (el as HTMLElement).focus(),
         onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); this.closeDoc() } } },
-      div({ class: 'diff-doc-head' },
-        span({ class: ['gitdiff-status', `s-${v.status}`] }, v.status),
-        span({ class: 'diff-doc-path', title: `Open ${v.path}`,
-          onClick: () => tb.server.openFile(`${this.root}/${v.path}`) }, v.path),
-        span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, `+${add}`), span({ class: 'count-del' }, `−${del}`)),
-        button({ class: 'bulb-log-back', title: 'Back to the conversation (Esc)',
-          onClick: (e: MouseEvent) => { e.stopPropagation(); this.closeDoc() } }, '← conversation'),
-      ),
       // A relative wrapper so the overview ruler overlays the pane instead of scrolling with it.
       div({ class: 'diff-doc-scroll' },
         div({ class: 'diff-doc-body' },

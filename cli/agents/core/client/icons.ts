@@ -31,6 +31,9 @@ const custom = {
   pull: '<svg viewBox="0 0 16 16" fill="none"><path d="M8 3 V11 M4.75 7.75 L8 11 L11.25 7.75" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 14 H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   // the sync verbs' transient success tick (bulbsPill syncCell) — same stroke register as the arrows.
   check: '<svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5 L6.5 12 L13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  // the viewing diff pill's close × — Material's close is a heavier fill glyph; this stays in the
+  // check/push stroke register.
+  close: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   fork: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 2 V8 H12 V2 M8 8 V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></svg>',
   // viewBox cropped to the ink (the stacked +/− is tall and narrow): a full 16-box in a square icon
   // shell reads as phantom side padding in the pill.

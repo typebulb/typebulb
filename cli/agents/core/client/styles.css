@@ -201,7 +201,8 @@ body {
   /* ONE geometry contract for both menus — sizing policy, padding, stacking. Stating it twice is
      how every sibling discrepancy of June '26 happened (row pitch, gaps, fixed-vs-grow). max-height,
      not height: a menu hugs its content and caps at the 12 rows above — a fixed height left a
-     1-bulb project with a row floating atop a 400px void. Per-menu rules keep only width. */
+     1-bulb project with a row floating atop a 400px void. Per-menu rules keep only width and
+     alignment (.pop-center / .pop-start below). */
   max-height: var(--menu-h);
   overflow: hidden;
   padding: .35rem;
@@ -217,6 +218,14 @@ body {
   border-radius: 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
+/* Popover alignment — which edge of the pill the menu aligns to (floating-UI's start/center/end
+   vocabulary; "end", right edges flush and growing left, is the unnamed default above). Tagged on
+   the pill's WRAP, not each popover root: a menu with several drilled-in views (the model pill's
+   list/info/diag/key modes) aligns once, and a future mode can't forget. The cluster's left-side
+   pills (diff, model) center — end-anchored, their menus run out of room growing left. No viewport
+   clamping: desktop-only; revisit if a narrow window ever clips one. */
+.pop-center > :is(.picker, .servers-pop) { right: auto; left: 50%; transform: translateX(-50%); }
+.pop-start > :is(.picker, .servers-pop) { right: auto; left: 0; }
 
 /* ---- Shimmer — the one "working" cue. One gradient, one keyframes, composed via class, never
    re-pasted (paste-drift is how each new shimmer kept landing at its own speed). `.shimmer` sweeps
@@ -985,16 +994,30 @@ a.server-port:hover { text-decoration: underline; }
 .gitdiff-counts { flex: none; display: inline-flex; gap: .35rem; font-size: .72rem; font-variant-numeric: tabular-nums; }
 .gitdiff-counts .count-add { color: var(--diff-add); }
 .gitdiff-counts .count-del { color: var(--err); }
+/* The pill's viewing form: the doc's identity in place of the icon+count — status letter, path,
+   ±counts, × (the doc itself is chrome-free). Width capped so a deep path can't crowd the cluster;
+   rtl clip keeps the path's tail — the filename — visible, full path in the title. */
+.pill.glyph.gitdiff-pill.viewing { max-width: min(30rem, 45vw); gap: .45rem; padding: 0 .35rem 0 .5rem; }
+/* Same text seating as the word pills (.pill's text-box note): .pill.glyph opts out of the trim
+   (right for pure glyphs, low for letters), and the viewing form keeps flex for the path's
+   ellipsis — so the trim rides each text item instead of the button. Flex items are block
+   containers, so text-box applies; the × icon stays untrimmed (symmetric, flex-exact). */
+.gitdiff-pill.viewing :is(.gitdiff-status, .gitdiff-doc-path, .gitdiff-counts span) { text-box: trim-both cap alphabetic; }
+.gitdiff-doc-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: var(--pill-font); color: var(--accent); }
+.gitdiff-doc-path:hover { text-decoration: underline; }
+.gitdiff-close { flex: none; display: inline-flex; padding: 0 .15rem; color: var(--muted); }
+.gitdiff-close .icon { width: 10px; height: 10px; }
+.gitdiff-close:hover { color: var(--accent); }
+/* Doc open ⇒ the transcript-scoped pills hide: prose toggle, model switcher, session picker all act
+   on the conversation, which isn't on screen (the token pill stays — its shimmer says the live diff
+   may still grow). display only, never unmount — the model pill's superSelect must keep its mount. */
+.statusbar-actions.doc-open :is(.prose-pill, .model-wrap, .sid-wrap) { display: none; }
 
 /* The diff doc — takes the transcript's slot in .chat (same flex geometry as .messages). Full-bleed
    like a code surface (no --content-max column: diff lines want the width); the body is the scroll
    surface, its bottom padding clearing the overlaid statusbar like .messages' does. The ± markers and
    red/green bands are the shared .udiff-* rules the tool cards use. */
 .diff-doc { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none; }
-.diff-doc-head { display: flex; align-items: center; gap: .6rem; padding: .5rem 1.75rem .4rem; font-size: .8rem; border-bottom: 1px solid var(--border); }
-.diff-doc-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); cursor: pointer; }
-.diff-doc-path:hover { text-decoration: underline; }
-.diff-doc-head .bulb-log-back { margin-left: auto; }
 .diff-doc-body {
   flex: 1; min-height: 0; overflow: auto;
   scrollbar-gutter: stable both-edges;
@@ -1012,8 +1035,8 @@ a.server-port:hover { text-decoration: underline; }
    gutter ± glyphs and at file scale by the ruler. Scoped: the tool-card hunks keep 24%, where the
    unhighlighted band is the only signal. Del a touch stronger than add — red-leaning tokens
    camouflage against red tint more than anything does against green. */
-.diff-doc-body .udiff-add { background: color-mix(in srgb, var(--diff-add) 10%, transparent); }
-.diff-doc-body .udiff-del { background: color-mix(in srgb, var(--err) 13%, transparent); }
+.diff-doc-body .udiff-add { background: color-mix(in srgb, var(--diff-add) 15%, transparent); }
+.diff-doc-body .udiff-del { background: color-mix(in srgb, var(--err) 18%, transparent); }
 /* The overview ruler — VS Code's scrollbar change-marks, owned since the native scrollbar can't be
    painted: a thin track beside the scrollbar (17px clears Windows Chromium's classic bar — plain px
    on a desktop-only surface, the menus' own stance), red/green marks at each change run's fractional
