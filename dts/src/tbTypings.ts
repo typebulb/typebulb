@@ -272,13 +272,13 @@ declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerPro
 `
 
 /** Typebulb globals available in Node-side code (server.ts).
- *  The AI subset only — server.ts is otherwise plain Node (its own `fs`, `console.log`), so the
- *  browser-only `tb` helpers are intentionally absent here and must match serverTb.ts's runtime surface. */
+ *  Only what carries a bulb-specific rule Node can't know — tb.ai, tb.fs, tb.dir (TB-FS.md);
+ *  the browser-only helpers are intentionally absent. Must match serverTb.ts's runtime surface. */
 export const serverTbTypings = `${aiChunkType}
 /**
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${ai}${dir}${models}${mode}
+declare const tb: {${ai}${fs}${dir}${models}${mode}
 };
 `

@@ -7,15 +7,16 @@
  * the same mechanism the browser shim uses. Only reached under trust (server.ts imports only when
  * trusted), so it inherits the same key access as the HTTP route.
  *
- * Surface is deliberately the AI subset — `tb.ai`, `tb.ai.stream`, `tb.models`, `tb.hasOwnKeys`,
- * `tb.mode`. server.ts is otherwise plain Node (own `fs`, own `console.log`), so the browser-only
- * helpers are not mirrored here.
+ * Surface rule (TB-FS.md): mirror what carries a bulb-specific rule Node can't know — `tb.ai`
+ * (.env provider resolution), `tb.fs` (relative→bulb's-folder resolution, creation on write),
+ * `tb.dir` — never what plain Node or the browser already owns (`console.log`, theme, proxy, copy).
  */
 
 import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
 import { consumeStreamText, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
+import { readFsBytes, writeFsFile } from './tbFs.js'
 
 interface TbAiOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -50,13 +51,33 @@ async function* tbAiStream(opts: TbAiOptions): AsyncGenerator<AiChunk> {
   yield* streamAiChunks(response, protocol)
 }
 
-/** Install the server-side `tb` global. Idempotent — safe to call on every (re)import under watch. */
-export function installServerTb(dir: string): void {
+/** Install the server-side `tb` global. Idempotent — safe to call on every (re)import under watch.
+ *  `containRoot` is tb.fs's project envelope, mirroring the web server's `basePath`. */
+export function installServerTb(dir: string, containRoot = process.cwd()): void {
   const ai = Object.assign(tbAi, { stream: tbAiStream })
+  // Same contract as the browser tb.fs, backed by the same core (tbFs.ts) — relative paths
+  // resolve against the bulb's folder, contained to the project, parents created on write.
+  // The non-UTF-8 read error matches the shim's wording, so bulb code sees one behavior.
+  const tbFs = {
+    read: async (p: string): Promise<string> => {
+      const buf = await readFsBytes(p, dir, containRoot)
+      try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+      } catch {
+        throw new Error(`File is not valid UTF-8 text: ${p} — use tb.fs.readBytes() for binary files.`)
+      }
+    },
+    readBytes: async (p: string): Promise<Uint8Array> => new Uint8Array(await readFsBytes(p, dir, containRoot)),
+    write: async (p: string, content: string | Uint8Array): Promise<boolean> => {
+      await writeFsFile(p, content, dir, containRoot)
+      return true
+    },
+  }
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     ai,
-    // The bulb's folder, absolute (TB-FS.md) — server.ts writes beside the bulb via
-    // path.join(tb.dir, …) instead of guessing cwd-relative prefixes. --dir scopes it.
+    fs: tbFs,
+    // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to spawned tools);
+    // tb.fs already resolves relative paths against it. --dir scopes both.
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     hasOwnKeys,

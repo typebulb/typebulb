@@ -81,7 +81,7 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 | `**data.txt**` | Read-only data your code processes via `tb.data(n)` (raw string) / `tb.json(n)` (parsed) — JSON, CSV, XML, YAML, or plain text. Multiple chunks are separated by **two blank lines**. |
 | `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()`: instructions + example output. `tb.insight()` reads the result. Requires `--trust` locally. |
 | `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
-| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Mostly plain Node — log with `console.log` — but `tb.ai`/`tb.ai.stream`/`tb.models` are callable here too (under `--trust`). **Local only.** |
+| `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Mostly plain Node — log with `console.log` — but `tb.fs` and `tb.ai`/`tb.ai.stream`/`tb.models` are callable here too (under `--trust`). **Local only.** |
 
 ### Example
 
@@ -251,7 +251,7 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 
 ### Emitting a server-only bulb
 
-A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no port, absent from the launcher. Under `--trust` its code can call `tb.ai`, `tb.ai.stream`, and `tb.models` against your `.env` keys.
+A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no port, absent from the launcher. Under `--trust` its code can use `tb.fs`, and call `tb.ai`, `tb.ai.stream`, and `tb.models` against your `.env` keys.
 
 - **Invoke one export with `typebulb call <file> <fn> [args…] --trust`.** It boots, runs that export, prints the `return` as JSON to stdout, and exits — a fresh boot per call. Log with `console.log` (no `tb.server.log` here); under `call` logs go to stderr, so the JSON result owns stdout.
 
@@ -273,7 +273,7 @@ The host owns a bulb's **width**; you own its **height**.
 
 - **`config.json` `description`** is the bulb's search-result blurb — what makes someone open it, kept short (it truncates past ~160 chars).
 - **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
-- **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder: `tb.fs.write('run.json')`, no path prefix.
+- **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Batch runs: scope with `--dir`, don't hand-roll plumbing** — `--dir batch2` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batch2/`; the bulb's code stays batch-unaware, and an unscoped run sees batches as ordinary subfolders.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — to drive the *browser* side, gate the work behind `tb.onMessage(m => { if (m === 'selftest') run() })`, trigger it with `typebulb send <file> selftest --wait`, and read `run()`'s `tb.server.log(...)` back the same way. The client-side counterpart to instrumenting `server.ts`.

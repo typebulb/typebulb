@@ -18,6 +18,7 @@ import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
+import { resolvePath, readFsBytes, writeFsFile } from './tbFs.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 
 // The CLI is a local tool: the server binds loopback only and is never reachable
@@ -230,8 +231,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.post('/__fs/read', async (c) => {
     try {
       const { path: reqPath } = await c.req.json<{ path: string }>()
-      const resolved = resolvePath(reqPath, fsRoot, basePath)
-      const data = await fs.readFile(resolved)
+      const data = await readFsBytes(reqPath, fsRoot, basePath)
       return new Response(new Uint8Array(data), {
         headers: { 'Content-Type': 'application/octet-stream' },
       })
@@ -247,12 +247,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     try {
       const reqPath = c.req.query('path')
       if (!reqPath) return c.json({ error: 'Missing path' }, 400)
-      const resolved = resolvePath(reqPath, fsRoot, basePath)
-
-      // Ensure parent directory exists
-      await fs.mkdir(path.dirname(resolved), { recursive: true })
-      await fs.writeFile(resolved, Buffer.from(await c.req.arrayBuffer()))
-
+      await writeFsFile(reqPath, new Uint8Array(await c.req.arrayBuffer()), fsRoot, basePath)
       return c.json({ success: true })
     } catch (e) {
       const message = errorMessage(e)
@@ -629,24 +624,6 @@ function contentTypeFor(filePath: string): string {
     case '.map': return 'application/json'
     default: return 'application/octet-stream'
   }
-}
-
-/** Resolve a path relative to `basePath`, contained to `containRoot` (default: basePath itself).
- *  The split serves the fs routes: resolution against the bulb's folder, containment
- *  against the project (TB-FS.md) — an ergonomics split, not a widened envelope. */
-function resolvePath(requestedPath: string, basePath: string, containRoot = basePath): string {
-  const resolved = path.resolve(basePath, requestedPath)
-
-  // Security: ensure resolved path is within base directory. The separator
-  // boundary stops a sibling-prefix escape (e.g. base `…/dist` vs `…/dist-evil`).
-  const normalizedBase = path.normalize(containRoot)
-  const normalizedResolved = path.normalize(resolved)
-
-  if (normalizedResolved !== normalizedBase && !normalizedResolved.startsWith(normalizedBase + path.sep)) {
-    throw new Error('Path traversal detected - access denied')
-  }
-
-  return resolved
 }
 
 /** Find an available port starting from the preferred port, probing loopback so

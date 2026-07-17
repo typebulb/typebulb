@@ -6,6 +6,7 @@ import * as net from 'net'
 import * as http from 'http'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
 import { bulbDataDir } from '../src/pipeline.js'
+import { installServerTb } from '../src/serve/serverTb.js'
 
 /** Reserve an ephemeral port, then release it for the server to bind. */
 function freePort(): Promise<number> {
@@ -213,5 +214,39 @@ describe('bulbDataDir (--dir scoping)', () => {
 
   it('scopes to a subfolder when given a --dir subpath', () => {
     expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'), 'batch2')).toBe(path.resolve('typebulbs', 'probe', 'batch2'))
+  })
+})
+
+// TB-FS.md "tb.fs in server.ts": the server-side mirror shares the routes' core (tbFs.ts) — same
+// resolution, same containment, same on-write parent creation, same non-UTF-8 read error.
+describe('server-side tb.fs (shared core)', () => {
+  let project: string
+  let bulbDir: string
+  const tb = () => (globalThis as { tb?: any }).tb
+
+  beforeAll(() => {
+    project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-servertb-'))
+    bulbDir = path.join(project, 'typebulbs', 'probe', 'batch2')   // a --dir-scoped folder, not yet created
+    installServerTb(bulbDir, project)
+  })
+
+  afterAll(() => {
+    fs.rmSync(project, { recursive: true, force: true })
+  })
+
+  it('write creates the parent chain on demand and read round-trips', async () => {
+    expect(await tb().fs.write('transcripts/x.md', 'héllo')).toBe(true)
+    expect(fs.readFileSync(path.join(bulbDir, 'transcripts', 'x.md'), 'utf8')).toBe('héllo')
+    expect(await tb().fs.read('transcripts/x.md')).toBe('héllo')
+  })
+
+  it('readBytes returns raw bytes; read rejects non-UTF-8 like the browser shim', async () => {
+    await tb().fs.write('blob.bin', allBytes)
+    expect(await tb().fs.readBytes('blob.bin')).toEqual(allBytes)
+    await expect(tb().fs.read('blob.bin')).rejects.toThrow(/readBytes/)
+  })
+
+  it('denies escaping the project — same containment as the /__fs routes', async () => {
+    await expect(tb().fs.read('../'.repeat(8) + 'etc/passwd')).rejects.toThrow(/traversal/)
   })
 })
