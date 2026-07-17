@@ -84,4 +84,6 @@ export interface TbModelDto {
   friendlyName: string
   /** Provider display name, e.g. "Anthropic" */
   providerName: string
+  /** True on the environment's configured default model (TB_AI_PROVIDER + TB_AI_MODEL); absent otherwise */
+  default?: boolean
 }

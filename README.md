@@ -183,7 +183,7 @@ everywhere.
 | `tb.dump(...)` | Log values (incl. lazy / device-backed tensors) to the browser console | |
 | `tb.copy(text)` | Copy text to the clipboard | |
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
-| `tb.models()` | List available AI models (for dynamic model selectors); returns `[]` when embedded (no host AI) | |
+| `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when embedded (no host AI) | |
 | `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | |
 | `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send` — inert when embedded (no sender) | |
 | `tb.fs.read/readBytes/write` | Read and write local files | yes |

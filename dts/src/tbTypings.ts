@@ -96,6 +96,8 @@ const models = `
     friendlyName: string;
     /** Provider display name, e.g. "Anthropic" */
     providerName: string;
+    /** True on the .env-configured default model (TB_AI_PROVIDER + TB_AI_MODEL); absent otherwise */
+    default?: boolean;
   }>>;
   /**
    * Whether the user's own AI keys back \`tb.ai\`. False means only the

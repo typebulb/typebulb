@@ -43,7 +43,14 @@ export function catalogFetchError(): string | null { return lastCatalogError }
  *  cache (or `[]`) on a failed catalog refresh; Ollama probing never throws. */
 export async function getFilteredModels(): Promise<TbModelDto[]> {
   const [ollama, catalog] = await Promise.all([getOllamaModels(), getCatalogModels()])
-  return [...filterByLocalKeys(catalog), ...ollama]
+  return markDefault([...filterByLocalKeys(catalog), ...ollama], process.env.TB_AI_PROVIDER, process.env.TB_AI_MODEL)
+}
+
+/** Flag the row matching the configured default pair — both must be set, same rule as
+ *  `formatModelsList`'s footer. Copies the match: catalog rows are cached, never mutated. */
+export function markDefault(models: TbModelDto[], defaultProvider?: string, defaultModel?: string): TbModelDto[] {
+  if (!defaultProvider || !defaultModel) return models
+  return models.map(m => m.provider === defaultProvider && m.name === defaultModel ? { ...m, default: true } : m)
 }
 
 /** One bounded catalog fetch. Returns the parsed models, or null on any failure — network, non-2xx,
