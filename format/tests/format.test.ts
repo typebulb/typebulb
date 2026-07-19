@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription,
+  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, assetsBase,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -245,6 +245,22 @@ describe('parseConfig', () => {
   })
   it('reads dependencies', () => {
     expect(parseConfig('{"dependencies":{"react":"^19"}}').dependencies).toEqual({ react: '^19' })
+  })
+})
+
+describe('assetsBase', () => {
+  it('absent/empty → undefined', () => {
+    expect(assetsBase(undefined)).toBeUndefined()
+    expect(assetsBase('{}')).toBeUndefined()
+    expect(assetsBase('{"assets":"  "}')).toBeUndefined()
+  })
+  it('normalizes to a trailing slash', () => {
+    expect(assetsBase('{"assets":"https://cdn.example.com/birds"}')).toBe('https://cdn.example.com/birds/')
+    expect(assetsBase('{"assets":"https://cdn.example.com/birds/"}')).toBe('https://cdn.example.com/birds/')
+  })
+  it('rejects non-http(s) and malformed values', () => {
+    expect(assetsBase('{"assets":"ftp://x/"}')).toBeUndefined()
+    expect(assetsBase('{"assets":"not a url"}')).toBeUndefined()
   })
 })
 

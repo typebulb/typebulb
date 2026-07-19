@@ -285,6 +285,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **`config.json` `description`** is the bulb's search-result blurb — what makes someone open it, kept short (it truncates past ~160 chars).
 - **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
+- **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
 - **Batch runs: scope with `--dir`, don't hand-roll plumbing** — `--dir batch2` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batch2/`; the bulb's code stays batch-unaware, and an unscoped run sees batches as ordinary subfolders.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
@@ -441,6 +442,7 @@ One bulb per command, between typebulb.com and its conventional local file — t
 
 - **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place). Unlisted and public bulbs need no login. A local file with real changes is refused; `--force` overwrites it.
 - **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.
+- **Assets**: a bulb's `assets/` folder publishes via your own host — set `"assets": "https://your-host/path/"` in `config.json`, and push verifies each file exists there (misses refuse; `--force` publishes anyway). Viewers are redirected to your host; a local file shadows its hosted copy, and display needs no CORS (only canvas/`fetch()` pixel-reading does).
 - **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm.
 - `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
 

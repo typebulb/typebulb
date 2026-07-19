@@ -11,6 +11,8 @@ export interface BulbConfig {
   description?: string
   inference?: InferenceConfig
   ts?: { jsxImportSource?: string }
+  /** Base URL where the bulb's `assets/` folder is hosted when published (TB-Assets.md). */
+  assets?: string
 }
 
 /** Parse the `config.json` block, returning {} for empty or malformed JSON. */
@@ -21,6 +23,18 @@ export function parseConfig(config: string): BulbConfig {
   } catch {
     return {}
   }
+}
+
+/** The `assets` base URL from a `config.json` string, normalized to a trailing slash —
+ *  undefined when absent or not an http(s) URL (callers report the malformed case). */
+export function assetsBase(config: string | null | undefined): string | undefined {
+  const raw = parseConfig(config ?? '').assets?.trim()
+  if (!raw) return undefined
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+  } catch { return undefined }
+  return raw.endsWith('/') ? raw : raw + '/'
 }
 
 const DEFAULT_DESCRIPTION = 'A Typebulb bulb.'

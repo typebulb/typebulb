@@ -54,22 +54,24 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-/** Raw GET: send `rawPath` verbatim (no URL/fetch normalization). */
-function rawGet(rawPath: string): Promise<{ status: number; body: string }> {
+/** Raw GET against `port`: send `rawPath` verbatim (no URL/fetch normalization). */
+function rawGetPort(port: number, rawPath: string): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { hostname: '127.0.0.1', port: server.port, path: rawPath, method: 'GET' },
+      { hostname: '127.0.0.1', port, path: rawPath, method: 'GET' },
       res => {
         let body = ''
         res.setEncoding('utf8')
         res.on('data', c => (body += c))
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }))
       },
     )
     req.on('error', reject)
     req.end()
   })
 }
+
+const rawGet = (rawPath: string) => rawGetPort(server.port, rawPath)
 
 describe('serveStaticDir control', () => {
   it('serves a real in-dir asset (proves the route is live)', async () => {
@@ -110,5 +112,80 @@ describe('serveStaticDir refuses traversal out of the served dir', () => {
   it('does not leak via a double-encoded escape', async () => {
     const r = await rawGet(`${MOUNT}%252e%252e%252fsecret.txt`)
     expect(r.body).not.toContain(SECRET)
+  })
+})
+
+/**
+ * The bulb-assets route (TB-Assets.md): same URL shape, different contract — media MIME types,
+ * no-cache, and a local miss 302s to the config's `assets` base (local shadows remote). A
+ * traversal must 404, never redirect (a redirect would leak the probe to the remote host).
+ * `dirs` is the --dir shadowing chain: the batch's assets/ precedes the authored one.
+ */
+describe('bulbAssets route', () => {
+  let srv: ServerInstance
+  let dir: string
+  let batchDir: string
+  let remoteBase: string | undefined
+
+  const get = (rawPath: string) => rawGetPort(srv.port, rawPath)
+
+  beforeAll(async () => {
+    dir = path.join(root, 'bulb-assets')
+    fs.mkdirSync(dir)
+    fs.writeFileSync(path.join(dir, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')
+    fs.writeFileSync(path.join(dir, 'shadowed.png'), 'local-bytes', 'utf8')
+    fs.writeFileSync(path.join(dir, 'authored-only.png'), 'authored-bytes', 'utf8')
+    batchDir = path.join(root, 'batch-assets')
+    fs.mkdirSync(batchDir)
+    fs.writeFileSync(path.join(batchDir, 'shadowed.png'), 'batch-bytes', 'utf8')
+    srv = await startServer({
+      getHtml: () => '<html></html>',
+      basePath: root,
+      port: await freePort(),
+      bulbAssets: { dirs: [batchDir, dir], getRemoteBase: () => remoteBase },
+    })
+  })
+
+  afterAll(() => srv?.close())
+
+  it('serves with the media MIME type and no-cache', async () => {
+    const r = await get('/assets/pic.svg')
+    expect(r.status).toBe(200)
+    expect(r.headers['content-type']).toBe('image/svg+xml')
+    expect(r.headers['cache-control']).toBe('no-cache')
+  })
+
+  it('miss without a base → 404', async () => {
+    remoteBase = undefined
+    expect((await get('/assets/absent.png')).status).toBe(404)
+  })
+
+  it('miss with a base → 302 to base + path', async () => {
+    remoteBase = 'https://cdn.example.com/birds/'
+    const r = await get('/assets/sub/absent.png')
+    expect(r.status).toBe(302)
+    expect(r.headers['location']).toBe('https://cdn.example.com/birds/sub/absent.png')
+  })
+
+  it('the first dir in the chain (batch) shadows the second (authored)', async () => {
+    const r = await get('/assets/shadowed.png')
+    expect(r.status).toBe(200)
+    expect(r.body).toBe('batch-bytes')
+  })
+
+  it('a batch miss falls through to the authored dir, shadowing the remote', async () => {
+    remoteBase = 'https://cdn.example.com/birds/'
+    const r = await get('/assets/authored-only.png')
+    expect(r.status).toBe(200)
+    expect(r.body).toBe('authored-bytes')
+  })
+
+  it('traversal 404s even when a base is set — never redirected', async () => {
+    remoteBase = 'https://cdn.example.com/birds/'
+    for (const p of ['/assets/../secret.txt', '/assets/..%2fsecret.txt', '/assets/%2e%2e%2fsecret.txt']) {
+      const r = await get(p)
+      expect(r.status, p).toBe(404)
+      expect(r.body).not.toContain(SECRET)
+    }
   })
 })

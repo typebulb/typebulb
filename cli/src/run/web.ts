@@ -4,7 +4,7 @@ import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile, serverModulePath, bulbDataDir } from '../pipeline.js'
-import { replaceBulbBlock, CHUNK_SEPARATOR } from 'typebulb/format'
+import { replaceBulbBlock, CHUNK_SEPARATOR, parseConfig, assetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
@@ -56,6 +56,17 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, args.dir)
   reportEnv(envResult, bulbPath, bulb.server)
 
+  // Bulb assets (TB-Assets.md): /assets/ serves the bulb's own folder's assets/ subfolder
+  // (birds.bulb.md → birds/assets/). Under --dir the batch's assets/ shadows the authored one —
+  // so a batch run's generated `tb.fs.write('assets/x')` serves, and authored assets still show
+  // through where the batch has no override (batch shadows authored shadows remote).
+  const assetsDirs = [
+    ...(args.dir ? [path.join(bulbDataDir(bulbPath, args.dir), 'assets')] : []),
+    path.join(bulbDataDir(bulbPath), 'assets'),
+  ]
+  const cfg = parseConfig(bulb.config)
+  if (cfg.assets && !assetsBase(bulb.config)) console.warn(`  config.json "assets" is not a valid http(s) URL — ignored: ${cfg.assets}`)
+
   // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
   // bulb for privileged tb.* usage so a host (and the terminal message below) can offer --trust
   // BEFORE the bulb runs and trips the gate — sparing the failed-first-run that ~20% of bulbs
@@ -90,6 +101,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         await fs.writeFile(bulbPath, text)
       },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
+      // getRemoteBase reads the live `bulb` cell so a hot reload's config edit applies per request.
+      bulbAssets: { dirs: assetsDirs, getRemoteBase: () => assetsBase(bulb.config) },
       trusted: args.trust,
       trustHint,
     }),
@@ -155,6 +168,22 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         },
       })
     }
+
+          // Watch each existing assets/ dir in the chain — an asset save reloads the browser, no
+          // recompile (TB-Assets.md). Only dirs that exist at launch; created later needs a relaunch.
+          // Registered straight onto onCleanup (it's a loop; the named-var pattern above is for singles).
+          for (const d of assetsDirs) {
+            if (await fs.stat(d).then(s => s.isDirectory()).catch(() => false)) {
+              onCleanup(watchPath({
+                target: d,
+                events: 'all',
+                onChange: () => {
+                  console.log('Assets changed. Browser reloading...\n')
+                  reloadEmitter.emit('reload')
+                },
+              }))
+            }
+          }
   }
 
   // Register teardown with the shared cleanup shell (in order: stop the watchers, then remove the

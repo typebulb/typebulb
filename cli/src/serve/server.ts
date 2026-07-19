@@ -96,6 +96,13 @@ export interface ServerOptions {
    *  `--replace` mechanism — just static bytes from disk, content-typed and
    *  traversal-guarded. The global COOP/COEP middleware wraps these too. */
   staticAssets?: { mount: string; dir: string }
+  /** The bulb's `assets/` folder(s) (TB-Assets.md), served read-only at `/assets/` in every
+   *  paged tier — NOT trust-gated: its exposure class equals the `/` route's compiled source.
+   *  `dirs` is the ordered shadowing chain — under `--dir` the batch's `assets/` precedes the
+   *  authored one (batch shadows authored shadows remote). `getRemoteBase` re-reads the config's
+   *  `assets` base per request (hot reload can change it); a miss in every dir 302s there when
+   *  set, else 404s. */
+  bulbAssets?: { dirs: string[]; getRemoteBase: () => string | undefined }
 }
 
 export interface ServerInstance {
@@ -105,7 +112,7 @@ export interface ServerInstance {
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets } = options
+  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets, bulbAssets } = options
   // Relative /__fs paths resolve here (the bulb's folder — TB-FS.md); containment stays basePath.
   const fsRoot = fsBase ?? basePath
 
@@ -527,6 +534,32 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // bytes from disk under `mount`, independent of `--replace`.
   if (staticAssets) serveStaticDir(app, staticAssets.mount, staticAssets.dir)
 
+  // Bulb assets (TB-Assets.md): `<img src="assets/x.png">` served from the bulb's own folder,
+  // first dir in the chain wins. `no-cache` so hot iteration sees fresh bytes; remote caching
+  // belongs to the author's host via the 302 fallback.
+  if (bulbAssets) {
+    app.get('/assets/*', async (c) => {
+      const { pathname } = new URL(c.req.url)
+      const rawRel = pathname.slice('/assets/'.length)
+      for (const dir of bulbAssets.dirs) {
+        let abs: string
+        try {
+          abs = resolvePath(decodeURIComponent(rawRel), dir)
+        } catch {
+          return c.text('Not Found', 404)   // traversal — never redirected, never falls through
+        }
+        try {
+          const body = await fs.readFile(abs)
+          return new Response(body as unknown as BodyInit, {
+            headers: { 'Content-Type': contentTypeFor(abs), 'Cache-Control': 'no-cache' },
+          })
+        } catch { /* next dir in the chain */ }
+      }
+      const base = bulbAssets.getRemoteBase()
+      return base ? c.redirect(base + rawRel, 302) : c.text('Not Found', 404)
+    })
+  }
+
   async function proxyToUrl(c: Context, targetUrl: string): Promise<Response> {
     let parsed: URL
     try { parsed = new URL(targetUrl) } catch { return c.text('Invalid URL', 400) }
@@ -655,8 +688,9 @@ function serveStaticDir(app: Hono, mount: string, dir: string): void {
 }
 
 /**
- * Content type for a file served from the local-override route. `.wasm` must be
- * `application/wasm` for `WebAssembly.instantiateStreaming`.
+ * Content type for a file served from the static routes. `.wasm` must be
+ * `application/wasm` for `WebAssembly.instantiateStreaming`; `.svg` must be
+ * `image/svg+xml` or an `<img>` won't render it (no sniffing for SVG).
  */
 function contentTypeFor(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
@@ -665,6 +699,24 @@ function contentTypeFor(filePath: string): string {
     case '.wasm': return 'application/wasm'
     case '.json':
     case '.map': return 'application/json'
+    case '.svg': return 'image/svg+xml'
+    case '.png': return 'image/png'
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg'
+    case '.gif': return 'image/gif'
+    case '.webp': return 'image/webp'
+    case '.avif': return 'image/avif'
+    case '.ico': return 'image/x-icon'
+    case '.mp3': return 'audio/mpeg'
+    case '.wav': return 'audio/wav'
+    case '.ogg': return 'audio/ogg'
+    case '.m4a': return 'audio/mp4'
+    case '.mp4': return 'video/mp4'
+    case '.webm': return 'video/webm'
+    case '.woff2': return 'font/woff2'
+    case '.ttf': return 'font/ttf'
+    case '.css': return 'text/css'
+    case '.txt': return 'text/plain; charset=utf-8'
     default: return 'application/octet-stream'
   }
 }
