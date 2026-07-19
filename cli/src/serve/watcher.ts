@@ -35,6 +35,11 @@ export function watchPath(options: WatcherOptions): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined
   const watcher = chokidar.watch(target, WATCH_OPTIONS)
 
+  // A watcher error must never crash the server: an unhandled 'error' on an EventEmitter
+  // throws out of emit (observed: Windows EBUSY when a watched assets/ file is still
+  // mid-download). Log and keep watching — chokidar continues for the rest of the tree.
+  watcher.on('error', err => console.warn(`watch: ${err instanceof Error ? err.message : err} — continuing`))
+
   const fire = () => {
     if (timer) clearTimeout(timer)
     timer = setTimeout(onChange, debounceMs)
