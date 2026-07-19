@@ -13,7 +13,8 @@ const execFileAsync = promisify(execFile)
 // Cap what ships to the browser — -U999999 on a big file is unbounded.
 const MAX_DIFF_CHARS = 2_000_000
 
-async function git(args: string[], cwd: string): Promise<string> {
+// Exported for the engine's other read-only git spawns (composerFiles' ls-files).
+export async function git(args: string[], cwd: string): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 })
   return stdout
 }

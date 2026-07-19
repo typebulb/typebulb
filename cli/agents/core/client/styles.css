@@ -383,7 +383,8 @@ body {
 .composer-queue { padding: .15rem 0 0; }
 .queue-row { font-size: .78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .queue-tag { color: var(--accent); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; margin-right: .5rem; }
-/* The @-file-mention popup, anchored above the composer. */
+/* The @-file-mention popup, anchored above the composer. Tall enough for the pickers' full row
+   caps (10 files / 12 commands); the vh guard + arrow-key scroll-into-view cover short windows. */
 .at-popup {
   position: absolute;
   bottom: calc(100% + .25rem);
@@ -391,7 +392,7 @@ body {
   right: 0;
   max-width: 600px;
   margin-inline: auto;
-  max-height: 280px;
+  max-height: min(24rem, 50vh);
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);

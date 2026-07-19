@@ -515,6 +515,7 @@ export class Composer extends Component {
       e.preventDefault()
       setIdx(Math.max(0, Math.min(idx + (e.key === 'ArrowDown' ? 1 : -1), count - 1)))
       this.update()
+      this.#scrollActive('.at-popup')
       return true
     }
     if (e.key === 'Escape') {
@@ -529,6 +530,11 @@ export class Composer extends Component {
       return true
     }
     return false
+  }
+
+  // After the pending rAF patch commits: keep `scope`'s active row visible in an overflowing list.
+  #scrollActive(scope: string) {
+    setTimeout(() => document.querySelector(`${scope} .at-row.active`)?.scrollIntoView({ block: 'nearest' }), 0)
   }
 
   view() {
@@ -570,7 +576,9 @@ export class Composer extends Component {
             onKeyDown: (e: KeyboardEvent) => this.#onKey(e),
             // keyup + click fire after the value/caret are committed — the @-context detector's
             // moment; onInput is consumed by domeleon's two-way binding.
-            onKeyUp: (e: KeyboardEvent) => this.onComposerInput(e.target as HTMLTextAreaElement),
+            // Escape is skipped: the caret still sits in the token, so re-detecting would reopen
+            // the popup #popupNav just closed.
+            onKeyUp: (e: KeyboardEvent) => { if (e.key !== 'Escape') this.onComposerInput(e.target as HTMLTextAreaElement) },
             onClick: (e: MouseEvent) => this.onComposerInput(e.target as HTMLTextAreaElement),
             onPaste: (e: ClipboardEvent) => this.onPaste(e),
             ...disabled,
@@ -750,7 +758,7 @@ export class Composer extends Component {
       e.preventDefault()
       this.dlgIndex = Math.max(0, Math.min(active + (e.key === 'ArrowDown' ? 1 : -1), rows.length - 1))
       this.update()
-      setTimeout(() => document.querySelector('.dlg-opts .at-row.active')?.scrollIntoView({ block: 'nearest' }), 0)
+      this.#scrollActive('.dlg-opts')
       return
     }
     if (e.key === 'Enter') {

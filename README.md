@@ -257,6 +257,7 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 
 - **Structured selftest** — a handler that returns `{ count, verdict }` beats one that logs prose: `typebulb send <file> selftest --wait` prints the object as JSON, and you assert on fields instead of parsing `logs`. At most one handler, in one page, may return a value; a slow check needs `--wait=<ms>` above the 5s default.
 - **Rendered truth** — `typebulb send <file> tb:snapshot` prints the page's accessibility outline (roles, names, visible text) without disturbing its state. Use it when logs say ok but the screen might not, and as the first probe on a live page in a state you can't reproduce — a save would hot-reload and destroy it. (`tb:` messages are answered by the runtime, never your handlers, and imply `--wait`.)
+- **Poking state** — to tweak a value in a live page (a save hot-reloads and destroys its state), author a set-handler up front: a `tb.onMessage` branch that takes a data payload (JSON arrives parsed), applies it to your state — committing the change if your framework needs an explicit step — and returns the new state: `typebulb send <file> '{"set":"speed","value":2}' --wait` prints it. In React, register it in an effect so it closes over the setters (the returned unsubscribe is the cleanup). Adding the handler later is itself the edit that destroys the state.
 - **A page must be open** — `send` reports "no page connected" until someone opens the printed link; the CLI runs no browser of its own.
 
 ### Emitting a server-only bulb

@@ -1,6 +1,7 @@
 import { statSync, openSync, readSync, closeSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { execFile } from 'child_process'
 import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter, type AgentDriver } from '../../core/server/adapter.js'
@@ -55,6 +56,21 @@ interface PiEntry {
 
 const PI_SESSIONS = join(homedir(), '.pi', 'agent', 'sessions')
 
+// The composer's non-git @-corpus walker (TB-Agent-Composer.md): the same fd pi's own picker spawns
+// (pi-tui CombinedAutocompleteProvider), with pi's flags minus dirs and query pushdown. Resolution
+// mirrors pi's ensureTool: system fd/fdfind on PATH, else the binary pi downloads to ~/.pi/agent/bin.
+async function fdList(cwd: string): Promise<string[] | null> {
+  const managed = join(homedir(), '.pi', 'agent', 'bin', process.platform === 'win32' ? 'fd.exe' : 'fd')
+  for (const bin of ['fd', 'fdfind', ...(existsSync(managed) ? [managed] : [])]) {
+    const out = await new Promise<string | null>(resolve => {
+      execFile(bin, ['--base-directory', cwd, '--type', 'f', '--follow', '--hidden', '--exclude', '.git'],
+        { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout))
+    })
+    if (out !== null) return out.split('\n').filter(Boolean).map(f => f.replace(/\\/g, '/'))
+  }
+  return null
+}
+
 // pi's exact session-dir mapping (session-manager.ts): strip a leading path separator, replace every
 // `/ \ :` with `-`, wrap in `--…--`. `C:\Code\typebulb` → `--C--Code-typebulb--`.
 function piDirName(cwd: string): string {
@@ -98,6 +114,9 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
     if (trust) driver.notice(trust, 'warning')
     return driver
   }
+
+  // The @ corpus for a non-git cwd — fd, so the list matches terminal pi's own picker.
+  walkFiles(cwd: string) { return fdList(cwd) }
 
   sessionsDir(cwd: string) { return join(PI_SESSIONS, piDirName(cwd)) }
 

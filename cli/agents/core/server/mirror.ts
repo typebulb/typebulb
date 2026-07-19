@@ -1,10 +1,9 @@
 import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watchFile, unwatchFile, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmSync } from 'fs'
 import { stat } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
-import { execFile } from 'child_process'
 import { errorMessage, projectCwd } from './context.js'
 import { EmbedStatusDedup } from './embedStatusLog.js'
-import { repoRoot } from './git.js'
+import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
@@ -677,15 +676,15 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return { ok: true }
   }
 
-  // Project file list for the composer's @-mention picker: tracked + untracked (--others, so files
-  // the agent just created appear), gitignore respected (--exclude-standard); mtime-descending so
-  // the files just touched float to the top. A non-git cwd (or no git) returns [] — "No matches".
+  // Project file list for the composer's @-mention picker, mtime-descending so the files just
+  // touched float to the top. Fast path: git ls-files, tracked + untracked (--others, so files the
+  // agent just created appear), gitignore respected (--exclude-standard). A non-git cwd falls back
+  // to the adapter's own walker (pi: fd — the same binary its picker spawns); [] when that's absent.
   async function composerFiles(): Promise<string[]> {
     if (!adapter.createDriver) return []
-    const stdout = await new Promise<string>(resolve => {
-      execFile('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: state.cwd, maxBuffer: 64 * 1024 * 1024 }, (err, out) => resolve(err ? '' : out))
-    })
-    const withMtime = await Promise.all(stdout.split('\n').filter(Boolean).map(async f => {
+    const gitOut = await git(['ls-files', '--cached', '--others', '--exclude-standard'], state.cwd).catch(() => null)
+    const files = gitOut !== null ? gitOut.split('\n').filter(Boolean) : (await adapter.walkFiles?.(state.cwd)) ?? []
+    const withMtime = await Promise.all(files.map(async f => {
       try { return { f, m: (await stat(join(state.cwd, f))).mtimeMs } } catch { return { f, m: 0 } }
     }))
     return withMtime.sort((a, b) => b.m - a.m).map(x => x.f)

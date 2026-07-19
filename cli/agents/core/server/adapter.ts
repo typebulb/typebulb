@@ -179,4 +179,11 @@ export abstract class AgentAdapter<E = unknown> {
    * and not viewed (TB-Agent-Composer.md C2); the adapter only supplies the transport.
    */
   createDriver?(cwd: string, sessionFile: string | undefined): AgentDriver
+
+  /**
+   * List `cwd`'s files for the composer's @-mention corpus when it isn't a git repo — the way this
+   * harness's own picker would (pi: fd). Relative forward-slash paths, unsorted (the engine owns
+   * the mtime ranking); null ⇒ walker unavailable. Optional, composer-only like `createDriver`.
+   */
+  walkFiles?(cwd: string): Promise<string[] | null>
 }
