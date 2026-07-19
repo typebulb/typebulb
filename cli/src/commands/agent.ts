@@ -86,7 +86,7 @@ async function launchAndReport(version: string, name: string): Promise<void> {
 
   const body = viewer
     ? [
-        `  Agent mirror is live💡`,
+        `  Agent mirror (${name}) is live💡`,
         `    ${lit('●')} ${litLink(viewer.url)}`,
         `      Embedded bulbs render live here.`,
         `  Agents:`,

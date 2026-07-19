@@ -96,7 +96,7 @@ export interface IRoot {
   // The composer driver's in-flight assistant message (poll's composer.draft) — rendered by
   // MessageList as one ephemeral bubble after the transcript, replaced by the durable row when the
   // entry lands on disk (TB-Agent-Composer.md, Invariant C1). null when idle or no composer.
-  draft: { text: string; thinking: string } | null
+  draft: { text: string; thinking: string; tool?: string } | null
   // The just-sent user prompt awaiting its durable row (poll composer.echo) — rendered as an
   // ephemeral user bubble above the draft; null when idle or landed.
   echo: string | null

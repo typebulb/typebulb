@@ -30,7 +30,7 @@ export interface AgentDriver {
   readonly streaming: boolean
   /** The partial assistant message accumulated from stream deltas; null when there's nothing to
    *  show. Retained after a message completes until the engine sees its durable row (below). */
-  readonly draft: { text: string; thinking: string } | null
+  readonly draft: { text: string; thinking: string; tool?: string } | null
   /** The just-sent user prompt, held until its durable row lands (pi flushes entries at
    *  message_end, so the assistant draft would otherwise render before the prompt that caused it).
    *  Ephemeral, rides the poll like `draft`. */

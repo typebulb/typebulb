@@ -77,7 +77,7 @@ export class Composer extends Component {
     // field-wise change detection belongs here with the rest of the slice.
     const p = this.parent
     const draft = c.draft ?? null
-    if (draft?.text !== p.draft?.text || draft?.thinking !== p.draft?.thinking) { p.draft = draft; changed = true }
+    if (draft?.text !== p.draft?.text || draft?.thinking !== p.draft?.thinking || draft?.tool !== p.draft?.tool) { p.draft = draft; changed = true }
     const echo = c.echo ?? null
     if (echo !== p.echo) { p.echo = echo; changed = true }
     const stats = c.stats ?? null

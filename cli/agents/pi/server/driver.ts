@@ -13,8 +13,8 @@ import type { ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatu
 
 interface RpcResponse { type: 'response'; id?: string; success?: boolean; error?: string; data?: Record<string, unknown> }
 
-// The slice of pi's AgentMessage the draft needs: content blocks carrying text / thinking.
-interface PiPartialMessage { role?: string; content?: { type?: string; text?: string; thinking?: string }[] }
+// The slice of pi's AgentMessage the draft needs: content blocks carrying text / thinking / a toolCall's name.
+interface PiPartialMessage { role?: string; content?: { type?: string; text?: string; thinking?: string; name?: string }[] }
 
 // A queued blocking extension dialog. `until` is its expiry; `ownTimeout` says pi carried its own
 // `timeout` (pi auto-resolves those itself — expiry drops silently) vs our fallback clock (expiry
@@ -68,7 +68,7 @@ export class PiRpcDriver {
   #streaming = false
   #optimisticUntil = 0                       // send accepted, agent_start not yet seen
   #open = false                              // an assistant message is mid-accumulation
-  #draft: { text: string; thinking: string } | null = null
+  #draft: { text: string; thinking: string; tool?: string } | null = null
   #echo: string | null = null                // the just-sent idle prompt, held until its durable row lands
   // Ambient status (TB-Agent-Composer-Toolkit.md Piece 2): an agent operation in progress (retry,
   // compaction — wins priority), a transient notice, and keyed extension setStatus entries.
@@ -354,9 +354,12 @@ export class PiRpcDriver {
         // Rebuild from the partial message (not the deltas): replacement can't drift or double-append.
         const m = e.message as PiPartialMessage | undefined
         const blocks = Array.isArray(m?.content) ? m.content : []
+        // The streaming tail is always the last block; a toolCall there is mid-argument-generation.
+        const last = blocks[blocks.length - 1]
         this.#draft = {
           text: blocks.filter(b => b?.type === 'text').map(b => b.text ?? '').join(''),
           thinking: blocks.filter(b => b?.type === 'thinking').map(b => b.thinking ?? '').join('\n'),
+          tool: last?.type === 'toolCall' ? last.name : undefined,
         }
         return
       }

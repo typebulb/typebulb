@@ -407,13 +407,20 @@ export class MessageList extends Component {
 
   // Keyed by content length so growth remounts the node and re-renders the markdown — onMounted
   // fires only on mount, and a draft is the one place bubble text changes after creation. An empty
-  // draft (message opened, no text yet) shows a shimmering ellipsis instead of a blank band.
-  #draftBubble(draft: { text: string; thinking: string }, turnIdx: number) {
+  // draft names its live tail (the token pill's rule — the cue rides the thing being generated):
+  // the thinking summary shimmers while thinking streams, a streaming toolCall shows its name, and
+  // 'working…' covers the nameless gaps (first-token latency, prose mode's hidden thinking/tools).
+  #draftBubble(draft: { text: string; thinking: string; tool?: string }, turnIdx: number) {
     const key = `draft-${draft.text.length}-${draft.thinking.length}`
     if (draft.text.length < this.#draftLen) this.#draftScroll.clear()
     this.#draftLen = draft.text.length
+    const showThinking = !this.parent.prose && !!draft.thinking
+    const tool = this.parent.prose ? undefined : draft.tool   // prose mode shows no tool chrome
+    const liveThinking = !draft.text.trim() && !tool          // thinking is still the streaming tail
+    const wait = tool ? `${toolDisplayName(tool)}…`
+      : draft.text.trim() || showThinking ? null : 'working…'
     return div({ class: ['bubble', 'assistant', 'draft', turnClassFor(turnIdx)], key },
-      !this.parent.prose && draft.thinking
+      showThinking
         ? details({
             class: 'thinking',
             open: this.#draftThinkingOpen,
@@ -421,10 +428,12 @@ export class MessageList extends Component {
             // time the per-tick remount re-adds `open` (measured: one per remount, not per click), so
             // any scroll write in this handler yanks the reader to the bottom on every delta.
             onToggle: (e: Event) => { this.#draftThinkingOpen = (e.currentTarget as HTMLDetailsElement).open },
-          }, summary('thinking'), this.#draftThinkingPre(draft.thinking)) : null,
-      draft.text.trim()
-        ? this.#draftBody(key, draft.text)
-        : div({ class: 'draft-wait shimmer-text' }, '…'),
+          }, summary(liveThinking
+               ? span({ class: 'shimmer-text shimmer-slow' }, 'thinking…')
+               : 'thinking'),
+             this.#draftThinkingPre(draft.thinking)) : null,
+      draft.text.trim() ? this.#draftBody(key, draft.text) : null,
+      wait ? div({ class: 'draft-wait shimmer-text shimmer-slow' }, wait) : null,
     )
   }
 

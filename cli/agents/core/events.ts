@@ -59,7 +59,8 @@ export interface ComposerDialogRequest {
  *  deliberately. */
 export interface ComposerPoll {
   streaming: boolean
-  draft: { text: string; thinking: string } | null
+  // `tool` names a streaming toolCall block — the live tail the text/thinking fields can't show.
+  draft: { text: string; thinking: string; tool?: string } | null
   // The just-sent user prompt awaiting its durable row — an ephemeral user bubble above the draft
   // (pi flushes the user entry at message_end, seconds into a long turn).
   echo: string | null
