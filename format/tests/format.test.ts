@@ -3,6 +3,7 @@ import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
   validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, assetsBase,
+  resolvedAssetsBase,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -261,6 +262,19 @@ describe('assetsBase', () => {
   it('rejects non-http(s) and malformed values', () => {
     expect(assetsBase('{"assets":"ftp://x/"}')).toBeUndefined()
     expect(assetsBase('{"assets":"not a url"}')).toBeUndefined()
+  })
+})
+
+describe('resolvedAssetsBase', () => {
+  it('the config key wins (self-host)', () => {
+    expect(resolvedAssetsBase('{"assets":"https://cdn.example.com/birds"}', 'ben', 'birds')).toBe('https://cdn.example.com/birds/')
+  })
+  it('no key + identity → the hosted default', () => {
+    expect(resolvedAssetsBase('{}', 'ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
+  })
+  it('no key + no identity → undefined', () => {
+    expect(resolvedAssetsBase('{}')).toBeUndefined()
+    expect(resolvedAssetsBase('{}', '', '')).toBeUndefined()
   })
 })
 

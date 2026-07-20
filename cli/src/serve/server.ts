@@ -692,7 +692,7 @@ function serveStaticDir(app: Hono, mount: string, dir: string): void {
  * `application/wasm` for `WebAssembly.instantiateStreaming`; `.svg` must be
  * `image/svg+xml` or an `<img>` won't render it (no sniffing for SVG).
  */
-function contentTypeFor(filePath: string): string {
+export function contentTypeFor(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
     case '.js':
     case '.mjs': return 'text/javascript'

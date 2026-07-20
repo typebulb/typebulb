@@ -37,6 +37,19 @@ export function assetsBase(config: string | null | undefined): string | undefine
   return raw.endsWith('/') ? raw : raw + '/'
 }
 
+/** Where typebulb.com-hosted bulb assets serve from (TB-Assets-Push.md Invariant 1). */
+export const HOSTED_ASSETS_ORIGIN = 'https://assets.typebulb.com'
+
+/** The hosted-assets base derived from a bulb's identity — the default when `config.json`
+ *  has no `assets` key (TB-Assets-Push.md Invariant 2: derived, never stored). */
+export const hostedAssetsBase = (userSlug: string, slug: string) =>
+  `${HOSTED_ASSETS_ORIGIN}/u/${encodeURIComponent(userSlug)}/${encodeURIComponent(slug)}/`
+
+/** The base a bulb's `assets/` resolves against remotely: the config key (self-host), else the
+ *  hosted default when the bulb has an identity — else none (an identity-less bulb can't push). */
+export const resolvedAssetsBase = (config: string | null | undefined, userSlug?: string, slug?: string) =>
+  assetsBase(config) ?? (userSlug && slug ? hostedAssetsBase(userSlug, slug) : undefined)
+
 const DEFAULT_DESCRIPTION = 'A Typebulb bulb.'
 
 /** Strip inline markdown (links, emphasis, code, headings) for plain-text contexts like meta descriptions. */

@@ -16,6 +16,14 @@ const DEFAULT_ORIGIN = 'https://typebulb.com'
 /** The conventional local home of a remote bulb — the path IS the remote identity (Invariant 4). */
 export const bulbRelPath = (userSlug: string, slug: string) => path.join('typebulbs', 'u', userSlug, `${slug}.bulb.md`)
 
+/** A conventional path's remote identity (typebulbs/u/<user>/<slug>.bulb.md), undefined otherwise —
+ *  what derives the hosted-assets base (TB-Assets-Push.md Invariant 2) and anchors pull/push. */
+export function conventionalIdentity(absPath: string): { userSlug: string; slug: string } | undefined {
+  const [folder, uDir, userSlug, file] = absPath.split(path.sep).slice(-4)
+  if (folder !== 'typebulbs' || uDir !== 'u' || !userSlug || !file?.endsWith('.bulb.md')) return undefined
+  return { userSlug, slug: file.slice(0, -'.bulb.md'.length) }
+}
+
 /** The one wire URL both directions speak: the public raw-markdown shape (TB-Push-Pull.md Invariant 2). */
 export const bulbMdUrl = (t: PullTarget) =>
   `${t.origin}/u/${encodeURIComponent(t.userSlug)}/${encodeURIComponent(t.slug)}.md`
@@ -63,14 +71,14 @@ export function parsePullTarget(arg: string, cwd: string, defaultOrigin: string)
   }
 
   const dest = path.resolve(cwd, arg)
-  const [folder, uDir, userSlug, file] = dest.split(path.sep).slice(-4)
-  if (folder !== 'typebulbs' || uDir !== 'u' || !userSlug || !file?.endsWith('.bulb.md')) {
+  const identity = conventionalIdentity(dest)
+  if (!identity) {
     throw new Error(
       `Not a conventional bulb path: ${arg}\n` +
       `A pull target must be a bulb URL, or a local file at typebulbs/u/<user>/<slug>.bulb.md — the path is its remote identity.`
     )
   }
-  return { origin: defaultOrigin, userSlug, slug: file.slice(0, -'.bulb.md'.length), dest }
+  return { origin: defaultOrigin, ...identity, dest }
 }
 
 export type PullOutcome =

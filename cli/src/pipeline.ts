@@ -25,6 +25,9 @@ export function bulbDataDir(bulbPath: string, sub?: string): string {
   return sub ? path.join(root, sub) : root
 }
 
+/** The bulb's served/pushed assets folder — `assets/` inside its data dir (TB-Assets.md Invariant 1). */
+export const bulbAssetsDir = (bulbPath: string, sub?: string) => path.join(bulbDataDir(bulbPath, sub), 'assets')
+
 /**
  * Read a .bulb.md file from disk and pre-parse the bits the rest of the CLI
  * always needs together: the structured `LocalBulb` (subscripts plus the
