@@ -53,3 +53,25 @@ export function basename(p: string): string {
 export function bulbBasename(p: string): string {
   return basename(p).replace(/\.bulb\.md$/, '')
 }
+
+// A pasted bulb URL's identity — the launcher's paste-to-pull gesture (TB-Push-Pull.md, Mirror
+// surface). The browser-side, lenient twin of parsePullTarget's URL branch (commands/pull.ts —
+// kept apart across the node boundary; both are pinned in pull.test.ts): accepts any origin
+// (protocol optional: an address-bar paste carries one, a prose paste often doesn't) and every
+// page variant of /u/<user>/<slug> — /full[/route], .md, the raw /api/scripts shape — because the
+// path shape is the identity, not the host: the pull itself speaks the project's own
+// TYPEBULB_ORIGIN. Anything else returns undefined and the text stays an ordinary name filter.
+export function parseBulbUrlText(text: string): { user: string; slug: string } | undefined {
+  const t = text.trim()
+  const withProto = /^https?:\/\//i.test(t) ? t
+    : /^([\w-]+(\.[\w-]+)+|localhost)(:\d+)?\/u\//i.test(t) ? `https://${t}` : undefined
+  if (!withProto) return undefined
+  let segs: string[]
+  try { segs = new URL(withProto).pathname.split('/').filter(Boolean).map(decodeURIComponent) } catch { return undefined }
+  const u = segs[0] === 'api' && segs[1] === 'scripts' ? segs.slice(2) : segs
+  if (u[0] !== 'u') return undefined
+  const user = u[1]?.toLowerCase()
+  const slug = u[2]?.toLowerCase().replace(/(\.bulb)?\.md$/, '')
+  const SLUG = /^[a-z0-9][a-z0-9-]*$/
+  return user && slug && SLUG.test(user) && SLUG.test(slug) ? { user, slug } : undefined
+}

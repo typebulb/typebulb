@@ -155,12 +155,12 @@ describe('syncAssets (TB-Assets-Push.md: push carries the folder)', () => {
 
   const sync = (slug: string, file: string) => syncAssets(target(slug, file), { token: 'tb_abc' })
 
-  it('uploads new files with their content type and reports the hosted base', async () => {
+  it('uploads new files (no Content-Type — the server derives it) and reports the hosted base', async () => {
     const file = await hostedBulb('s-new', { 'robin.png': 'png-bytes', 'sub/nested.svg': 'svg' })
     expect(await sync('s-new', file)).toEqual({ kind: 'synced', uploaded: 2, unchanged: 0, toDelete: [], base: 'https://assets.typebulb.com/u/ben/s-new/' })
     const puts = assetReqs.filter(r => r.slug === 's-new' && r.method === 'PUT')
     expect(puts.map(p => p.rel).sort()).toEqual(['robin.png', 'sub/nested.svg'])
-    expect(puts.find(p => p.rel === 'robin.png')?.contentType).toBe('image/png')
+    expect(puts.find(p => p.rel === 'robin.png')?.contentType).toBeUndefined()
     expect(puts[0]?.auth).toBe('Bearer tb_abc')
   })
 

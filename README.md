@@ -443,7 +443,7 @@ One bulb per command, between typebulb.com and its conventional local file — t
 - **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place). Unlisted and public bulbs need no login. A local file with real changes is refused; `--force` overwrites it.
 - **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.
 - **Assets**: push carries the bulb's `assets/` folder — files upload to typebulb's asset host and the published bulb serves them with zero config (quotas apply; refusals say so). A local file shadows its hosted copy.
-- **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm.
+- **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm. Pasting any bulb URL into its filter offers a pull-on-play row.
 - `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
 
 ## Charts

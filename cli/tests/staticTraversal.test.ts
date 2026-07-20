@@ -136,6 +136,7 @@ describe('bulbAssets route', () => {
     fs.writeFileSync(path.join(dir, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')
     fs.writeFileSync(path.join(dir, 'shadowed.png'), 'local-bytes', 'utf8')
     fs.writeFileSync(path.join(dir, 'authored-only.png'), 'authored-bytes', 'utf8')
+    fs.writeFileSync(path.join(dir, 'sneaky.js'), 'alert(1)', 'utf8')
     batchDir = path.join(root, 'batch-assets')
     fs.mkdirSync(batchDir)
     fs.writeFileSync(path.join(batchDir, 'shadowed.png'), 'batch-bytes', 'utf8')
@@ -189,5 +190,12 @@ describe('bulbAssets route', () => {
       expect(r.status, p).toBe(404)
       expect(r.body).not.toContain(SECRET)
     }
+  })
+
+  it('code/markup extensions refuse even when the file exists — never served, never redirected', async () => {
+    bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
+    const r = await get('/assets/sneaky.js')
+    expect(r.status).toBe(403)
+    expect(r.body).toContain('not an asset type')
   })
 })

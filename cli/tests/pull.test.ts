@@ -7,6 +7,7 @@ import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { parsePullTarget, pullBulb, type PullTarget } from '../src/commands/pull.js'
 import { parseArgs } from '../src/args.js'
+import { parseBulbUrlText } from '../agents/core/client/util.js'
 
 /**
  * `typebulb pull` (TB-Push-Pull.md) — the URL/path ↔ identity mapping (Invariant 4: the path IS
@@ -56,6 +57,29 @@ describe('parseArgs: pull', () => {
     expect(a.subcommand).toBe('pull')
     expect(a.file).toBe('https://typebulb.com/u/ben/birds')
     expect(a.force).toBe(true)
+  })
+})
+
+// The launcher's paste-to-pull gesture (TB-Push-Pull.md, Mirror surface): parsePullTarget's URL
+// branch, browser-side and lenient — a paste needn't carry a protocol, and a non-URL must fall
+// through to the ordinary name filter rather than throw.
+describe('parseBulbUrlText', () => {
+  it('parses the page URL variants', () => {
+    expect(parseBulbUrlText('https://typebulb.com/u/ben/birds')).toEqual({ user: 'ben', slug: 'birds' })
+    expect(parseBulbUrlText('https://typebulb.com/u/ben/birds/full')).toEqual({ user: 'ben', slug: 'birds' })
+    expect(parseBulbUrlText('https://typebulb.com/u/ben/birds/full/some/route#x')).toEqual({ user: 'ben', slug: 'birds' })
+    expect(parseBulbUrlText('https://typebulb.com/u/ben/birds.md')).toEqual({ user: 'ben', slug: 'birds' })
+    expect(parseBulbUrlText('http://localhost:5999/api/scripts/u/ben/birds.md')).toEqual({ user: 'ben', slug: 'birds' })
+  })
+  it('accepts a protocol-less paste', () => {
+    expect(parseBulbUrlText('typebulb.com/u/ben/birds/full')).toEqual({ user: 'ben', slug: 'birds' })
+    expect(parseBulbUrlText('localhost:5999/u/ben/birds')).toEqual({ user: 'ben', slug: 'birds' })
+  })
+  it('stays a name filter for everything else', () => {
+    expect(parseBulbUrlText('birds')).toBeUndefined()
+    expect(parseBulbUrlText('foo.bulb.md')).toBeUndefined()
+    expect(parseBulbUrlText('https://typebulb.com/faq')).toBeUndefined()
+    expect(parseBulbUrlText('typebulb.com/u/ben')).toBeUndefined()
   })
 })
 

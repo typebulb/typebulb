@@ -834,6 +834,8 @@ a.server-port:hover { text-decoration: underline; }
 /* A running row's --dir batch scope (bulbsPill.ts): a muted mono token after the name — the
    register of the sample-link/user slug, mono because it names a folder. */
 .bulb-dir { color: var(--muted); font-size: .76rem; font-family: ui-monospace, monospace; flex: none; }
+/* A remote pull's visible failure (bulbsPill.ts pullErrors) — the bulb-dir register, error-tinted. */
+.pull-error { color: var(--err); font-size: .76rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The remote fold (bulbsPill.ts groupRow / fold-row): the header and the remote rows within share
    one veil step over the menu's panel bg (the picker-peek shade) as ONE contiguous band — each
    row's ::before bridges the grid row-gap up to the row above, junction corners square off, and

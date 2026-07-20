@@ -2,7 +2,7 @@ import { div, span, a, button, pre } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
 import { hitsBadge, snippetLine } from './ui.js'
-import { pathKey, basename, bulbBasename, relTime } from './util.js'
+import { pathKey, basename, bulbBasename, parseBulbUrlText, relTime } from './util.js'
 import type { RunningServer, BulbFile, BulbRow, BulbHit, RemoteBulb } from './types.js'
 
 // Launch/stop icons through icons.ts (material play/stop, filled): svgs centre reliably where
@@ -16,6 +16,12 @@ const iconStop = () => icon('stop', 'btn-icon')
 const samplePath = (slug: string) => `typebulbs/u/samples/${slug}.bulb.md`
 const rowUser = (r: BulbRow): string | undefined => pathKey(r.path).match(/typebulbs\/u\/([^/]+)\//)?.[1]
 const rowUserUrl = (r: BulbRow, user: string) => `https://typebulb.com/u/${user}/${bulbBasename(r.path)}/full`
+
+// pullTo's terse RPC errors, given the CLI's own wording (runPull) where the raw form is cryptic.
+const friendlyPullError = (e?: string): string =>
+  e === 'HTTP 404' ? 'not found — check the URL (private bulbs need their owner\'s token)'
+  : e === 'HTTP 401' || e === 'HTTP 403' ? 'private — needs its owner\'s TYPEBULB_TOKEN in .env'
+  : e || 'pull failed'
 
 // Status-bar bulb launcher + off-switch. Lists every *.bulb.md in the project (MRU-first,
 // type to filter) so a bulb you just authored is one click from running — no trip to the
@@ -61,6 +67,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // A push/pull that hit the conflict guard, awaiting the one-gesture overwrite confirm
   // (TB-Push-Pull.md, Mirror surface): yes retries with force.
   pendingOverwrite?: { heading: string; body: string; yesLabel: string; onYes: () => void }
+  // A remote pull's visible failure, keyed by pathKey — a pasted URL fails far more often than a
+  // catalog row (typo, private bulb), so console-only won't do. Cleared on retry and on close.
+  pullErrors = new Map<string, string>()
   // In-flight / just-landed sync verbs, keyed `${pathKey}:${verb}` — transient, in-memory: the
   // shimmer while the PUT/GET runs, a ~1s ✓ on success. The click's heartbeat; success stays
   // otherwise silent (Mirror surface).
@@ -213,6 +222,20 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       })
     } else {
       const q = this.filter.trim().toLowerCase()
+      // A pasted bulb URL narrows to that identity's one row (TB-Push-Pull.md, Mirror surface): the
+      // project's existing row when it has one — local file, sample, or listed-mine; play/pull work
+      // as ever — else a synthetic remote row whose play pulls it in (the owner rides in the path,
+      // so the ordinary downloadAndLaunch route covers it). The pasted origin is ignored: the path
+      // shape is the identity, and the pull speaks the project's own TYPEBULB_ORIGIN.
+      const url = parseBulbUrlText(this.filter)
+      if (url) {
+        const rel = `typebulbs/u/${url.user}/${url.slug}.bulb.md`
+        const existing = rows.find(r => ('/' + pathKey(r.path)).endsWith('/' + rel))
+        return existing ? [existing] : [{
+          path: rel, name: url.slug, recent: 0,
+          remote: { slug: url.slug, name: url.slug, description: `u/${url.user}/${url.slug} on typebulb.com — play pulls it into the project` },
+        }]
+      }
       if (q) rows = rows.filter(r => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q))
       else {
         // One fold per remote owner slug (the typebulbs/u/<slug> partition); ownership rides in
@@ -245,6 +268,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     this.closeLog()
     this.openFolds.clear()
     this.pendingOverwrite = undefined
+    this.pullErrors.clear()
     this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
   }
 
@@ -293,18 +317,23 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // modal on the row actually displayed.
   async downloadAndLaunch(r: BulbRow) {
     const key = pathKey(r.path)
-    this.launching.add(key); this.update()
+    this.launching.add(key); this.pullErrors.delete(key); this.update()
     try {
       const user = rowUser(r)
       const res = (user === 'samples'
         ? await tb.server.downloadSample(r.remote!.slug)
         : await tb.server.pullRemoteBulb(user, r.remote!.slug)) as { ok: boolean; file?: string; error?: string }
-      if (!res.ok || !res.file) { console.error('[mirror] remote pull failed', res.error); return }
+      if (!res.ok || !res.file) {
+        console.error('[mirror] remote pull failed', res.error)
+        this.pullErrors.set(key, friendlyPullError(res.error))
+        return
+      }
       await this.refreshFiles()
       const local = this.files.find(f => pathKey(f.path).endsWith('/' + pathKey(res.file!)))?.path ?? res.file
       await this.launch(local)
     } catch (err) {
       console.error('[mirror] remote pull failed', err)
+      this.pullErrors.set(key, friendlyPullError((err as Error)?.message))
     } finally {
       this.launching.delete(key); this.update()
     }
@@ -627,6 +656,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     if (r.group) return this.groupRow(r, i, dimmed)
     const s = r.running
     const showing = s && this.openLog?.pid === s.pid
+    const pullError = this.pullErrors.get(pathKey(r.path))
     // Running tier is authoritative; otherwise the remembered decision the next launch uses.
     const trusted = s ? !!s.trust : !!r.trusted
     // Layout: the action button + name read together on the LEFT (▶/■ Title); the metadata/controls
@@ -652,6 +682,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         // The run's --dir batch scope (TB-FS.md): where its tb.dir/state actually lives — without
         // this, a scoped run and an unscoped one are indistinguishable rows.
         s?.dir ? span({ class: 'bulb-dir', title: `Running with --dir ${s.dir} — its files land in that subfolder of the bulb's folder` }, s.dir) : null,
+        pullError ? span({ class: 'pull-error' }, pullError) : null,
         this.userLink(r),
         hitsBadge(r.hitCount),
       ),

@@ -3,6 +3,7 @@ import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
   validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, hostedAssetsBase,
+  forbiddenAssetExt,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -253,6 +254,18 @@ describe('parseConfig', () => {
       expect(hostedAssetsBase('ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
       expect(hostedAssetsBase('bén', 'my birds')).toBe('https://assets.typebulb.com/u/b%C3%A9n/my%20birds/')
     })
+})
+
+describe('forbiddenAssetExt', () => {
+  it('names code/markup extensions, case-insensitive', () => {
+    expect(forbiddenAssetExt('evil.html')).toBe('.html')
+    expect(forbiddenAssetExt('sub/Evil.JS')).toBe('.js')
+  })
+  it('passes media, data, and unknown extensions', () => {
+    for (const p of ['robin.png', 'weights.json', 'data.xml', 'donut.safetensors', 'LICENSE']) {
+      expect(forbiddenAssetExt(p), p).toBeUndefined()
+    }
+  })
 })
 
 describe('extractDescription', () => {

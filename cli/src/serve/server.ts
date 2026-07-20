@@ -10,7 +10,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
 import { normalizeUpstreamError, consumeStreamText, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
-import { parseConfig, splitIntoChunks } from 'typebulb/format'
+import { parseConfig, splitIntoChunks, contentTypeFor, forbiddenAssetExt } from 'typebulb/format'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { inferModalJs } from '../bulb/inferModalUi.js'
 import { recordDenial } from './serverRegistry.js'
@@ -541,6 +541,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     app.get('/assets/*', async (c) => {
       const { pathname } = new URL(c.req.url)
       const rawRel = pathname.slice('/assets/'.length)
+      // Same contract as the hosted PUT (TB-Assets-Push.md Invariant 9): code/markup
+      // extensions aren't assets in any tier — a local run that served them would sail
+      // into a publish-time refusal.
+      const forbidden = forbiddenAssetExt(rawRel)
+      if (forbidden) return c.text(`${forbidden} is not an asset type: a bulb's code and markup live in the bulb; assets are media and data`, 403)
       for (const dir of bulbAssets.dirs) {
         let abs: string
         try {
@@ -685,40 +690,6 @@ function serveStaticDir(app: Hono, mount: string, dir: string): void {
       return c.text('Not Found', 404)
     }
   })
-}
-
-/**
- * Content type for a file served from the static routes. `.wasm` must be
- * `application/wasm` for `WebAssembly.instantiateStreaming`; `.svg` must be
- * `image/svg+xml` or an `<img>` won't render it (no sniffing for SVG).
- */
-export function contentTypeFor(filePath: string): string {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.js':
-    case '.mjs': return 'text/javascript'
-    case '.wasm': return 'application/wasm'
-    case '.json':
-    case '.map': return 'application/json'
-    case '.svg': return 'image/svg+xml'
-    case '.png': return 'image/png'
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg'
-    case '.gif': return 'image/gif'
-    case '.webp': return 'image/webp'
-    case '.avif': return 'image/avif'
-    case '.ico': return 'image/x-icon'
-    case '.mp3': return 'audio/mpeg'
-    case '.wav': return 'audio/wav'
-    case '.ogg': return 'audio/ogg'
-    case '.m4a': return 'audio/mp4'
-    case '.mp4': return 'video/mp4'
-    case '.webm': return 'video/webm'
-    case '.woff2': return 'font/woff2'
-    case '.ttf': return 'font/ttf'
-    case '.css': return 'text/css'
-    case '.txt': return 'text/plain; charset=utf-8'
-    default: return 'application/octet-stream'
-  }
 }
 
 /** Find an available port starting from the preferred port, probing loopback so

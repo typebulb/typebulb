@@ -4,7 +4,6 @@ import { createHash } from 'crypto'
 import { hostedAssetsBase } from 'typebulb/format'
 import { bulbMdUrl, resolveTarget, type PullTarget } from './pull.js'
 import { bulbAssetsDir } from '../pipeline.js'
-import { contentTypeFor } from '../serve/server.js'
 
 /**
  * `typebulb push <file>` — upload one conventional local bulb to typebulb.com as the authed
@@ -86,9 +85,11 @@ export async function syncAssets(target: PullTarget, opts: { token: string; time
     await mapLimit(rels, 4, async rel => {
       const bytes = await fs.readFile(path.join(assetsDir, ...rel.split('/')))
       if (remoteMd5.get(rel) === createHash('md5').update(bytes).digest('hex')) { unchanged++; return }
+      // No Content-Type header: the server derives the stored type from the extension
+      // (TB-Assets-Push.md Invariant 9) — a client-asserted MIME is never trusted.
       const resp = await fetch(`${wireBase}/${encodeRel(rel)}`, {
         method: 'PUT', body: new Uint8Array(bytes),   // Buffer isn't BodyInit under DOM lib types
-        headers: { ...auth, 'Content-Type': contentTypeFor(rel) },
+        headers: auth,
         signal: AbortSignal.timeout(timeoutMs),
       })
       if (!resp.ok) throw new Error(`upload of '${rel}' refused (${resp.status}): ${errorFrom(await resp.text())}`)
