@@ -4,7 +4,7 @@ import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir } from '../pipeline.js'
-import { replaceBulbBlock, CHUNK_SEPARATOR, parseConfig, assetsBase, resolvedAssetsBase } from 'typebulb/format'
+import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import { conventionalIdentity } from '../commands/pull.js'
 import open from 'open'
@@ -65,10 +65,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     ...(args.dir ? [bulbAssetsDir(bulbPath, args.dir)] : []),
     bulbAssetsDir(bulbPath),
   ]
-  const cfg = parseConfig(bulb.config)
-  if (cfg.assets && !assetsBase(bulb.config)) console.warn(`  config.json "assets" is not a valid http(s) URL — ignored: ${cfg.assets}`)
-  // Remote layer of the shadow chain: the config key (self-host), else the typebulb-hosted base
-  // derived from a conventional path (TB-Assets-Push.md Invariant 2). No identity → no remote layer.
+  // Remote layer of the shadow chain: the typebulb-hosted base derived from a conventional
+  // path (TB-Assets-Push.md Invariant 2). No identity → no remote layer.
   const identity = conventionalIdentity(path.resolve(bulbPath))
 
   // Proactive trust prediction (TB-Security.md): when running untrusted, scan the
@@ -105,8 +103,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         await fs.writeFile(bulbPath, text)
       },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
-      // getRemoteBase reads the live `bulb` cell so a hot reload's config edit applies per request.
-      bulbAssets: { dirs: assetsDirs, getRemoteBase: () => resolvedAssetsBase(bulb.config, identity?.userSlug, identity?.slug) },
+      bulbAssets: { dirs: assetsDirs, remoteBase: identity && hostedAssetsBase(identity.userSlug, identity.slug) },
       trusted: args.trust,
       trustHint,
     }),

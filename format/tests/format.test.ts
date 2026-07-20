@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, assetsBase,
-  resolvedAssetsBase,
+  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, hostedAssetsBase,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -249,33 +248,11 @@ describe('parseConfig', () => {
   })
 })
 
-describe('assetsBase', () => {
-  it('absent/empty → undefined', () => {
-    expect(assetsBase(undefined)).toBeUndefined()
-    expect(assetsBase('{}')).toBeUndefined()
-    expect(assetsBase('{"assets":"  "}')).toBeUndefined()
-  })
-  it('normalizes to a trailing slash', () => {
-    expect(assetsBase('{"assets":"https://cdn.example.com/birds"}')).toBe('https://cdn.example.com/birds/')
-    expect(assetsBase('{"assets":"https://cdn.example.com/birds/"}')).toBe('https://cdn.example.com/birds/')
-  })
-  it('rejects non-http(s) and malformed values', () => {
-    expect(assetsBase('{"assets":"ftp://x/"}')).toBeUndefined()
-    expect(assetsBase('{"assets":"not a url"}')).toBeUndefined()
-  })
-})
-
-describe('resolvedAssetsBase', () => {
-  it('the config key wins (self-host)', () => {
-    expect(resolvedAssetsBase('{"assets":"https://cdn.example.com/birds"}', 'ben', 'birds')).toBe('https://cdn.example.com/birds/')
-  })
-  it('no key + identity → the hosted default', () => {
-    expect(resolvedAssetsBase('{}', 'ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
-  })
-  it('no key + no identity → undefined', () => {
-    expect(resolvedAssetsBase('{}')).toBeUndefined()
-    expect(resolvedAssetsBase('{}', '', '')).toBeUndefined()
-  })
+  describe('hostedAssetsBase', () => {
+    it('derives from identity, URL-encoded', () => {
+      expect(hostedAssetsBase('ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
+      expect(hostedAssetsBase('bén', 'my birds')).toBe('https://assets.typebulb.com/u/b%C3%A9n/my%20birds/')
+    })
 })
 
 describe('extractDescription', () => {

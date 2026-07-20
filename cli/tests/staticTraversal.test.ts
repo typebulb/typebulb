@@ -117,7 +117,7 @@ describe('serveStaticDir refuses traversal out of the served dir', () => {
 
 /**
  * The bulb-assets route (TB-Assets.md): same URL shape, different contract — media MIME types,
- * no-cache, and a local miss 302s to the config's `assets` base (local shadows remote). A
+ * no-cache, and a local miss 302s to the bulb's remote base (local shadows remote). A
  * traversal must 404, never redirect (a redirect would leak the probe to the remote host).
  * `dirs` is the --dir shadowing chain: the batch's assets/ precedes the authored one.
  */
@@ -125,7 +125,8 @@ describe('bulbAssets route', () => {
   let srv: ServerInstance
   let dir: string
   let batchDir: string
-  let remoteBase: string | undefined
+  // Mutated between cases; the route reads it per request off this shared object.
+  const bulbAssets: { dirs: string[]; remoteBase?: string } = { dirs: [] }
 
   const get = (rawPath: string) => rawGetPort(srv.port, rawPath)
 
@@ -138,11 +139,12 @@ describe('bulbAssets route', () => {
     batchDir = path.join(root, 'batch-assets')
     fs.mkdirSync(batchDir)
     fs.writeFileSync(path.join(batchDir, 'shadowed.png'), 'batch-bytes', 'utf8')
+    bulbAssets.dirs = [batchDir, dir]
     srv = await startServer({
       getHtml: () => '<html></html>',
       basePath: root,
       port: await freePort(),
-      bulbAssets: { dirs: [batchDir, dir], getRemoteBase: () => remoteBase },
+      bulbAssets,
     })
   })
 
@@ -156,12 +158,12 @@ describe('bulbAssets route', () => {
   })
 
   it('miss without a base → 404', async () => {
-    remoteBase = undefined
+    bulbAssets.remoteBase = undefined
     expect((await get('/assets/absent.png')).status).toBe(404)
   })
 
   it('miss with a base → 302 to base + path', async () => {
-    remoteBase = 'https://cdn.example.com/birds/'
+    bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
     const r = await get('/assets/sub/absent.png')
     expect(r.status).toBe(302)
     expect(r.headers['location']).toBe('https://cdn.example.com/birds/sub/absent.png')
@@ -174,14 +176,14 @@ describe('bulbAssets route', () => {
   })
 
   it('a batch miss falls through to the authored dir, shadowing the remote', async () => {
-    remoteBase = 'https://cdn.example.com/birds/'
+    bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
     const r = await get('/assets/authored-only.png')
     expect(r.status).toBe(200)
     expect(r.body).toBe('authored-bytes')
   })
 
   it('traversal 404s even when a base is set — never redirected', async () => {
-    remoteBase = 'https://cdn.example.com/birds/'
+    bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
     for (const p of ['/assets/../secret.txt', '/assets/..%2fsecret.txt', '/assets/%2e%2e%2fsecret.txt']) {
       const r = await get(p)
       expect(r.status, p).toBe(404)

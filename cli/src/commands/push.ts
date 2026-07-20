@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { createHash } from 'crypto'
-import { parseBulb, assetsBase, hostedAssetsBase } from 'typebulb/format'
+import { hostedAssetsBase } from 'typebulb/format'
 import { bulbMdUrl, resolveTarget, type PullTarget } from './pull.js'
 import { bulbAssetsDir } from '../pipeline.js'
 import { contentTypeFor } from '../serve/server.js'
@@ -20,32 +20,8 @@ export type PushOutcome =
   | { kind: 'conflict'; message: string }
   | { kind: 'http-error'; status: number; message: string }
 
-export type AssetsCheckResult =
-  | { kind: 'none' }
-  | { kind: 'no-key'; count: number }
-  | { kind: 'verified'; count: number; base: string }
-  | { kind: 'missing'; missing: { rel: string; url: string }[]; count: number; base: string }
-
 /** A relative asset path as URL segments (`sub/née.png` → `sub/n%C3%A9e.png`). */
 const encodeRel = (rel: string) => rel.split('/').map(encodeURIComponent).join('/')
-
-/** TB-Assets.md Invariant 7: the folder is the manifest. HEAD every file under the bulb's
- *  own `assets/` (birds.bulb.md → birds/assets/) at `<base>/<relpath>` — misses block the push
- *  (`--force` overrides), and a folder without the config key earns a loud note (local assets
- *  don't travel). No code scanning. */
-export async function checkAssets(bulbFile: string, opts?: { timeoutMs?: number }): Promise<AssetsCheckResult> {
-  const rels = await listFilesRec(bulbAssetsDir(bulbFile))
-  if (!rels.length) return { kind: 'none' }
-  const markdown = await fs.readFile(bulbFile, 'utf-8')
-  const base = assetsBase(parseBulb(markdown)?.files.get('config.json'))
-  if (!base) return { kind: 'no-key', count: rels.length }
-  // Probes run concurrently so a dead host costs one timeout, not one per file.
-  const missing = (await Promise.all(rels.map(async rel => {
-    const url = base + encodeRel(rel)
-    return (await probeUrl(url, opts?.timeoutMs ?? 10_000)) ? undefined : { rel, url }
-  }))).filter(m => m !== undefined)
-  return missing.length ? { kind: 'missing', missing, count: rels.length, base } : { kind: 'verified', count: rels.length, base }
-}
 
 /** Relative paths (forward-slashed) of all files under `dir`, [] when it doesn't exist. */
 async function listFilesRec(dir: string, prefix = ''): Promise<string[]> {
@@ -56,19 +32,6 @@ async function listFilesRec(dir: string, prefix = ''): Promise<string[]> {
     else if (e.isFile()) out.push(prefix + e.name)
   }
   return out
-}
-
-/** Does `url` exist? HEAD first; a host that rejects HEAD (405/501) gets a 1-byte ranged GET. */
-async function probeUrl(url: string, timeoutMs: number): Promise<boolean> {
-  try {
-    const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs) })
-    if (head.ok) return true
-    if (head.status !== 405 && head.status !== 501) return false
-    const get = await fetch(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(timeoutMs) })
-    return get.ok
-  } catch {
-    return false
-  }
 }
 
 export type AssetsSyncResult =
@@ -85,8 +48,7 @@ const assetsWireBase = (t: PullTarget) =>
  *  deletion of remote keys with no local file. Deletions come back as `toDelete`, pruned only
  *  after the text PUT succeeds (Invariant 5: add → commit → prune — the old live text may still
  *  reference them). An *absent* folder is a consumer copy's no-opinion — remote untouched, no
- *  wire traffic; an *existing* folder, even empty, is the manifest. Runs only when config.json
- *  has no `assets` key (present key = self-host, verified by checkAssets — no third mode). */
+ *  wire traffic; an *existing* folder, even empty, is the manifest. */
 export async function syncAssets(target: PullTarget, opts: { token: string; timeoutMs?: number }): Promise<AssetsSyncResult> {
   const timeoutMs = opts.timeoutMs ?? 30_000
   const wireBase = assetsWireBase(target)
@@ -170,32 +132,18 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 }
 
 /** The assets leg of a push, before the text PUT (TB-Assets-Push.md Invariant 5: the site never
- *  dangles). An `assets` key = self-host: HEAD-verify, misses refuse (`--force` publishes anyway).
- *  No key = typebulb-hosted: sync the folder as a manifest; a sync failure refuses the push.
- *  Prints the story; returns whether the push may proceed, plus the orphan keys to prune once
- *  the text PUT has committed. */
-async function assetsGate(target: PullTarget, token: string, force: boolean): Promise<{ proceed: boolean; toDelete?: string[] }> {
-  const assets = await checkAssets(target.dest)
-  if (assets.kind === 'missing') {
-    console.error(`assets check against ${assets.base}`)
-    for (const m of assets.missing) console.error(`  MISSING ${m.rel}  → expected at ${m.url}`)
-    if (!force) {
-      console.error(`push refused: ${assets.missing.length} of ${assets.count} asset(s) not on your host yet. Upload them, or push --force to publish anyway.`)
-      return { proceed: false }
-    }
-    console.error('  continuing (--force): the published bulb will 404 on these until they are uploaded.')
+ *  dangles): sync the folder as a manifest; a sync failure refuses the push. Prints the story;
+ *  returns whether the push may proceed, plus the orphan keys to prune once the text PUT has
+ *  committed. */
+async function assetsGate(target: PullTarget, token: string): Promise<{ proceed: boolean; toDelete?: string[] }> {
+  const sync = await syncAssets(target, { token })
+  if (sync.kind === 'sync-error') {
+    console.error(`assets sync failed: ${sync.message}\npush refused: the bulb text was not pushed.`)
+    return { proceed: false }
   }
-  if (assets.kind === 'verified') console.log(`assets: verified ${assets.count} file(s) against ${assets.base}`)
-  if (assets.kind === 'no-key' || assets.kind === 'none') {
-    const sync = await syncAssets(target, { token })
-    if (sync.kind === 'sync-error') {
-      console.error(`assets sync failed: ${sync.message}\npush refused: the bulb text was not pushed.`)
-      return { proceed: false }
-    }
-    if (sync.kind === 'synced') {
-      console.log(`assets: ${sync.uploaded} uploaded, ${sync.unchanged} unchanged → ${sync.base}`)
-      return { proceed: true, toDelete: sync.toDelete }
-    }
+  if (sync.kind === 'synced') {
+    console.log(`assets: ${sync.uploaded} uploaded, ${sync.unchanged} unchanged → ${sync.base}`)
+    return { proceed: true, toDelete: sync.toDelete }
   }
   return { proceed: true }
 }
@@ -254,7 +202,7 @@ export async function runPush(arg: string | undefined, opts: { force: boolean; m
   let outcome: PushOutcome
   let toDelete: string[] | undefined
   try {
-    const gate = await assetsGate(target, token, opts.force)
+    const gate = await assetsGate(target, token)
     if (!gate.proceed) {
       process.exitCode = 1
       return

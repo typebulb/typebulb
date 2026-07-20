@@ -6,7 +6,7 @@ import * as fs from 'fs/promises'
 import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
 import { createHash } from 'crypto'
-import { pushBulb, checkAssets, syncAssets, pruneAssets } from '../src/commands/push.js'
+import { pushBulb, syncAssets, pruneAssets } from '../src/commands/push.js'
 import type { PullTarget } from '../src/commands/pull.js'
 import { parseArgs } from '../src/args.js'
 
@@ -56,23 +56,12 @@ beforeAll(async () => {
         } else if (req.method === 'PUT') {
           if (slug === 'overcap') {
             res.writeHead(400, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ error: `'${rel}' is 6.0MB — the per-file cap is 5.0MB; host it yourself and set "assets" in config.json` }))
+            res.end(JSON.stringify({ error: `'${rel}' is 6.0MB — the per-file cap is 5.0MB; host big files yourself and reference them by absolute URL` }))
           } else {
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ path: rel, size: body.length }))
           }
         } else { res.writeHead(204); res.end() }
-        return
-      }
-      // Hosted-asset probes for checkAssets (TB-Assets.md): existence answers, incl. a
-      // HEAD-hostile file that only a ranged GET confirms.
-      if (req.url?.startsWith('/hosted/')) {
-        if (req.url === '/hosted/robin.png' || req.url === '/hosted/sub/nested.png') { res.writeHead(200); res.end() }
-        else if (req.url === '/hosted/song.mp3') {
-          if (req.method === 'HEAD') { res.writeHead(405); res.end() }
-          else { res.writeHead(206); res.end('x') }
-        }
-        else { res.writeHead(404); res.end() }
         return
       }
       if (req.url === '/u/ben/birds.md') {
@@ -143,57 +132,6 @@ describe('pushBulb', () => {
   it('maps a 401 to http-error', async () => {
     const d = await freshFile('denied.bulb.md')
     expect(await pushBulb(target('secret', d), { token: 'tb_bad' })).toEqual({ kind: 'http-error', status: 401, message: 'Login required' })
-  })
-})
-
-describe('checkAssets (TB-Assets.md: the folder is the manifest)', () => {
-  const mdWith = (assets?: string) =>
-    `---\nformat: typebulb/v1\nname: Birds\n---\n\n**code.tsx**\n\n\`\`\`tsx\nconsole.log(1)\n\`\`\`\n\n**config.json**\n\n\`\`\`json\n${JSON.stringify(assets ? { assets } : {})}\n\`\`\`\n`
-
-  /** A bulb file whose own folder's assets/ (bulb.bulb.md → bulb/assets/) holds `files`. */
-  async function bulbWith(name: string, files: string[], assets?: string): Promise<string> {
-    const dir = path.join(tmp, name)
-    for (const f of files) {
-      const abs = path.join(dir, 'bulb', 'assets', ...f.split('/'))
-      await fs.mkdir(path.dirname(abs), { recursive: true })
-      await fs.writeFile(abs, 'bytes')
-    }
-    await fs.mkdir(dir, { recursive: true })
-    const file = path.join(dir, 'bulb.bulb.md')
-    await fs.writeFile(file, mdWith(assets))
-    return file
-  }
-
-  const base = () => `http://127.0.0.1:${port}/hosted`   // no trailing slash — normalization's job
-
-  it('no assets folder → none', async () => {
-    const file = await bulbWith('a-none', [], base())
-    expect(await checkAssets(file)).toEqual({ kind: 'none' })
-  })
-
-  it('folder without the config key → no-key', async () => {
-    const file = await bulbWith('a-nokey', ['robin.png'])
-    expect(await checkAssets(file)).toEqual({ kind: 'no-key', count: 1 })
-  })
-
-  it('all files hosted (nested included) → verified', async () => {
-    const file = await bulbWith('a-ok', ['robin.png', 'sub/nested.png'], base())
-    expect(await checkAssets(file)).toEqual({ kind: 'verified', count: 2, base: base() + '/' })
-  })
-
-  it('a missing file names its exact expected URL', async () => {
-    const file = await bulbWith('a-miss', ['robin.png', 'absent.png'], base())
-    const r = await checkAssets(file)
-    expect(r.kind).toBe('missing')
-    if (r.kind === 'missing') {
-      expect(r.count).toBe(2)
-      expect(r.missing).toEqual([{ rel: 'absent.png', url: `${base()}/absent.png` }])
-    }
-  })
-
-  it('a HEAD-hostile host (405) is confirmed via ranged GET', async () => {
-    const file = await bulbWith('a-head405', ['song.mp3'], base())
-    expect((await checkAssets(file)).kind).toBe('verified')
   })
 })
 

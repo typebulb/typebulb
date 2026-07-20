@@ -99,10 +99,10 @@ export interface ServerOptions {
   /** The bulb's `assets/` folder(s) (TB-Assets.md), served read-only at `/assets/` in every
    *  paged tier — NOT trust-gated: its exposure class equals the `/` route's compiled source.
    *  `dirs` is the ordered shadowing chain — under `--dir` the batch's `assets/` precedes the
-   *  authored one (batch shadows authored shadows remote). `getRemoteBase` re-reads the config's
-   *  `assets` base per request (hot reload can change it); a miss in every dir 302s there when
-   *  set, else 404s. */
-  bulbAssets?: { dirs: string[]; getRemoteBase: () => string | undefined }
+   *  authored one (batch shadows authored shadows remote). `remoteBase` is the bulb's derived
+   *  hosted base (TB-Assets-Push.md Invariant 2); a miss in every dir 302s there when set,
+   *  else 404s. */
+  bulbAssets?: { dirs: string[]; remoteBase?: string }
 }
 
 export interface ServerInstance {
@@ -555,7 +555,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           })
         } catch { /* next dir in the chain */ }
       }
-      const base = bulbAssets.getRemoteBase()
+      const base = bulbAssets.remoteBase
       return base ? c.redirect(base + rawRel, 302) : c.text('Not Found', 404)
     })
   }

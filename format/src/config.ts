@@ -11,8 +11,6 @@ export interface BulbConfig {
   description?: string
   inference?: InferenceConfig
   ts?: { jsxImportSource?: string }
-  /** Base URL where the bulb's `assets/` folder is hosted when published (TB-Assets.md). */
-  assets?: string
 }
 
 /** Parse the `config.json` block, returning {} for empty or malformed JSON. */
@@ -25,30 +23,13 @@ export function parseConfig(config: string): BulbConfig {
   }
 }
 
-/** The `assets` base URL from a `config.json` string, normalized to a trailing slash —
- *  undefined when absent or not an http(s) URL (callers report the malformed case). */
-export function assetsBase(config: string | null | undefined): string | undefined {
-  const raw = parseConfig(config ?? '').assets?.trim()
-  if (!raw) return undefined
-  try {
-    const url = new URL(raw)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
-  } catch { return undefined }
-  return raw.endsWith('/') ? raw : raw + '/'
-}
-
 /** Where typebulb.com-hosted bulb assets serve from (TB-Assets-Push.md Invariant 1). */
 export const HOSTED_ASSETS_ORIGIN = 'https://assets.typebulb.com'
 
-/** The hosted-assets base derived from a bulb's identity — the default when `config.json`
- *  has no `assets` key (TB-Assets-Push.md Invariant 2: derived, never stored). */
+/** The hosted-assets base derived from a bulb's identity (TB-Assets-Push.md Invariant 2:
+ *  derived, never stored). An identity-less bulb has no remote base — it can't push either. */
 export const hostedAssetsBase = (userSlug: string, slug: string) =>
   `${HOSTED_ASSETS_ORIGIN}/u/${encodeURIComponent(userSlug)}/${encodeURIComponent(slug)}/`
-
-/** The base a bulb's `assets/` resolves against remotely: the config key (self-host), else the
- *  hosted default when the bulb has an identity — else none (an identity-less bulb can't push). */
-export const resolvedAssetsBase = (config: string | null | undefined, userSlug?: string, slug?: string) =>
-  assetsBase(config) ?? (userSlug && slug ? hostedAssetsBase(userSlug, slug) : undefined)
 
 const DEFAULT_DESCRIPTION = 'A Typebulb bulb.'
 
