@@ -247,7 +247,7 @@ async function main(): Promise<void> {
       { fn: args.fn!, positional: args.callArgs, argsJson: args.argsJson, hasArgsFlag: args.hasArgsFlag },
       args.mode,
       local,
-      args.dir,
+      args.batch,
     )
     return
   }
@@ -257,7 +257,7 @@ async function main(): Promise<void> {
   // error surfaces.
   if (bulbInfo && bulbInfo.bulb.server && (isServerOnly(bulbInfo.bulb) || args.server)) {
     requireServerTrust(args.trust, trustHint)
-    await runConsole(bulbPath, args.watch, args.mode, local, args.dir)
+    await runConsole(bulbPath, args.watch, args.mode, local, args.batch)
     return
   }
 

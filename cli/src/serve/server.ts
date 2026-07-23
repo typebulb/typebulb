@@ -62,7 +62,7 @@ function errorMessage(e: unknown): string {
 export interface ServerOptions {
   getHtml: () => string
   basePath: string
-  /** Base for RELATIVE /__fs paths: the bulb's folder, or its --dir subfolder (TB-FS.md). Containment stays
+  /** Base for RELATIVE /__fs paths: the bulb's folder, or its --batch folder (TB-FS.md, TB-Batch.md). Containment stays
    *  `basePath` (the project), so `../` reaches siblings but never escapes the project.
    *  Absent (agent mirror, older tests) → falls back to basePath, the old cwd-relative rule. */
   fsBase?: string
@@ -98,7 +98,7 @@ export interface ServerOptions {
   staticAssets?: { mount: string; dir: string }
   /** The bulb's `assets/` folder(s) (TB-Assets.md), served read-only at `/assets/` in every
    *  paged tier — NOT trust-gated: its exposure class equals the `/` route's compiled source.
-   *  `dirs` is the ordered shadowing chain — under `--dir` the batch's `assets/` precedes the
+   *  `dirs` is the ordered shadowing chain — under `--batch` the batch's `assets/` precedes the
    *  authored one (batch shadows authored shadows remote). `remoteBase` is the bulb's derived
    *  hosted base (TB-Assets-Push.md Invariant 2); a miss in every dir 302s there when set,
    *  else 404s. */
@@ -541,24 +541,23 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     app.get('/assets/*', async (c) => {
       const { pathname } = new URL(c.req.url)
       const rawRel = pathname.slice('/assets/'.length)
+      // Decode before every check: the forbidden-ext gate, the serve, and the traversal guard
+      // must all see the same real path, or a %2e-encoded dot would slip a `.js` past the gate
+      // that the served (decoded) file then honours. A malformed % is a 404, not servable.
+      let rel: string
+      try { rel = decodeURIComponent(rawRel) } catch { return c.text('Not Found', 404) }
       // Same contract as the hosted PUT (TB-Assets-Push.md Invariant 9): code/markup
       // extensions aren't assets in any tier — a local run that served them would sail
       // into a publish-time refusal.
-      const forbidden = forbiddenAssetExt(rawRel)
+      const forbidden = forbiddenAssetExt(rel)
       if (forbidden) return c.text(`${forbidden} is not an asset type: a bulb's code and markup live in the bulb; assets are media and data`, 403)
-      for (const dir of bulbAssets.dirs) {
-        let abs: string
-        try {
-          abs = resolvePath(decodeURIComponent(rawRel), dir)
-        } catch {
-          return c.text('Not Found', 404)   // traversal — never redirected, never falls through
+      try {
+        for (const dir of bulbAssets.dirs) {
+          const found = await readServable(rel, dir, { 'Cache-Control': 'no-cache' })
+          if (found) return found
         }
-        try {
-          const body = await fs.readFile(abs)
-          return new Response(body as unknown as BodyInit, {
-            headers: { 'Content-Type': contentTypeFor(abs), 'Cache-Control': 'no-cache' },
-          })
-        } catch { /* next dir in the chain */ }
+      } catch {
+        return c.text('Not Found', 404)   // traversal — never redirected, never falls through
       }
       const base = bulbAssets.remoteBase
       return base ? c.redirect(base + rawRel, 302) : c.text('Not Found', 404)
@@ -681,15 +680,22 @@ function serveStaticDir(app: Hono, mount: string, dir: string): void {
   app.get(`${mount}*`, async (c) => {
     const { pathname } = new URL(c.req.url)
     if (!pathname.startsWith(mount)) return c.text('Not Found', 404)
-    const rel = decodeURIComponent(pathname.slice(mount.length))
     try {
-      const abs = resolvePath(rel, dir)
-      const body = await fs.readFile(abs)
-      return new Response(body as unknown as BodyInit, { headers: { 'Content-Type': contentTypeFor(abs) } })
+      return await readServable(decodeURIComponent(pathname.slice(mount.length)), dir) ?? c.text('Not Found', 404)
     } catch {
       return c.text('Not Found', 404)
     }
   })
+}
+
+/** The serve-one-file core shared by serveStaticDir and the bulb `/assets/` chain: bytes under
+ *  `dir`, content-typed. `undefined` = not there (chains fall through); resolvePath's traversal
+ *  throw propagates — the caller owns that refusal. */
+async function readServable(rel: string, dir: string, extraHeaders: Record<string, string> = {}): Promise<Response | undefined> {
+  const abs = resolvePath(rel, dir)
+  const body = await fs.readFile(abs).catch(() => undefined)
+  if (!body) return undefined
+  return new Response(body as unknown as BodyInit, { headers: { 'Content-Type': contentTypeFor(abs), ...extraHeaders } })
 }
 
 /** Find an available port starting from the preferred port, probing loopback so

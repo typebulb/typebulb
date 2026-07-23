@@ -48,9 +48,9 @@ describe('parseArgs: call subcommand', () => {
     expect(a.callArgs).toEqual(['select 1'])
   })
 
-  it('--dir scopes the run to a subfolder, normalizing a trailing slash', () => {
-    const a = parseArgs(['call', 'probe.bulb.md', 'run', '--dir', 'batch2/', '--trust'])
-    expect(a.dir).toBe('batch2')
+  it('--batch scopes the run to a named batch, normalizing a trailing slash', () => {
+    const a = parseArgs(['call', 'probe.bulb.md', 'run', '--batch', 'pilot/', '--trust'])
+    expect(a.batch).toBe('pilot')
     expect(a.fn).toBe('run')
     expect(a.callArgs).toEqual([])
   })

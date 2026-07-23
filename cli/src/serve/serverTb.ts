@@ -77,7 +77,7 @@ export function installServerTb(dir: string, containRoot = process.cwd()): void 
     ai,
     fs: tbFs,
     // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to spawned tools);
-    // tb.fs already resolves relative paths against it. --dir scopes both.
+    // tb.fs already resolves relative paths against it. --batch scopes both (TB-Batch.md).
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     hasOwnKeys,

@@ -146,8 +146,8 @@ export class AnthropicProvider extends AIProvider {
     const payload: AnthropicRequestPayload = {
       model,
       max_tokens: this.getMaxTokens(model),
-      // Breakpoint on the last message caches the conversation prefix (extends each turn)
-      messages: this.withLastMessageCached(conversationMessages),
+      // Breakpoints on the final two messages cache the conversation prefix (extends each turn)
+      messages: this.withTailMessagesCached(conversationMessages),
       stream
     }
 
@@ -241,11 +241,16 @@ export class AnthropicProvider extends AIProvider {
 
   // ── Private helpers ──────────────────────────────────────────────
 
-  /** Convert the final message to block form with a cache breakpoint; others pass through as-is. */
-  private withLastMessageCached(messages: ChatMessageDto[]): AnthropicMessage[] {
-    const last = messages.length - 1
+  /**
+   * Cache breakpoints on the final two messages. The last extends conversations whose tail is the
+   * new user turn (tb.ai bulbs, chat/raw modes); the second-to-last covers code-mode chat payloads,
+   * whose tail is an ephemeral script-context message rebuilt every turn — there the durable
+   * conversation prefix ends one message earlier, so a last-only breakpoint would never be hit.
+   */
+  private withTailMessagesCached(messages: ChatMessageDto[]): AnthropicMessage[] {
+    const firstCached = Math.max(0, messages.length - 2)
     return messages.map((m, i) =>
-      i === last
+      i >= firstCached
         ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] }
         : m
     )

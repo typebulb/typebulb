@@ -5,7 +5,7 @@ import * as path from 'path'
 import * as net from 'net'
 import * as http from 'http'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
-import { bulbDataDir } from '../src/pipeline.js'
+import { bulbDataDir, materializeBatchDir } from '../src/pipeline.js'
 import { installServerTb } from '../src/serve/serverTb.js'
 
 /** Reserve an ephemeral port, then release it for the server to bind. */
@@ -206,14 +206,33 @@ describe('data-folder resolution (fsBase)', () => {
   })
 })
 
-// TB-FS.md "Batch scoping": --dir re-roots the bulb's folder to a subfolder; the bulb stays batch-unaware.
-describe('bulbDataDir (--dir scoping)', () => {
+// TB-Batch.md Invariant 2: --batch re-roots the bulb's folder to batches/<name>; the bulb stays
+// batch-unaware.
+describe('bulbDataDir (--batch scoping)', () => {
   it('derives the sibling folder from the filename stem', () => {
     expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'))).toBe(path.resolve('typebulbs', 'probe'))
   })
 
-  it('scopes to a subfolder when given a --dir subpath', () => {
-    expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'), 'batch2')).toBe(path.resolve('typebulbs', 'probe', 'batch2'))
+  it('scopes to batches/<name> when given a --batch name', () => {
+    expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'), 'pilot')).toBe(path.resolve('typebulbs', 'probe', 'batches', 'pilot'))
+  })
+
+  // TB-Batch.md Invariant 3: the folder materializes at boot (discovery), and re-materializing
+  // bumps its mtime (last-invocation ordering) — a results-file rewrite alone wouldn't.
+  it('materializeBatchDir creates the folder eagerly and touches it on re-invocation', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-batchdir-'))
+    try {
+      const bulb = path.join(project, 'probe.bulb.md')
+      await materializeBatchDir(bulb, 'pilot')
+      const dir = path.join(project, 'probe', 'batches', 'pilot')
+      expect(fs.statSync(dir).isDirectory()).toBe(true)
+      const before = fs.statSync(dir).mtimeMs
+      fs.utimesSync(dir, new Date(before - 60_000), new Date(before - 60_000))   // age it
+      await materializeBatchDir(bulb, 'pilot')
+      expect(fs.statSync(dir).mtimeMs).toBeGreaterThan(before - 60_000)
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+    }
   })
 })
 
@@ -226,7 +245,7 @@ describe('server-side tb.fs (shared core)', () => {
 
   beforeAll(() => {
     project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-servertb-'))
-    bulbDir = path.join(project, 'typebulbs', 'probe', 'batch2')   // a --dir-scoped folder, not yet created
+    bulbDir = path.join(project, 'typebulbs', 'probe', 'batches', 'pilot')   // a --batch-scoped folder, not yet created
     installServerTb(bulbDir, project)
   })
 

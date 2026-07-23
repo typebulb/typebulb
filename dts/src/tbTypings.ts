@@ -155,7 +155,7 @@ const fs = `
 const dir = `
   /**
    * The bulb's folder — absolute path to \`<bulb-dir>/<filename-stem>/\`
-   * (or its subfolder when the run is scoped with \`--dir\`).
+   * (or its \`batches/<name>/\` folder when the run is scoped with \`--batch\`).
    *
    * For interop only (handing a path to \`server.ts\` or a spawned tool):
    * \`tb.fs\` already resolves relative paths against it, so bulb code writing

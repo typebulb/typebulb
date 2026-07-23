@@ -821,6 +821,10 @@ a.server-port:hover { text-decoration: underline; }
    row's snippet line bleeds under the next row as overlapping text. max-content tracks never
    compress; the list scrolls, rows keep their content height. */
 .bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+/* The scope column (TB-Batch.md Invariant 7): a seventh track between name and the control
+   cluster, present only while some row carries a scope (bulbsPill.ts anyScope — rows emit a
+   matching cell, spacer included). The B affordance keeps it ~1.3rem wide. */
+.bulb-list.has-scope { grid-template-columns: auto 1fr auto auto auto auto auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
 /* Downloaded-bulb rows (TB-Agent-Mirror.md): the user link — the folder/user slug (`samples`) in
@@ -831,10 +835,21 @@ a.server-port:hover { text-decoration: underline; }
 .server-name.remote:hover { text-decoration: none; }
 .sample-link { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; flex: none; }
 .sample-link:hover { color: var(--accent); text-decoration: underline; }
-/* A running row's --dir batch scope (bulbsPill.ts): a muted mono token after the name — the
-   register of the sample-link/user slug, mono because it names a folder. */
-.bulb-dir { color: var(--muted); font-size: .76rem; font-family: ui-monospace, monospace; flex: none; }
-/* A remote pull's visible failure (bulbsPill.ts pullErrors) — the bulb-dir register, error-tinted. */
+/* The batch affordance (bulbsPill.ts scopeCell, TB-Batch.md Invariant 7): one B glyph per row —
+   the row shows THAT a scope applies, the tooltip and click-menu name it. Dim = batches exist but
+   launch is unscoped; lit (.on) = play launches scoped (newest default) or running scoped.
+   Static (running) keeps the lit look without the hand cursor. */
+.batch-b { font-size: .72rem; font-family: ui-monospace, monospace; line-height: 1; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 4px; width: 1.3rem; height: 1.15rem; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.batch-b.on { color: var(--accent); border-color: var(--accent); }
+.batch-b.static { cursor: default; }
+/* The B's menu rides the composer popup register (.at-popup/.at-row/.dlg-catcher — one mini-menu
+   UI across the mirror). Only the positioning is local: fixed coords (inline style, measured from
+   the B at open) so the scrolling list can't clip it, sized to its content instead of the
+   composer's full-width anchor. */
+.at-popup.batch-pop { position: fixed; left: auto; right: auto; bottom: auto; width: max-content; min-width: 7rem; margin-inline: 0; }
+/* 'unscoped' is the escape hatch, not a batch — a divider + muted italic set it apart from the list. */
+.batch-pop .at-row.unscoped { color: var(--muted); font-style: italic; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: .15rem; padding-top: .4rem; }
+/* A remote pull's visible failure (bulbsPill.ts pullErrors) — the sample-link register, error-tinted. */
 .pull-error { color: var(--err); font-size: .76rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The remote fold (bulbsPill.ts groupRow / fold-row): the header and the remote rows within share
    one veil step over the menu's panel bg (the picker-peek shade) as ONE contiguous band — each

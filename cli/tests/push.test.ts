@@ -133,6 +133,43 @@ describe('pushBulb', () => {
     const d = await freshFile('denied.bulb.md')
     expect(await pushBulb(target('secret', d), { token: 'tb_bad' })).toEqual({ kind: 'http-error', status: 401, message: 'Login required' })
   })
+
+  /** A bulb whose own folder holds assets/robin.png — the whole-bulb shape pushBulb must carry. */
+  async function wholeBulb(name: string): Promise<string> {
+    const assetsDir = path.join(tmp, name, 'bulb', 'assets')
+    await fs.mkdir(assetsDir, { recursive: true })
+    await fs.writeFile(path.join(assetsDir, 'robin.png'), 'png-bytes')
+    const file = path.join(tmp, name, 'bulb.bulb.md')
+    await fs.writeFile(file, MARKDOWN)
+    return file
+  }
+
+  it('carries the assets folder itself — every push gesture (the mirror calls pushBulb directly), add → commit → prune', async () => {
+    const file = await wholeBulb('whole')
+    manifests['birds'] = [{ path: 'gone.png', size: 1, md5: 'aa' }]
+    const out = await pushBulb(target('birds', file), { token: 'tb_abc' })
+    expect(out).toMatchObject({ kind: 'pushed', assets: { uploaded: 1, unchanged: 0, deleted: ['gone.png'], base: 'https://assets.typebulb.com/u/ben/birds/' } })
+    expect(assetReqs.filter(r => r.slug === 'birds' && r.method === 'PUT').map(r => r.rel)).toEqual(['robin.png'])
+    expect(assetReqs.filter(r => r.slug === 'birds' && r.method === 'DELETE').map(r => r.rel)).toEqual(['gone.png'])
+    delete manifests['birds']
+  })
+
+  it('a 409 keeps the planned orphan: prune runs only after the text PUT commits (Invariant 5)', async () => {
+    const file = await wholeBulb('whole409')
+    manifests['stale'] = [{ path: 'gone.png', size: 1, md5: 'aa' }]
+    const out = await pushBulb(target('stale', file), { token: 'tb_abc' })
+    expect(out).toMatchObject({ kind: 'conflict', assets: { uploaded: 1, unchanged: 0, deleted: [] } })
+    expect(assetReqs.filter(r => r.slug === 'stale' && r.method === 'DELETE')).toEqual([])
+    delete manifests['stale']
+  })
+
+  it('an asset sync failure refuses the push before the text moves', async () => {
+    const file = await wholeBulb('overcap-push')
+    const before = (await fs.stat(file)).mtime.getTime()
+    const out = await pushBulb(target('overcap', file), { token: 'tb_abc' })
+    expect(out.kind).toBe('asset-error')
+    expect((await fs.stat(file)).mtime.getTime()).toBe(before)   // no stamp — the text never PUT
+  })
 })
 
 describe('syncAssets (TB-Assets-Push.md: push carries the folder)', () => {

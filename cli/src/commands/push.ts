@@ -1,8 +1,7 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import { createHash } from 'crypto'
 import { hostedAssetsBase } from 'typebulb/format'
-import { bulbMdUrl, resolveTarget, type PullTarget } from './pull.js'
+import { assetsWireBase, bulbMdUrl, encodeRel, errorFrom, fetchAssetManifest, mapLimit, md5hex, resolveTarget, type PullTarget } from './pull.js'
 import { bulbAssetsDir } from '../pipeline.js'
 
 /**
@@ -15,12 +14,14 @@ import { bulbAssetsDir } from '../pipeline.js'
  */
 
 export type PushOutcome =
-  | { kind: 'pushed'; created: boolean; serverStripped: boolean; updatedAt: number }
-  | { kind: 'conflict'; message: string }
-  | { kind: 'http-error'; status: number; message: string }
+  | { kind: 'pushed'; created: boolean; serverStripped: boolean; updatedAt: number; assets?: AssetsSummary }
+  | { kind: 'conflict'; message: string; assets?: AssetsSummary }
+  | { kind: 'http-error'; status: number; message: string; assets?: AssetsSummary }
+  | { kind: 'asset-error'; message: string }
 
-/** A relative asset path as URL segments (`sub/née.png` → `sub/n%C3%A9e.png`). */
-const encodeRel = (rel: string) => rel.split('/').map(encodeURIComponent).join('/')
+/** What the push did about assets, when the bulb has an `assets/` folder opinion at all.
+ *  `deleted`/`pruneError` are filled only on `pushed` — orphans prune after the commit point. */
+export type AssetsSummary = { uploaded: number; unchanged: number; deleted: string[]; base: string; pruneError?: string }
 
 /** Relative paths (forward-slashed) of all files under `dir`, [] when it doesn't exist. */
 async function listFilesRec(dir: string, prefix = ''): Promise<string[]> {
@@ -38,10 +39,6 @@ export type AssetsSyncResult =
   | { kind: 'synced'; uploaded: number; unchanged: number; toDelete: string[]; base: string }
   | { kind: 'sync-error'; message: string }
 
-/** The wire base all three asset verbs share (manifest GET, PUT, DELETE). */
-const assetsWireBase = (t: PullTarget) =>
-  `${t.origin}/u/${encodeURIComponent(t.userSlug)}/${encodeURIComponent(t.slug)}/assets`
-
 /** TB-Assets-Push.md Invariant 4: sync the bulb's `assets/` folder to typebulb-hosted R2 as a
  *  one-gesture clobber — upload new/changed (skip byte-identical by MD5), and *plan* the
  *  deletion of remote keys with no local file. Deletions come back as `toDelete`, pruned only
@@ -54,22 +51,15 @@ export async function syncAssets(target: PullTarget, opts: { token: string; time
   const auth = { Authorization: `Bearer ${opts.token}` }
 
   const assetsDir = bulbAssetsDir(target.dest)
-  // Absent folder = a consumer copy (pull never fetches folders): it has no asset opinion, so
-  // touch nothing remote — and skip the wire entirely (the common asset-less push costs zero
-  // requests). Deliberately emptying the remote takes an existing, empty assets/ folder.
+  // Absent folder = no asset opinion: touch nothing remote, skip the wire entirely (the common
+  // asset-less push costs zero requests). Pull materializes the folder now, so this is the rare
+  // hand-copied case; deliberately emptying the remote takes an existing, empty assets/ folder.
   if (!await fs.stat(assetsDir).then(s => s.isDirectory()).catch(() => false)) return { kind: 'skipped' }
   const rels = await listFilesRec(assetsDir)
 
-  let remote: { path: string; md5: string }[]
-  try {
-    const resp = await fetch(wireBase, { headers: auth, signal: AbortSignal.timeout(timeoutMs) })
-    if (!resp.ok) {
-      return { kind: 'sync-error', message: `manifest request failed (${resp.status}): ${errorFrom(await resp.text())}` }
-    }
-    remote = await resp.json()
-  } catch (e) {
-    return { kind: 'sync-error', message: e instanceof Error ? e.message : String(e) }
-  }
+  const manifest = await fetchAssetManifest(target, { token: opts.token, timeoutMs })
+  if ('error' in manifest) return { kind: 'sync-error', message: manifest.error }
+  const remote = manifest.entries
 
   if (!rels.length && !remote.length) return { kind: 'skipped' }
 
@@ -84,7 +74,7 @@ export async function syncAssets(target: PullTarget, opts: { token: string; time
     // references a not-yet-referenced key.
     await mapLimit(rels, 4, async rel => {
       const bytes = await fs.readFile(path.join(assetsDir, ...rel.split('/')))
-      if (remoteMd5.get(rel) === createHash('md5').update(bytes).digest('hex')) { unchanged++; return }
+      if (remoteMd5.get(rel) === md5hex(bytes)) { unchanged++; return }
       // No Content-Type header: the server derives the stored type from the extension
       // (TB-Assets-Push.md Invariant 9) — a client-asserted MIME is never trusted.
       const resp = await fetch(`${wireBase}/${encodeRel(rel)}`, {
@@ -125,34 +115,20 @@ export async function pruneAssets(target: PullTarget, rels: string[], opts: { to
   return { deleted }
 }
 
-/** Run `fn` over `items` with at most `limit` in flight; first rejection wins (rest may finish). */
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const queue = [...items]
-  const worker = async () => { for (let it = queue.shift(); it !== undefined; it = queue.shift()) await fn(it) }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-}
-
-/** The assets leg of a push, before the text PUT (TB-Assets-Push.md Invariant 5: the site never
- *  dangles): sync the folder as a manifest; a sync failure refuses the push. Prints the story;
- *  returns whether the push may proceed, plus the orphan keys to prune once the text PUT has
- *  committed. */
-async function assetsGate(target: PullTarget, token: string): Promise<{ proceed: boolean; toDelete?: string[] }> {
-  const sync = await syncAssets(target, { token })
-  if (sync.kind === 'sync-error') {
-    console.error(`assets sync failed: ${sync.message}\npush refused: the bulb text was not pushed.`)
-    return { proceed: false }
-  }
-  if (sync.kind === 'synced') {
-    console.log(`assets: ${sync.uploaded} uploaded, ${sync.unchanged} unchanged → ${sync.base}`)
-    return { proceed: true, toDelete: sync.toDelete }
-  }
-  return { proceed: true }
-}
-
-/** The transfer itself, separated from CLI messaging/exit codes so tests can drive it. */
+/** The whole transfer — assets and text — separated from CLI messaging/exit codes so every caller
+ *  gets it (TB-Assets-Push.md Invariant 11: assets follow every gesture; the mirror's push icon
+ *  calls this directly, and leaving the asset legs in `runPush` made that gesture text-only).
+ *  Ordering is Invariant 5: sync uploads before the text PUT, prune orphans only after it commits;
+ *  an asset sync failure refuses the push before the text moves. */
 export async function pushBulb(target: PullTarget, opts: { token: string; force?: boolean; timeoutMs?: number }): Promise<PushOutcome> {
   const markdown = await fs.readFile(target.dest, 'utf-8')
   const { mtime } = await fs.stat(target.dest)
+
+  const sync = await syncAssets(target, { token: opts.token, timeoutMs: opts.timeoutMs })
+  if (sync.kind === 'sync-error') return { kind: 'asset-error', message: sync.message }
+  const assets: AssetsSummary | undefined = sync.kind === 'synced'
+    ? { uploaded: sync.uploaded, unchanged: sync.unchanged, deleted: [], base: sync.base }
+    : undefined
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${opts.token}`,
@@ -168,18 +144,19 @@ export async function pushBulb(target: PullTarget, opts: { token: string; force?
   })
 
   const body = await resp.text()
-  if (resp.status === 409) return { kind: 'conflict', message: errorFrom(body) }
-  if (!resp.ok) return { kind: 'http-error', status: resp.status, message: errorFrom(body) }
+  if (resp.status === 409) return { kind: 'conflict', message: errorFrom(body), assets }
+  if (!resp.ok) return { kind: 'http-error', status: resp.status, message: errorFrom(body), assets }
 
   const r = JSON.parse(body) as { id: string; updatedAt: number; created: boolean; serverStripped: boolean }
   // Stamp mtime = the server's updatedAt: an unedited re-push stays non-stale, a remote edit
   // after this moment is stale. mtime IS the last-synced marker — no sidecar (Invariant 5).
   await fs.utimes(target.dest, new Date(), new Date(r.updatedAt))
-  return { kind: 'pushed', created: r.created, serverStripped: r.serverStripped, updatedAt: r.updatedAt }
-}
-
-function errorFrom(body: string): string {
-  try { return (JSON.parse(body) as { error?: string }).error || body } catch { return body }
+  if (assets && sync.kind === 'synced' && sync.toDelete.length) {
+    const prune = await pruneAssets(target, sync.toDelete, { token: opts.token, timeoutMs: opts.timeoutMs })
+    assets.deleted = prune.deleted
+    if (prune.error) assets.pruneError = prune.error
+  }
+  return { kind: 'pushed', created: r.created, serverStripped: r.serverStripped, updatedAt: r.updatedAt, assets }
 }
 
 export async function runPush(arg: string | undefined, opts: { force: boolean; mode?: string }): Promise<void> {
@@ -201,14 +178,7 @@ export async function runPush(arg: string | undefined, opts: { force: boolean; m
   const bulbUrl = `${target.origin}/u/${target.userSlug}/${target.slug}`
   const rel = path.relative(process.cwd(), target.dest) || target.dest
   let outcome: PushOutcome
-  let toDelete: string[] | undefined
   try {
-    const gate = await assetsGate(target, token)
-    if (!gate.proceed) {
-      process.exitCode = 1
-      return
-    }
-    toDelete = gate.toDelete
     outcome = await pushBulb(target, { token, force: opts.force })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -217,15 +187,19 @@ export async function runPush(arg: string | undefined, opts: { force: boolean; m
     return
   }
 
+  if (outcome.kind !== 'asset-error' && outcome.assets)
+    console.log(`assets: ${outcome.assets.uploaded} uploaded, ${outcome.assets.unchanged} unchanged → ${outcome.assets.base}`)
+
   switch (outcome.kind) {
+    case 'asset-error':
+      console.error(`assets sync failed: ${outcome.message}\npush refused: the bulb text was not pushed.`)
+      process.exitCode = 1
+      return
     case 'pushed': {
       console.log(`pushed ${rel} → ${bulbUrl}${outcome.created ? ' (created, unlisted)' : ''}`)
       if (outcome.serverStripped) console.log('note: the server.ts block was stripped on the server copy (CLI-only); your local file is untouched.')
-      if (toDelete?.length) {
-        const prune = await pruneAssets(target, toDelete, { token })
-        for (const d of prune.deleted) console.log(`  deleted ${d} (no longer in assets/)`)
-        if (prune.error) console.log(`note: asset cleanup incomplete — ${prune.error}; the next push will retry.`)
-      }
+      for (const d of outcome.assets?.deleted ?? []) console.log(`  deleted ${d} (no longer in assets/)`)
+      if (outcome.assets?.pruneError) console.log(`note: asset cleanup incomplete — ${outcome.assets.pruneError}; the next push will retry.`)
       return
     }
     case 'conflict':

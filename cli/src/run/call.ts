@@ -1,6 +1,6 @@
 import { Console } from 'node:console'
 import { loadEnv, reportEnv } from '../env.js'
-import { readBulb, importServerModule } from '../pipeline.js'
+import { readBulb, importServerModule, materializeBatchDir } from '../pipeline.js'
 import { BUILTINS, resolveServerFn, isAsyncGenerator } from '../serve/builtins.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 import { listBulbServers, serversForBulb, readServerLog, writeWaitCursor } from '../serve/serverRegistry.js'
@@ -27,7 +27,7 @@ export async function runCall(
   spec: CallSpec,
   mode: string | undefined,
   local: ResolvedLocalOverride | undefined,
-  dir: string | undefined,
+  batch: string | undefined,
 ): Promise<void> {
   // Reserve stdout for the result: route every console write — the env banner, server.ts top-level
   // logs, and the invoked function's own console.* — to stderr for the whole call (Invariant 2).
@@ -52,9 +52,13 @@ export async function runCall(
   if (!bulb.server) fail('This bulb has no **server.ts** block; nothing to call.')
   reportEnv(envResult, bulbPath, bulb.server)
 
+  // Materialize the batch folder before the module boots (TB-Batch.md Invariant 3): even a call
+  // that crashes in import or never writes leaves the batch discoverable, mtime = this invocation.
+  if (batch) await materializeBatchDir(bulbPath, batch)
+
   let exports: Record<string, Function>
   try {
-    exports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, dir)
+    exports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, batch)
   } catch (e) {
     fail(e instanceof Error ? e.message : String(e))
   }

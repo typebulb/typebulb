@@ -12,6 +12,7 @@ import { join, basename } from 'path'
 import { parseBulb } from 'typebulb/format'
 import { isServerOnly, toLocalBulb } from '../bulb/bulbParser.js'
 import { bulbName } from '../bulb/source.js'
+import { bulbDataDir } from '../pipeline.js'
 
 export interface BulbFileInfo {
   /** Absolute path to the .bulb.md. */
@@ -44,6 +45,25 @@ function walk(dir: string, depth: number, out: string[]): string[] {
     }
   }
   return out
+}
+
+/** A bulb's named batches — the immediate subdirectories of `<bulb-folder>/batches/`, newest
+ *  folder-mtime first (the boot-time touch makes that last-invocation order — TB-Batch.md
+ *  Invariant 3). Location is the marker: every directory here is a batch, nothing else ever is
+ *  (Invariant 1), so there's no stub file to check and no manifest to consult. */
+export function listBulbBatches(bulbPath: string): string[] {
+  const dir = join(bulbDataDir(bulbPath), 'batches')
+  let ents: Dirent[]
+  try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return [] }
+  return ents
+    .filter(e => e.isDirectory())
+    .map(e => {
+      let mtime = 0
+      try { mtime = statSync(join(dir, e.name)).mtimeMs } catch { /* vanished mid-list ⇒ sorts last */ }
+      return { name: e.name, mtime }
+    })
+    .sort((a, b) => b.mtime - a.mtime)
+    .map(b => b.name)
 }
 
 /** Every `*.bulb.md` under `cwd`, each with its frontmatter name (or filename stem),

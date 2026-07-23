@@ -5,6 +5,7 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { mkdtemp } from 'fs/promises'
 import { tmpdir } from 'os'
+import { createHash } from 'crypto'
 import { parsePullTarget, pullBulb, type PullTarget } from '../src/commands/pull.js'
 import { parseArgs } from '../src/args.js'
 import { parseBulbUrlText } from '../agents/core/client/util.js'
@@ -87,6 +88,7 @@ describe('parseBulbUrlText', () => {
 
 const MARKDOWN = '---\nformat: typebulb/v1\nname: Birds\n---\n\n**code.tsx**\n\n```tsx\nconsole.log(1)\n```\n'
 const LAST_MODIFIED = 'Wed, 15 Jul 2026 03:00:00 GMT'
+const md5 = (s: string) => createHash('md5').update(s).digest('hex')
 
 let server: http.Server
 let port: number
@@ -112,6 +114,19 @@ beforeAll(async () => {
     if (req.url === '/u/ben/birds.md') {
       res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Last-Modified': LAST_MODIFIED })
       res.end(MARKDOWN)
+    } else if (req.url === '/u/ben/pix.md') {
+      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Last-Modified': LAST_MODIFIED })
+      res.end(MARKDOWN)
+    } else if (req.url === '/u/ben/pix/assets') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify([
+        { path: 'a.png', size: 3, md5: md5('AAA') },
+        { path: 'sub/b.png', size: 3, md5: md5('BBB') },
+      ]))
+    } else if (req.url === '/u/ben/pix/assets/a.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png' }); res.end('AAA')
+    } else if (req.url === '/u/ben/pix/assets/sub/b.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png' }); res.end('BBB')
     } else if (req.url === '/u/ben/secret.md') {
       res.writeHead(401); res.end('Login required')
     } else if (req.url === '/u/ben/spa-fallback.md') {
@@ -193,5 +208,45 @@ describe('pullBulb', () => {
     expect(lastAuth).toBe('Bearer tb_abc')
     await pullBulb(target('birds', path.join(tmp, 'auth.bulb.md')), { force: true })
     expect(lastAuth).toBeUndefined()
+  })
+})
+
+// --- the assets leg: assets follow every gesture that moves a bulb (TB-Assets.md) ---
+
+describe('pullBulb — assets leg', () => {
+  const proj = () => path.join(tmp, 'pix', 'typebulbs', 'u', 'ben')
+  const bulb = () => path.join(proj(), 'pix.bulb.md')
+  const asset = (...p: string[]) => path.join(proj(), 'pix', 'assets', ...p)
+
+  it('downloads the folder beside the file', async () => {
+    const out = await pullBulb(target('pix', bulb()))
+    expect(out).toEqual({ kind: 'written', dest: bulb(), created: true, assets: { downloaded: 2, unchanged: 0, errors: [] } })
+    expect(await fs.readFile(asset('a.png'), 'utf-8')).toBe('AAA')
+    expect(await fs.readFile(asset('sub', 'b.png'), 'utf-8')).toBe('BBB')
+  })
+
+  it('a re-pull skips identical assets by md5', async () => {
+    expect(await pullBulb(target('pix', bulb()))).toEqual(
+      { kind: 'up-to-date', dest: bulb(), assets: { downloaded: 0, unchanged: 2, errors: [] } })
+  })
+
+  it('refuses a differing local asset without --force — nothing moved, text included', async () => {
+    const d = path.join(tmp, 'pix-conflict', 'typebulbs', 'u', 'ben', 'pix.bulb.md')
+    const a = path.join(tmp, 'pix-conflict', 'typebulbs', 'u', 'ben', 'pix', 'assets', 'a.png')
+    await fs.mkdir(path.dirname(a), { recursive: true })
+    await fs.writeFile(a, 'LOCAL')
+    expect(await pullBulb(target('pix', d))).toEqual({ kind: 'asset-conflict', dest: d, paths: ['a.png'] })
+    await expect(fs.access(d)).rejects.toThrow()
+    expect(await fs.readFile(a, 'utf-8')).toBe('LOCAL')
+
+    const forced = await pullBulb(target('pix', d), { force: true })
+    expect(forced.kind).toBe('written')
+    expect(await fs.readFile(a, 'utf-8')).toBe('AAA')
+  })
+
+  it('a bulb with no manifest pulls text-only (assets field absent)', async () => {
+    const out = await pullBulb(target('birds', path.join(tmp, 'noassets.bulb.md')), { force: true })
+    expect(out.kind).toBe('written')
+    expect((out as { assets?: unknown }).assets).toBeUndefined()
   })
 })

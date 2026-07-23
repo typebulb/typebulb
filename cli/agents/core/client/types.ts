@@ -128,8 +128,10 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
 export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[]; fork?: { count: number; sub: Msg[] } }
 
-export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; dir?: string; predicted?: string; denied?: string }
-export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean }
+export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; batch?: string; predicted?: string; denied?: string }
+// `batches` = the bulb's named batch scopes (TB-Batch.md), newest first — what the stopped row's
+// scope picker lists; empty/absent for the common batch-less bulb.
+export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean; batches?: string[] }
 // A typebulb.com remote bulb (tb.server.listSamples / listMyBulbs): a muted launcher row while no
 // local file exists — play pulls it to typebulbs/u/<user>/ and launches (server launcher.ts).
 export interface RemoteBulb { slug: string; name: string; description: string }
@@ -142,4 +144,4 @@ export interface BulbHit { path: string; hitCount: number; snippet: string }
 // pulled (its `path` is the project-relative path the pull will land at — the owner rides in the
 // path, TB-Push-Pull.md Invariant 4). `group` = a catalog fold header (one per remote owner slug,
 // folding `count` rows), a synthetic row with no bulb behind it.
-export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; running?: RunningServer; hitCount?: number; snippet?: string; remote?: RemoteBulb; group?: { user: string; count: number } }
+export interface BulbRow { path: string; name: string; recent: number; trusted?: boolean; batches?: string[]; running?: RunningServer; hitCount?: number; snippet?: string; remote?: RemoteBulb; group?: { user: string; count: number } }

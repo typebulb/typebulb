@@ -3,10 +3,9 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
-import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir } from '../pipeline.js'
+import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir, conventionalIdentity, materializeBatchDir } from '../pipeline.js'
 import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
-import { conventionalIdentity } from '../commands/pull.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
 import { watchPath } from '../serve/watcher.js'
@@ -52,17 +51,22 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let runId = 1
   console.log(runMarker(runId))
 
+  // Boot-time materialize + touch of the batch folder (TB-Batch.md Invariant 3), before anything
+  // can fail — a compile error still leaves the batch discoverable.
+  if (args.batch) await materializeBatchDir(bulbPath, args.batch)
+
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)
-  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, args.dir)
+  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, args.batch)
   reportEnv(envResult, bulbPath, bulb.server)
 
   // Bulb assets (TB-Assets.md): /assets/ serves the bulb's own folder's assets/ subfolder
-  // (birds.bulb.md → birds/assets/). Under --dir the batch's assets/ shadows the authored one —
+  // (birds.bulb.md → birds/assets/). Under --batch the batch's assets/ shadows the authored one —
   // so a batch run's generated `tb.fs.write('assets/x')` serves, and authored assets still show
-  // through where the batch has no override (batch shadows authored shadows remote).
+  // through where the batch has no override (batch shadows authored shadows remote — TB-Batch.md
+  // Invariant 6).
   const assetsDirs = [
-    ...(args.dir ? [bulbAssetsDir(bulbPath, args.dir)] : []),
+    ...(args.batch ? [bulbAssetsDir(bulbPath, args.batch)] : []),
     bulbAssetsDir(bulbPath),
   ]
   // Remote layer of the shadow chain: the typebulb-hosted base derived from a conventional
@@ -87,7 +91,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     makeServerOptions: (port) => ({
       getHtml: () => html,
       basePath,
-      fsBase: bulbDataDir(bulbPath, args.dir),
+      fsBase: bulbDataDir(bulbPath, args.batch),
       port,
       reloadEmitter,
       messageEmitter,
@@ -107,7 +111,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       trusted: args.trust,
       trustHint,
     }),
-    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, dir: args.dir, mode: args.mode, predicted }),
+    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, batch: args.batch, mode: args.mode, predicted }),
   })
 
   if (args.trust) console.log('  trust: granted (filesystem, AI, server.ts enabled)')
@@ -137,7 +141,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
           if (seq !== compileSeq) return
           try {
             console.log('Recompiling...')
-            const result = await loadAndCompile(bulbPath, true, args.trust, local, args.dir)
+            const result = await loadAndCompile(bulbPath, true, args.trust, local, args.batch)
             html = result.html
             serverExports = result.serverExports
             bulb = result.bulb

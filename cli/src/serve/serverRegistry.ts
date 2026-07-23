@@ -31,10 +31,10 @@ export interface BulbServer {
   startedAt: number
   /** Launched with --trust (filesystem / AI / server.ts enabled)? */
   trust?: boolean
-  /** `--dir <sub>` batch scope the run was launched with (TB-FS.md) — recorded so a host can show
-   *  where the run's state lives, and so a relaunch reproduces it (launchBulbServer). */
-  dir?: string
-  /** `--mode <name>` env mode the run was launched with (TB-Env.md), preserved like `dir`. */
+  /** `--batch <name>` scope the run was launched with (TB-Batch.md Invariant 5) — recorded so a
+   *  host can show where the run's state lives, and so a relaunch reproduces it (launchBulbServer). */
+  batch?: string
+  /** `--mode <name>` env mode the run was launched with (TB-Env.md), preserved like `batch`. */
   mode?: string
   /** Human label of a capability the proactive scan predicts this (untrusted) bulb will need,
    *  set at register time from predictTrust. Probabilistic, NOT enforcement — it only lets a
@@ -390,14 +390,14 @@ function binPath(): string {
  */
 export function bulbServerCommand(
   file: string,
-  opts: { open?: boolean; trust?: boolean; dir?: string; mode?: string } = {},
+  opts: { open?: boolean; trust?: boolean; batch?: string; mode?: string } = {},
 ): { command: string; args: string[] } {
   return {
     command: process.execPath,
     args: [
       binPath(),
       ...(opts.trust ? ['--trust'] : []),
-      ...(opts.dir ? ['--dir', opts.dir] : []),
+      ...(opts.batch ? ['--batch', opts.batch] : []),
       ...(opts.mode ? ['--mode', opts.mode] : []),
       file,
       ...(opts.open === false ? ['--no-open'] : []),
@@ -446,20 +446,20 @@ async function launchDetached(
 /**
  * Launch a dev server for `file`, replacing any live one — one server per bulb file, the
  * newest launch wins with its own flags (TB-CLI.md) — except the replaced run's invocation
- * scope (`--dir`/`--mode`), inherited when the caller passes none: a host gesture about trust
- * (elevate, the trust toggle) must not silently unscope a batch run (TB-FS.md). The spawned runner stops same-file
+ * scope (`--batch`/`--mode`), inherited when the caller passes none: a host gesture about trust
+ * (elevate, the trust toggle) must not silently unscope a batch run (TB-Batch.md Invariant 5). The spawned runner stops same-file
  * servers itself at boot, so a bare terminal run holds the invariant too; the pre-spawn stop
  * here is what keeps the registration poll honest — with the old entry gone, any match the
  * poll finds is the child just spawned, never the doomed predecessor.
  */
 export async function launchBulbServer(
   file: string,
-  opts: { cwd?: string; open?: boolean; trust?: boolean; dir?: string; mode?: string } = {},
+  opts: { cwd?: string; open?: boolean; trust?: boolean; batch?: string; mode?: string } = {},
 ): Promise<BulbServer> {
   const cwd = opts.cwd ?? process.cwd()
   const abs = path.resolve(cwd, file)
   const [prior] = await stopServersForBulb(abs)
-  const merged = { ...opts, dir: opts.dir ?? prior?.dir, mode: opts.mode ?? prior?.mode }
+  const merged = { ...opts, batch: opts.batch ?? prior?.batch, mode: opts.mode ?? prior?.mode }
   const byFile = async () => serversForBulb(await listBulbServers(), abs)[0]
   return launchDetached(byFile, bulbServerCommand(file, merged), cwd, path.basename(file))
 }

@@ -17,16 +17,35 @@ export async function findBulbFile(dir: string): Promise<string | null> {
 }
 
 /** A bulb's folder — the sibling dir named for the filename stem, absolute (TB-FS.md).
- *  Relative tb.fs paths resolve here; tb.dir exposes it to bulb code. `sub` (the --dir flag)
- *  scopes it to a subfolder for one invocation — the bulb's code stays batch-unaware. */
-export function bulbDataDir(bulbPath: string, sub?: string): string {
+ *  Relative tb.fs paths resolve here; tb.dir exposes it to bulb code. `batch` (the --batch flag)
+ *  re-roots it to `batches/<name>` for one invocation — the bulb's code stays batch-unaware
+ *  (TB-Batch.md Invariant 2). */
+export function bulbDataDir(bulbPath: string, batch?: string): string {
   const abs = path.resolve(bulbPath)
   const root = path.join(path.dirname(abs), path.basename(abs).replace(/\.bulb\.md$/, ''))
-  return sub ? path.join(root, sub) : root
+  return batch ? path.join(root, 'batches', batch) : root
+}
+
+/** Materialize a batch's folder at boot (TB-Batch.md Invariant 3): the folder's existence is what
+ *  hosts list, and its own mtime is the last-invocation time — a results-file rewrite touches the
+ *  file, not its parent dir — so create AND touch on every scoped boot, never on first write. */
+export async function materializeBatchDir(bulbPath: string, batch: string): Promise<void> {
+  const dir = bulbDataDir(bulbPath, batch)
+  await fs.mkdir(dir, { recursive: true })
+  const now = new Date()
+  await fs.utimes(dir, now, now).catch(() => {})
 }
 
 /** The bulb's served/pushed assets folder — `assets/` inside its data dir (TB-Assets.md Invariant 1). */
-export const bulbAssetsDir = (bulbPath: string, sub?: string) => path.join(bulbDataDir(bulbPath, sub), 'assets')
+export const bulbAssetsDir = (bulbPath: string, batch?: string) => path.join(bulbDataDir(bulbPath, batch), 'assets')
+
+/** A conventional path's remote identity (typebulbs/u/<user>/<slug>.bulb.md), undefined otherwise —
+ *  what derives the hosted-assets base (TB-Assets-Push.md Invariant 2) and anchors pull/push. */
+export function conventionalIdentity(absPath: string): { userSlug: string; slug: string } | undefined {
+  const [folder, uDir, userSlug, file] = absPath.split(path.sep).slice(-4)
+  if (folder !== 'typebulbs' || uDir !== 'u' || !userSlug || !file?.endsWith('.bulb.md')) return undefined
+  return { userSlug, slug: file.slice(0, -'.bulb.md'.length) }
+}
 
 /**
  * Read a .bulb.md file from disk and pre-parse the bits the rest of the CLI
@@ -52,7 +71,7 @@ export function serverModulePath(bulbPath: string): string {
 }
 
 /** Compile server source, write to `.typebulb/<slug>.server.mjs`, and dynamic-import it */
-export async function importServerModule(serverSource: string, bulbPath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>, dir?: string): Promise<Record<string, Function>> {
+export async function importServerModule(serverSource: string, bulbPath: string, local?: ResolvedLocalOverride, dependencies?: Record<string, string>, batch?: string): Promise<Record<string, Function>> {
   const compiled = transpile(serverSource, { serverOnly: true })
   if (compiled.error) {
     throw new Error(`Server compilation error: ${compiled.error}`)
@@ -79,7 +98,7 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models / tb.dir) before it runs — its free `tb`
   // reference resolves to this, the same way the browser shim provides one. Must precede the import
   // (server.ts top-level code runs on import). Only reached under trust (this import is trust-gated).
-  installServerTb(bulbDataDir(bulbPath, dir))
+  installServerTb(bulbDataDir(bulbPath, batch))
 
   // Cache-bust with query param so re-imports pick up changes
   const fileUrl = `${pathToFileURL(serverPath).href}?t=${Date.now()}`
@@ -87,7 +106,7 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   return mod
 }
 
-export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, dir?: string) {
+export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, batch?: string) {
   const { bulb, config } = await readBulb(bulbPath)
   const dataChunks = splitIntoChunks(bulb.data)
 
@@ -139,7 +158,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     data: dataChunks,
     insight: bulb.insight,
     importMap,
-    dir: bulbDataDir(bulbPath, dir),
+    dir: bulbDataDir(bulbPath, batch),
     watch,
   })
 
@@ -153,7 +172,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // the privileged act — never run it without trust).
   let serverExports: Record<string, Function> | null = null
   if (bulb.server && trusted) {
-    serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, dir)
+    serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, batch)
   }
 
   return { html, bulb, serverExports }

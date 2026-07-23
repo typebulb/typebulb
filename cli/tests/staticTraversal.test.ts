@@ -119,7 +119,7 @@ describe('serveStaticDir refuses traversal out of the served dir', () => {
  * The bulb-assets route (TB-Assets.md): same URL shape, different contract — media MIME types,
  * no-cache, and a local miss 302s to the bulb's remote base (local shadows remote). A
  * traversal must 404, never redirect (a redirect would leak the probe to the remote host).
- * `dirs` is the --dir shadowing chain: the batch's assets/ precedes the authored one.
+ * `dirs` is the --batch shadowing chain: the batch's assets/ precedes the authored one.
  */
 describe('bulbAssets route', () => {
   let srv: ServerInstance
@@ -195,6 +195,13 @@ describe('bulbAssets route', () => {
   it('code/markup extensions refuse even when the file exists — never served, never redirected', async () => {
     bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
     const r = await get('/assets/sneaky.js')
+    expect(r.status).toBe(403)
+    expect(r.body).toContain('not an asset type')
+  })
+
+  it('an encoded dot cannot smuggle a forbidden extension past the denylist', async () => {
+    bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
+    const r = await get('/assets/sneaky%2ejs')   // decodes to sneaky.js — must refuse, not serve
     expect(r.status).toBe(403)
     expect(r.body).toContain('not an asset type')
   })

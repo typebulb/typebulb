@@ -1,14 +1,15 @@
 # typebulb
 
-**Typebulb** runs apps in markdown files called **bulbs**. To run bulbs:
+**Typebulb** runs apps in markdown files called **bulbs**. Perfect for tools, visualizations & experiments. A bulb is a single self-contained file, so an agent can embed a working app right in its reply, and the same file can be published as a stand-alone web app. The *"markdown with code blocks"* format is one LLMs find natural to write.
 
-* `npx typebulb`. When you want a quick local app or tool where the overhead of an entire npm project is overkill *(trivial for your LLM to convert to when you actually need to)*. Can be entirely client code, or both client and nodejs code that talk via a secure bridge.
-* `npx typebulb agent`. When you want to view agent conversations with embedded bulbs in the agent messages, also providing a finder/launcher for your local bulbs. Supports Claude Code and Pi agent harnesses; tell your agent to run it.
-* **[typebulb.com](https://typebulb.com)**. When you want to share tools, visualizations, experiments etc. See [FAQ](https://typebulb.com/faq).
+Two ways to create and run bulbs:
 
-The `typebulb` CLI enables the first two cases, by compiling and serving hot-reloadable bulbs locally.
+* **typebulb CLI**: Lets a coding agent (Claude Code or Pi) build and run bulbs locally. Local bulbs can also call Node.js via a secure bridge.
+* **typebulb.com**: Share and publish bulbs. Also the quickest way to test AI models (BYOK) with zero setup. See [FAQ](https://typebulb.com/faq).
 
-A `.bulb.md` file bundles code, styles, data, and config in one file.
+One API runs everywhere: the same bulb works locally and in typebulb.com's sandbox, and can call AI models at runtime.
+
+This document is dedicated to the typebulb CLI. At its core, it compiles and serves hot-reloadable bulbs locally. A `.bulb.md` file bundles code, styles, data, and config in one file.
 
 >This document doubles as a skill: it is written so an LLM agent can read it and successfully write and run bulbs with the typebulb CLI.
 
@@ -20,7 +21,7 @@ A `.bulb.md` file bundles code, styles, data, and config in one file.
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
 - **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
-- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes); relative paths land in the bulb's own folder (`--dir <sub>` scopes a run to a subfolder of it). Requires `--trust`.
+- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes); relative paths land in the bulb's own folder (`--batch <name>` scopes a run to `batches/<name>` inside it). Requires `--trust`.
 - **Hot reload** — Recompiles on save and refreshes the browser (on by default; disable with `--no-watch`)
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
@@ -61,7 +62,7 @@ typebulb --no-watch <file>     Disable hot reload
 typebulb --port 3333 <file>    Custom port
 typebulb --no-open <file>      Don't auto-open browser
 typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
-typebulb --dir <sub> <file>    Scope tb.dir + relative tb.fs paths to <bulb-folder>/<sub> (batch runs)
+typebulb --batch <name> <file> Scope tb.dir + relative tb.fs paths to <bulb-folder>/batches/<name> (batch runs)
 typebulb --trust <file>        Grant filesystem + AI + server.ts for this run (default: Restricted)
 typebulb --no-trust <file>     Force Restricted even if the bulb is remembered-trusted
 typebulb --server <file>       Run server.ts only, no web server (needs --trust)
@@ -286,7 +287,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
-- **Batch runs: scope with `--dir`, don't hand-roll plumbing** — `--dir batch2` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batch2/`; the bulb's code stays batch-unaware, and an unscoped run sees batches as ordinary subfolders.
+- **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
@@ -440,9 +441,9 @@ The user can proxy claude with the agent mirror's model switcher, to any model o
 
 One bulb per command, between typebulb.com and its conventional local file — the path IS the remote identity: `typebulbs/u/ben/birds.bulb.md` ↔ `typebulb.com/u/ben/birds`.
 
-- **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place). Unlisted and public bulbs need no login. A local file with real changes is refused; `--force` overwrites it.
+- **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place) — brings the bulb's `assets/` folder along. Unlisted and public bulbs need no login. A local file or asset with real changes is refused; `--force` overwrites it.
 - **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.
-- **Assets**: push carries the bulb's `assets/` folder — files upload to typebulb's asset host and the published bulb serves them with zero config (quotas apply; refusals say so). A local file shadows its hosted copy.
+- **Assets**: push and pull carry the bulb's `assets/` folder both ways — files upload to typebulb's asset host and the published bulb serves them with zero config (quotas apply; refusals say so). A local file shadows its hosted copy.
 - **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm. Pasting any bulb URL into its filter offers a pull-on-play row.
 - `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
 

@@ -249,11 +249,11 @@ describe('parseConfig', () => {
   })
 })
 
-  describe('hostedAssetsBase', () => {
-    it('derives from identity, URL-encoded', () => {
-      expect(hostedAssetsBase('ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
-      expect(hostedAssetsBase('bén', 'my birds')).toBe('https://assets.typebulb.com/u/b%C3%A9n/my%20birds/')
-    })
+describe('hostedAssetsBase', () => {
+  it('derives from identity, URL-encoded', () => {
+    expect(hostedAssetsBase('ben', 'birds')).toBe('https://assets.typebulb.com/u/ben/birds/')
+    expect(hostedAssetsBase('bén', 'my birds')).toBe('https://assets.typebulb.com/u/b%C3%A9n/my%20birds/')
+  })
 })
 
 describe('forbiddenAssetExt', () => {

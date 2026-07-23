@@ -1,14 +1,17 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { createHash } from 'crypto'
 import { loadEnv } from '../env.js'
 import { parseBulb, orderedKinds, blocks } from 'typebulb/format'
+import { bulbAssetsDir, conventionalIdentity } from '../pipeline.js'
 
 /**
  * `typebulb pull <url | file>` — fetch one bulb from typebulb.com into its conventional local
- * file (TB-Push-Pull.md). Explicit whole-file transfer, never sync: a differing local file is
- * refused with both timestamps unless --force. The wire format is the public raw `.bulb.md`
- * (`GET <origin>/u/<user>/<slug>.md`); unlisted/public bulbs need no auth, a TYPEBULB_TOKEN
- * (when set) rides along and unlocks the owner's private bulbs.
+ * file (TB-Push-Pull.md), **assets folder included** (TB-Assets.md: assets follow every gesture
+ * that moves a bulb — a pulled copy is the whole bulb, not just its text). Explicit whole-bulb
+ * transfer, never sync: a differing local file OR asset is refused unless --force. The wire is
+ * the public raw `.bulb.md` GET plus the asset manifest/bytes GETs (visibility is the auth on
+ * all of them); a TYPEBULB_TOKEN (when set) rides along and unlocks the owner's private bulbs.
  */
 
 const DEFAULT_ORIGIN = 'https://typebulb.com'
@@ -16,17 +19,52 @@ const DEFAULT_ORIGIN = 'https://typebulb.com'
 /** The conventional local home of a remote bulb — the path IS the remote identity (Invariant 4). */
 export const bulbRelPath = (userSlug: string, slug: string) => path.join('typebulbs', 'u', userSlug, `${slug}.bulb.md`)
 
-/** A conventional path's remote identity (typebulbs/u/<user>/<slug>.bulb.md), undefined otherwise —
- *  what derives the hosted-assets base (TB-Assets-Push.md Invariant 2) and anchors pull/push. */
-export function conventionalIdentity(absPath: string): { userSlug: string; slug: string } | undefined {
-  const [folder, uDir, userSlug, file] = absPath.split(path.sep).slice(-4)
-  if (folder !== 'typebulbs' || uDir !== 'u' || !userSlug || !file?.endsWith('.bulb.md')) return undefined
-  return { userSlug, slug: file.slice(0, -'.bulb.md'.length) }
-}
-
 /** The one wire URL both directions speak: the public raw-markdown shape (TB-Push-Pull.md Invariant 2). */
 export const bulbMdUrl = (t: PullTarget) =>
   `${t.origin}/u/${encodeURIComponent(t.userSlug)}/${encodeURIComponent(t.slug)}.md`
+
+/** A relative asset path as URL segments (`sub/née.png` → `sub/n%C3%A9e.png`). */
+export const encodeRel = (rel: string) => rel.split('/').map(encodeURIComponent).join('/')
+
+/** The wire base all four asset verbs share (manifest GET, bytes GET, PUT, DELETE). */
+export const assetsWireBase = (t: PullTarget) =>
+  `${t.origin}/u/${encodeURIComponent(t.userSlug)}/${encodeURIComponent(t.slug)}/assets`
+
+/** Run `fn` over `items` with at most `limit` in flight; first rejection wins (rest may finish). */
+export async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  const queue = [...items]
+  const worker = async () => { for (let it = queue.shift(); it !== undefined; it = queue.shift()) await fn(it) }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
+
+/** Content MD5 as hex — the manifest's compare key on both sides of the wire (R2's etag). */
+export const md5hex = (bytes: Uint8Array | string) => createHash('md5').update(bytes).digest('hex')
+
+/** `{error}` JSON's message when the body is that shape, else the raw body. */
+export function errorFrom(body: string): string {
+  try { return (JSON.parse(body) as { error?: string }).error || body } catch { return body }
+}
+
+export type AssetManifestEntry = { path: string; md5: string }
+
+/** The remote asset manifest, or the reason it couldn't be had — shared by pull's plan and
+ *  push's sync, each keeping its own policy (pull degrades to text-only, push refuses). A 200
+ *  that isn't JSON is the SPA-shell trap (TB-Push-Pull.md appendix): a wrong origin. */
+export async function fetchAssetManifest(target: PullTarget, opts: { token?: string; timeoutMs?: number }): Promise<{ entries: AssetManifestEntry[] } | { error: string }> {
+  try {
+    const resp = await fetch(assetsWireBase(target), {
+      headers: opts.token ? { Authorization: `Bearer ${opts.token}` } : {},
+      signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
+    })
+    if (!resp.ok) return { error: `manifest request failed (${resp.status}): ${errorFrom(await resp.text())}` }
+    if (!resp.headers.get('content-type')?.includes('json')) return { error: 'manifest response is not JSON — wrong origin?' }
+    return { entries: await resp.json() as AssetManifestEntry[] }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+type PullOpts = { force?: boolean; token?: string; timeoutMs?: number }
 
 /** Shared command preamble: load the env cascade, resolve the origin, parse the target (exits on
  *  a bad argument — parse errors are usage errors). */
@@ -82,14 +120,71 @@ export function parsePullTarget(arg: string, cwd: string, defaultOrigin: string)
 }
 
 export type PullOutcome =
-  | { kind: 'written'; dest: string; created: boolean }
-  | { kind: 'up-to-date'; dest: string }
+  | { kind: 'written'; dest: string; created: boolean; assets?: AssetPull }
+  | { kind: 'up-to-date'; dest: string; assets?: AssetPull }
   | { kind: 'conflict'; dest: string; localMtime: Date; remoteLastModified: string | null }
+  | { kind: 'asset-conflict'; dest: string; paths: string[] }
   | { kind: 'http-error'; status: number }
   | { kind: 'not-markdown'; contentType: string | null }
 
+/** The assets leg's outcome, attached to written/up-to-date. Absent = the leg didn't run (the
+ *  manifest was empty or unavailable — an older server, a dev host without the binding). */
+export type AssetPull = { downloaded: number; unchanged: number; errors: string[] }
+
+type AssetPlan =
+  | { kind: 'none' }
+  | { kind: 'conflict'; paths: string[] }
+  | { kind: 'plan'; toGet: string[]; unchanged: number }
+
+/** Diff the remote manifest against the local assets/ folder: missing → download, identical
+ *  (md5) → skip, differing → conflict unless force — the text's one conflict resolution, applied
+ *  to bytes. A manifest the server can't or won't give (older server, dev Node without the R2
+ *  binding, a private bulb without its owner's token) skips the leg; the 302 chain still serves. */
+async function planAssetPull(target: PullTarget, opts: PullOpts): Promise<AssetPlan> {
+  const manifest = await fetchAssetManifest(target, opts)
+  if ('error' in manifest || !manifest.entries.length) return { kind: 'none' }
+  const remote = manifest.entries
+
+  const dir = bulbAssetsDir(target.dest)
+  const toGet: string[] = []
+  const conflicts: string[] = []
+  let unchanged = 0
+  for (const r of remote) {
+    const local = await fs.readFile(path.join(dir, ...r.path.split('/'))).catch(() => undefined)
+    if (local === undefined) toGet.push(r.path)
+    else if (md5hex(local) === r.md5) unchanged++
+    else if (opts.force) toGet.push(r.path)
+    else conflicts.push(r.path)
+  }
+  return conflicts.length ? { kind: 'conflict', paths: conflicts } : { kind: 'plan', toGet, unchanged }
+}
+
+/** Download the planned files (bounded concurrency); per-file failures collect rather than
+ *  abort — a re-pull re-plans exactly the missing ones (md5-skip makes it idempotent). */
+async function downloadAssets(target: PullTarget, plan: { toGet: string[]; unchanged: number }, opts: PullOpts): Promise<AssetPull> {
+  const dir = bulbAssetsDir(target.dest)
+  const errors: string[] = []
+  let downloaded = 0
+  await mapLimit(plan.toGet, 4, async rel => {
+    try {
+      const resp = await fetch(`${assetsWireBase(target)}/${encodeRel(rel)}`, {
+        headers: opts.token ? { Authorization: `Bearer ${opts.token}` } : {},
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+      })
+      if (!resp.ok) { errors.push(`${rel}: HTTP ${resp.status}`); return }
+      const dest = path.join(dir, ...rel.split('/'))
+      await fs.mkdir(path.dirname(dest), { recursive: true })
+      await fs.writeFile(dest, new Uint8Array(await resp.arrayBuffer()))
+      downloaded++
+    } catch (e) {
+      errors.push(`${rel}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  })
+  return { downloaded, unchanged: plan.unchanged, errors }
+}
+
 /** The transfer itself, separated from CLI messaging/exit codes so tests can drive it. */
-export async function pullBulb(target: PullTarget, opts: { force?: boolean; token?: string; timeoutMs?: number } = {}): Promise<PullOutcome> {
+export async function pullBulb(target: PullTarget, opts: PullOpts = {}): Promise<PullOutcome> {
   const resp = await fetch(bulbMdUrl(target), {
     headers: opts.token ? { Authorization: `Bearer ${opts.token}` } : {},
     signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
@@ -102,21 +197,29 @@ export async function pullBulb(target: PullTarget, opts: { force?: boolean; toke
 
   let existing: string | undefined
   try { existing = await fs.readFile(target.dest, 'utf-8') } catch {}
-  if (existing !== undefined) {
-    if (bulbEquivalent(existing, markdown)) return { kind: 'up-to-date', dest: target.dest }
-    if (!opts.force) {
-      const { mtime } = await fs.stat(target.dest)
-      return { kind: 'conflict', dest: target.dest, localMtime: mtime, remoteLastModified: resp.headers.get('last-modified') }
-    }
+  const upToDate = existing !== undefined && bulbEquivalent(existing, markdown)
+  if (existing !== undefined && !upToDate && !opts.force) {
+    const { mtime } = await fs.stat(target.dest)
+    return { kind: 'conflict', dest: target.dest, localMtime: mtime, remoteLastModified: resp.headers.get('last-modified') }
   }
 
-  await fs.mkdir(path.dirname(target.dest), { recursive: true })
-  await fs.writeFile(target.dest, markdown)
-  // Stamp mtime = the server's updatedAt (when sent): mtime is the last-synced marker push's
-  // If-Unmodified-Since guard reads — a pulled-then-pushed file round-trips with no bookkeeping.
-  const lastModified = new Date(resp.headers.get('last-modified') ?? '')
-  if (!isNaN(lastModified.getTime())) await fs.utimes(target.dest, new Date(), lastModified)
-  return { kind: 'written', dest: target.dest, created: existing === undefined }
+  // The assets leg, planned BEFORE the text write so an asset conflict refuses with nothing
+  // half-moved — the folder is part of the bulb (TB-Assets.md).
+  const plan = await planAssetPull(target, opts)
+  if (plan.kind === 'conflict') return { kind: 'asset-conflict', dest: target.dest, paths: plan.paths }
+
+  if (!upToDate) {
+    await fs.mkdir(path.dirname(target.dest), { recursive: true })
+    await fs.writeFile(target.dest, markdown)
+    // Stamp mtime = the server's updatedAt (when sent): mtime is the last-synced marker push's
+    // If-Unmodified-Since guard reads — a pulled-then-pushed file round-trips with no bookkeeping.
+    const lastModified = new Date(resp.headers.get('last-modified') ?? '')
+    if (!isNaN(lastModified.getTime())) await fs.utimes(target.dest, new Date(), lastModified)
+  }
+  const assets = plan.kind === 'plan' ? await downloadAssets(target, plan, opts) : undefined
+  return upToDate
+    ? { kind: 'up-to-date', dest: target.dest, assets }
+    : { kind: 'written', dest: target.dest, created: existing === undefined, assets }
 }
 
 /** Same bulb, not same bytes: the remote stores parsed blocks and re-serializes canonically, so
@@ -154,9 +257,11 @@ export async function runPull(arg: string | undefined, opts: { force: boolean; m
   switch (outcome.kind) {
     case 'written':
       console.log(`pulled ${bulbUrl} → ${rel}${outcome.created ? '' : ' (overwritten)'}`)
+      reportAssets(outcome.assets)
       return
     case 'up-to-date':
       console.log(`up to date: ${rel}`)
+      reportAssets(outcome.assets)
       return
     case 'conflict':
       console.error(
@@ -164,6 +269,14 @@ export async function runPull(arg: string | undefined, opts: { force: boolean; m
         `  local file modified   ${outcome.localMtime.toISOString()}\n` +
         `  remote last saved     ${outcome.remoteLastModified ?? 'unknown'}\n` +
         `Re-run with --force to overwrite the local file.`
+      )
+      process.exitCode = 1
+      return
+    case 'asset-conflict':
+      console.error(
+        `Refusing to overwrite local assets that differ from the hosted copies:\n` +
+        outcome.paths.map(p => `  assets/${p}`).join('\n') +
+        `\nRe-run with --force to overwrite them.`
       )
       process.exitCode = 1
       return
@@ -180,4 +293,12 @@ export async function runPull(arg: string | undefined, opts: { force: boolean; m
       )
       process.exitCode = 1
   }
+}
+
+/** The assets line under the pull's own: silent when the leg didn't run or had nothing to do. */
+function reportAssets(a?: AssetPull): void {
+  if (!a || (!a.downloaded && !a.errors.length)) return
+  console.log(`assets: ${a.downloaded} downloaded${a.unchanged ? `, ${a.unchanged} unchanged` : ''}`)
+  for (const e of a.errors) console.error(`  asset failed — ${e} (a re-pull retries just the missing ones)`)
+  if (a.errors.length) process.exitCode = 1
 }

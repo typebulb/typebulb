@@ -1,6 +1,6 @@
 import * as path from 'path'
 import { loadEnv, reportEnv } from '../env.js'
-import { readBulb, importServerModule } from '../pipeline.js'
+import { readBulb, importServerModule, materializeBatchDir } from '../pipeline.js'
 import { watchPath } from '../serve/watcher.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
@@ -8,15 +8,19 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * Server mode: run only the `server.ts` section directly in Node — compile, dynamic-import, print to
  * stdout. No HTTP server, no browser. Watch mode re-runs on file changes.
  */
-export async function runConsole(bulbPath: string, watch: boolean, mode: string | undefined, local: ResolvedLocalOverride | undefined, dir: string | undefined) {
+export async function runConsole(bulbPath: string, watch: boolean, mode: string | undefined, local: ResolvedLocalOverride | undefined, batch: string | undefined) {
   const envResult = loadEnv(mode)
   let reported = false
+
+  // Boot-time materialize + touch (TB-Batch.md Invariant 3), once per invocation — a watch re-run
+  // is the same invocation, not a new one.
+  if (batch) await materializeBatchDir(bulbPath, batch)
 
   const run = async () => {
     const { bulb, config } = await readBulb(bulbPath)
     // Report once: env loads before the server import below (which reads process.env at import).
     if (!reported) { reportEnv(envResult, bulbPath, bulb.server); reported = true }
-    await importServerModule(bulb.server!, bulbPath, local, config.dependencies, dir)
+    await importServerModule(bulb.server!, bulbPath, local, config.dependencies, batch)
   }
 
   console.log(`Running ${path.basename(bulbPath)}...`)

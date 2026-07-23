@@ -1,4 +1,3 @@
-import * as path from 'path'
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 
 /** `send --wait` (no value) waits this long for a page to (re)attach, then bounds the reply hold.
@@ -45,11 +44,12 @@ export interface CliArgs {
   /** `--mode <name>`: also load `.env.<name>` (+ `.env.<name>.local`) on top of the base cascade.
    *  Free-form; selects nothing by default (TB-Env.md). */
   mode?: string
-  /** `--dir <sub>`: scope the bulb's dir to a subfolder — `tb.dir` and relative `tb.fs` paths land
-   *  in `<bulb-folder>/<sub>` for this invocation (per-call under `call`; launch-scoped when
-   *  serving). Batch runs without the bulb knowing (TB-FS.md). Always a relative subpath —
-   *  absolute paths and `..` are rejected at parse, so "one folder per bulb" stays structural. */
-  dir?: string
+  /** `--batch <name>`: scope the invocation to a named batch — `tb.dir` and relative `tb.fs` paths
+   *  land in `<bulb-folder>/batches/<name>` for this invocation (per-call under `call`;
+   *  launch-scoped when serving). Batch runs without the bulb knowing (TB-Batch.md). A single
+   *  folder name — separators and dot segments are rejected at parse, so "list the immediate
+   *  subdirectories of batches/" stays the complete enumeration. */
+  batch?: string
   /** `logs --follow`: stream new console output until interrupted (default: snapshot). */
   follow: boolean
   /** `logs --clear`: truncate the target server's captured log instead of printing it. */
@@ -152,18 +152,18 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.mode = m
-    } else if (arg === '--dir') {
-      const d = args[++i]
-      if (!d || d.startsWith('-')) {
-        console.error("Missing value for --dir (a subfolder of the bulb's folder, e.g. --dir batch2)")
+    } else if (arg === '--batch') {
+      const b = args[++i]
+      if (!b || b.startsWith('-')) {
+        console.error('Missing value for --batch (a batch name, e.g. --batch pilot)')
         process.exit(1)
       }
-      const sub = d.replace(/[\\/]+$/, '')
-      if (!sub || path.isAbsolute(sub) || sub.split(/[\\/]/).some(s => s === '' || s === '..')) {
-        console.error(`Invalid --dir value: ${d} (a relative subfolder of the bulb's folder — no absolute paths or '..')`)
+      const name = b.replace(/[\\/]+$/, '')
+      if (!name || /[\\/]/.test(name) || name === '.' || name === '..') {
+        console.error(`Invalid --batch value: ${b} (a single folder name — no path separators or dot segments)`)
         process.exit(1)
       }
-      result.dir = sub
+      result.batch = name
     } else if (arg === '--follow' || arg === '-f') {
       result.follow = true
     } else if (arg === '--clear') {
@@ -388,11 +388,12 @@ Options:
   --mode <name>               Also load .env.<name> (+ .env.<name>.local) on top
                               of .env / .env.local. Free-form name; loads no mode
                               file by default.
-  --dir <sub>                 Scope the bulb's dir to a subfolder for this run:
-                              tb.dir and relative tb.fs paths land in
-                              <bulb-folder>/<sub>. Batch runs without touching
-                              the bulb's code (e.g. --dir batch2). Relative
-                              subpaths only — no absolute paths or '..'.
+  --batch <name>              Scope the run to a named batch: tb.dir and
+                              relative tb.fs paths land in
+                              <bulb-folder>/batches/<name>, created at boot.
+                              Batch runs without touching the bulb's code
+                              (e.g. --batch pilot). One folder name — no
+                              path separators.
   --server                    Run server.ts only, no web server (needs --trust)
   --args <json-array>         For 'call': the whole argument list as one JSON
                               array (strict). '--args -' reads it from stdin,
