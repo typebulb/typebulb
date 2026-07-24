@@ -1,4 +1,6 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
+import { parseBlockKind, parseBlockPairs, type BlockPair } from './blockPairs.js'
+import type { SubscriptKind } from 'typebulb/format'
 
 /** `send --wait` (no value) waits this long for a page to (re)attach, then bounds the reply hold.
  *  Sized to cover an npx-booted reload's reconnect window without a long hang when nothing is
@@ -6,7 +8,7 @@ import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send' | 'pull' | 'push'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send' | 'pull' | 'push' | 'get' | 'put'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -24,6 +26,10 @@ export interface CliArgs {
   argsJson?: string
   /** Whether `--args` was passed (distinguishes an empty array from "use positionals"). */
   hasArgsFlag: boolean
+  /** `get <file> <kind>`: the block whose content prints to stdout (TB-Get-Put.md). */
+  blockKind?: SubscriptKind
+  /** `put <file> <kind>=<source>…`: the block writes, in order (`source`: a path, or `-` for stdin). */
+  blockPairs?: BlockPair[]
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
    *  target) ensures this project's mirror is up and prints what-to-do guidance;
    *  `typebulb skill` prints the skill. */
@@ -77,6 +83,16 @@ export interface CliArgs {
   local?: LocalOverride
 }
 
+/** Run a throwing parser at the arg boundary: its message becomes the CLI error (exit 1). */
+function tryParse<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e))
+    process.exit(1)
+  }
+}
+
 export function parseArgs(args: string[]): CliArgs {
   // Auto-open the external browser by default — except inside VS Code's integrated terminal, where the
   // printed URL is a clickable terminal link: left-click opens it inline in a Simple Browser pane,
@@ -105,7 +121,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send', 'pull', 'push'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send', 'pull', 'push', 'get', 'put'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -229,18 +245,14 @@ export function parseArgs(args: string[]): CliArgs {
       result.port = port
     } else if (arg === '--replace' || arg.startsWith('--replace=')) {
       const value = arg.startsWith('--replace=') ? arg.slice('--replace='.length) : args[++i] ?? ''
-      try {
-        const parsed = parseLocalFlag(value)
-        // Exactly one override per invocation (Invariant 4) — reject a second
-        // rather than silently shadowing the first.
-        if (result.local) {
-          throw new Error(`--replace can only be used once (got '${result.local.name}' and '${parsed.name}')`)
-        }
-        result.local = parsed
-      } catch (e) {
-        console.error(e instanceof Error ? e.message : String(e))
+      const parsed = tryParse(() => parseLocalFlag(value))
+      // Exactly one override per invocation (Invariant 4) — reject a second
+      // rather than silently shadowing the first.
+      if (result.local) {
+        console.error(`--replace can only be used once (got '${result.local.name}' and '${parsed.name}')`)
         process.exit(1)
       }
+      result.local = parsed
     } else if (arg === '--args' || arg.startsWith('--args=')) {
       // The escape hatch: the entire argument list as one JSON array (`-` reads it from stdin).
       // `--args -` deliberately consumes the bare `-` as its value, not as a positional.
@@ -252,7 +264,7 @@ export function parseArgs(args: string[]): CliArgs {
       }
       result.argsJson = value
     } else if (!arg.startsWith('-')) {
-      if (result.subcommand === 'call' || result.subcommand === 'send') callPositionals.push(arg)
+      if (['call', 'send', 'get', 'put'].includes(result.subcommand)) callPositionals.push(arg)
       else result.file = arg
     } else {
       // Unknown flag: fail rather than silently ignore — a typo'd `--no-wath` running with watch
@@ -283,6 +295,26 @@ export function parseArgs(args: string[]): CliArgs {
     }
     result.file = callPositionals[0]
     result.sendMessage = callPositionals[1]
+  }
+
+  // get <file> <kind>: exactly one block per invocation — stdout owns one payload (TB-Get-Put.md).
+  if (result.subcommand === 'get') {
+    if (callPositionals.length !== 2) {
+      console.error('Usage: typebulb get <file> <kind>')
+      process.exit(1)
+    }
+    result.file = callPositionals[0]
+    result.blockKind = tryParse(() => parseBlockKind(callPositionals[1]))
+  }
+
+  // put <file> <kind>=<source>…: pairs validated at parse, like --batch (TB-Get-Put.md).
+  if (result.subcommand === 'put') {
+    if (callPositionals.length < 2) {
+      console.error('Usage: typebulb put <file> <kind>=<source> [<kind>=<source> …]')
+      process.exit(1)
+    }
+    result.file = callPositionals[0]
+    result.blockPairs = tryParse(() => parseBlockPairs(callPositionals.slice(1)))
   }
 
   return result
@@ -326,6 +358,15 @@ Usage:
                                  prints on stdout (JSON; a bare string raw).
                                  msg 'tb:snapshot' instead prints the page's
                                  rendered outline (roles, names, visible text).
+  typebulb get <file> <kind>     Print one block's content to stdout (kind: code,
+                                 css, html, data, infer, insight, config, notes).
+                                 Absent block: exit 1. Pipe-safe (… | jq).
+  typebulb put <file> <k>=<src>  Write a file's content into a block, surgically —
+                                 the rest of the bulb is preserved verbatim.
+                                 <src> may be - for stdin. Several <kind>=<src>
+                                 pairs are one atomic write. Replaces the block,
+                                 or appends it if absent; identical content
+                                 writes nothing. No --trust needed.
    typebulb pull <url|file>       Fetch a bulb from typebulb.com into
                                   typebulbs/u/<user>/<slug>.bulb.md (a local file
                                   at that path re-pulls in place). Unlisted and

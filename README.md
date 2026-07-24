@@ -44,6 +44,8 @@ typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints 
 typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust.
                                With --wait, a handler's non-undefined return prints on stdout (JSON; a bare string raw)
 typebulb send <file> tb:snapshot  Print the live page's rendered outline (roles, names, visible text)
+typebulb get <file> <kind>     Print one block's content (data, insight, code, …) to stdout; absent block exits 1
+typebulb put <file> <k>=<src>  Write a file's (or stdin's: <kind>=-) content into a block, surgically — replace, or append if absent; several pairs are one atomic write; identical content writes nothing. No --trust
 typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
 typebulb push <file>           Upload a local bulb to typebulb.com as you (needs TYPEBULB_TOKEN in .env)
 typebulb check [file.bulb.md]  Type-check a bulb without running it

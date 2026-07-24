@@ -35,6 +35,8 @@ import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js
 import { runSend } from './commands/send.js'
 import { runPull } from './commands/pull.js'
 import { runPush } from './commands/push.js'
+import { runGet } from './commands/get.js'
+import { runPut } from './commands/put.js'
 import { ensureHarnessSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -164,6 +166,17 @@ async function main(): Promise<void> {
   if (!bulbPath.endsWith('.bulb.md')) {
     console.error('File must have .bulb.md extension')
     process.exit(1)
+  }
+
+  // Block I/O (TB-Get-Put.md): trust-free — reading/editing your own file at your own command is
+  // the editor tier — so dispatched before trust resolution.
+  if (args.subcommand === 'get') {
+    await runGet(bulbPath, args.blockKind!)
+    return
+  }
+  if (args.subcommand === 'put') {
+    await runPut(bulbPath, args.blockPairs!)
+    return
   }
 
   // The exact command to re-run with the privileged tier granted. Surfaced in the in-page denial
