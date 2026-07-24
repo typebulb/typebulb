@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import * as fs from 'fs/promises'
+import * as os from 'os'
+import * as path from 'path'
 import { parseArgs } from '../src/args.js'
 import { parseBlockKind, parseBlockPairs } from '../src/blockPairs.js'
 import { applyPuts, normalizeContent } from '../src/commands/put.js'
+import { runGet } from '../src/commands/get.js'
 import { parseBulb } from 'typebulb/format'
 
 // TB-Get-Put.md: `typebulb get/put` — block I/O from the terminal.
@@ -117,6 +121,32 @@ describe('applyPuts', () => {
   it('grows the fence past backtick runs in the content', () => {
     const out = applyPuts(FIXTURE, [{ kind: 'data', content: 'has ``` inside' }])
     expect(parseBulb(out.text)!.files.get('data.txt')).toBe('has ``` inside')
+  })
+})
+
+describe('runGet exit codes — the probe answer (2) is distinguishable from real errors (1)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** Trap process.exit as a throw so the exit code is assertable. */
+  const trapExit = () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(process, 'exit').mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`)
+    }) as never)
+  }
+
+  it('absent block exits 2', async () => {
+    const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'getput-')), 'x.bulb.md')
+    await fs.writeFile(file, FIXTURE)
+    trapExit()
+    await expect(runGet(file, 'insight')).rejects.toThrow('exit 2')
+  })
+
+  it('a non-bulb exits 1', async () => {
+    const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'getput-')), 'x.bulb.md')
+    await fs.writeFile(file, 'just some text')
+    trapExit()
+    await expect(runGet(file, 'data')).rejects.toThrow('exit 1')
   })
 })
 

@@ -360,7 +360,8 @@ Usage:
                                  rendered outline (roles, names, visible text).
   typebulb get <file> <kind>     Print one block's content to stdout (kind: code,
                                  css, html, data, infer, insight, config, notes).
-                                 Absent block: exit 1. Pipe-safe (… | jq).
+                                 Absent block: exit 2 (real errors: 1).
+                                 Pipe-safe (… | jq).
   typebulb put <file> <k>=<src>  Write a file's content into a block, surgically —
                                  the rest of the bulb is preserved verbatim.
                                  <src> may be - for stdin. Several <kind>=<src>
