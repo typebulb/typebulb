@@ -360,14 +360,15 @@ Usage:
                                  rendered outline (roles, names, visible text).
   typebulb get <file> <kind>     Print one block's content to stdout (kind: code,
                                  css, html, data, infer, insight, config, notes).
-                                 Absent block: exit 2 (real errors: 1).
-                                 Pipe-safe (… | jq).
+                                 No content (absent or empty): exit 2;
+                                 real errors: 1. Pipe-safe (… | jq).
   typebulb put <file> <k>=<src>  Write a file's content into a block, surgically —
                                  the rest of the bulb is preserved verbatim.
                                  <src> may be - for stdin. Several <kind>=<src>
                                  pairs are one atomic write. Replaces the block,
                                  or appends it if absent; identical content
-                                 writes nothing. No --trust needed.
+                                 writes nothing, an empty source removes the
+                                 block. No --trust needed.
    typebulb pull <url|file>       Fetch a bulb from typebulb.com into
                                   typebulbs/u/<user>/<slug>.bulb.md (a local file
                                   at that path re-pulls in place). Unlisted and

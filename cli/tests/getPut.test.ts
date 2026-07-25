@@ -79,7 +79,7 @@ describe('parseBlockPairs', () => {
 describe('applyPuts', () => {
   it('replaces a block surgically — prose and other blocks preserved verbatim', () => {
     const out = applyPuts(FIXTURE, [{ kind: 'data', content: '{"fresh": true}' }])
-    expect(out.written).toEqual([{ kind: 'data', created: false, chars: 15 }])
+    expect(out.written).toEqual([{ kind: 'data', action: 'replaced', chars: 15 }])
     expect(out.text).toContain('Prose between blocks')
     expect(out.text).toContain('console.log(tb.data(0))')
     expect(parseBulb(out.text)!.files.get('data.txt')).toBe('{"fresh": true}')
@@ -87,7 +87,7 @@ describe('applyPuts', () => {
 
   it('appends the block when absent (upsert — the first promotion must work)', () => {
     const out = applyPuts(FIXTURE, [{ kind: 'insight', content: '{"a": 1}' }])
-    expect(out.written).toEqual([{ kind: 'insight', created: true, chars: 8 }])
+    expect(out.written).toEqual([{ kind: 'insight', action: 'created', chars: 8 }])
     expect(parseBulb(out.text)!.files.get('insight.json')).toBe('{"a": 1}')
   })
 
@@ -118,6 +118,33 @@ describe('applyPuts', () => {
     expect(() => applyPuts('just some text', [{ kind: 'data', content: 'x' }])).toThrow(/not a valid bulb/)
   })
 
+  it('empty content removes the block — empty === absent, so removal is its canonical spelling', () => {
+    const out = applyPuts(FIXTURE, [{ kind: 'data', content: '' }])
+    expect(out.written).toEqual([{ kind: 'data', action: 'removed', chars: 0 }])
+    expect(out.text).not.toContain('data.txt')
+    expect(out.text).toContain('Prose between blocks')
+    expect(parseBulb(out.text)!.files.get('code.tsx')).toBe('console.log(tb.data(0))')
+  })
+
+  it('whitespace-only content removes the block (normalization trims it to empty)', () => {
+    const out = applyPuts(FIXTURE, [{ kind: 'data', content: normalizeContent('  \n\n \n') }])
+    expect(out.written).toEqual([{ kind: 'data', action: 'removed', chars: 0 }])
+  })
+
+  it('empty content for an already-absent block is a no-op (the state already holds)', () => {
+    const out = applyPuts(FIXTURE, [{ kind: 'insight', content: '' }])
+    expect(out.written).toEqual([])
+    expect(out.upToDate).toEqual(['insight'])
+    expect(out.text).toBe(FIXTURE)
+  })
+
+  it('removal is idempotent across invocations', () => {
+    const once = applyPuts(FIXTURE, [{ kind: 'data', content: '' }]).text
+    const twice = applyPuts(once, [{ kind: 'data', content: '' }])
+    expect(twice.written).toEqual([])
+    expect(twice.text).toBe(once)
+  })
+
   it('grows the fence past backtick runs in the content', () => {
     const out = applyPuts(FIXTURE, [{ kind: 'data', content: 'has ``` inside' }])
     expect(parseBulb(out.text)!.files.get('data.txt')).toBe('has ``` inside')
@@ -140,6 +167,13 @@ describe('runGet exit codes — the probe answer (2) is distinguishable from rea
     await fs.writeFile(file, FIXTURE)
     trapExit()
     await expect(runGet(file, 'insight')).rejects.toThrow('exit 2')
+  })
+
+  it('an empty block exits 2 too — one logical state, one exit code', async () => {
+    const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'getput-')), 'x.bulb.md')
+    await fs.writeFile(file, FIXTURE.replace('old data', ''))
+    trapExit()
+    await expect(runGet(file, 'data')).rejects.toThrow('exit 2')
   })
 
   it('a non-bulb exits 1', async () => {

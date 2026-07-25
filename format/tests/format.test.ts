@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, extractDescription, hostedAssetsBase,
+  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
   forbiddenAssetExt,
 } from '../src/index.js'
 
@@ -362,5 +362,27 @@ old data
   it('leaves an unterminated block untouched', () => {
     const broken = '---\nformat: typebulb/v1\nname: P\n---\n\n**data.txt**\n\n```txt\nruns to eof'
     expect(replaceBulbBlock(broken, 'data', 'x')).toBe(broken)
+  })
+
+  it('removeBulbBlock drops the block, keeping prose and siblings — and leaves no gap', () => {
+    const out = removeBulbBlock(bulb, 'data')
+    expect(out).toContain('Some prose the author left between blocks.')
+    expect(out).not.toContain('data.txt')
+    expect(out).not.toContain('old data')
+    expect(toBulbData(parseBulb(out)!).insight).toBe('{"old": true}')
+    expect(out).not.toMatch(/\n{3}/)
+  })
+
+  it('removeBulbBlock drops a trailing block, leaving one final newline', () => {
+    const out = removeBulbBlock(bulb, 'insight')
+    expect(toBulbData(parseBulb(out)!).data).toBe('old data')
+    expect(out.endsWith('```\n')).toBe(true)
+  })
+
+  it('removeBulbBlock leaves an absent or unterminated block untouched', () => {
+    const noInsight = bulb.replace(/\*\*insight[\s\S]*$/, '')
+    expect(removeBulbBlock(noInsight, 'insight')).toBe(noInsight)
+    const broken = '---\nformat: typebulb/v1\nname: P\n---\n\n**data.txt**\n\n```txt\nruns to eof'
+    expect(removeBulbBlock(broken, 'data')).toBe(broken)
   })
 })

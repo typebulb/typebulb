@@ -44,8 +44,8 @@ typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints 
 typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust.
                                With --wait, a handler's non-undefined return prints on stdout (JSON; a bare string raw)
 typebulb send <file> tb:snapshot  Print the live page's rendered outline (roles, names, visible text)
-typebulb get <file> <kind>     Print one block's content (data, insight, code, …) to stdout; absent block exits 2, real errors 1
-typebulb put <file> <k>=<src>  Write a file's (or stdin's: <kind>=-) content into a block, surgically — replace, or append if absent; several pairs are one atomic write; identical content writes nothing. No --trust
+typebulb get <file> <kind>     Print one block's content (data, insight, code, …) to stdout
+typebulb put <file> <k>=<src>  Write a file's (or stdin's) content into a block, surgically
 typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
 typebulb push <file>           Upload a local bulb to typebulb.com as you (needs TYPEBULB_TOKEN in .env)
 typebulb check [file.bulb.md]  Type-check a bulb without running it
@@ -448,6 +448,17 @@ One bulb per command, between typebulb.com and its conventional local file — t
 - **Assets**: push and pull carry the bulb's `assets/` folder both ways — files upload to typebulb's asset host and the published bulb serves them with zero config (quotas apply; refusals say so). A local file shadows its hosted copy.
 - **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm. Pasting any bulb URL into its filter offers a pull-on-play row.
 - `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
+
+## Block I/O (get & put)
+
+Your ordinary tools already read and edit a bulb: open the file, patch a block. These two are for
+what those do badly — a block too large or opaque to carry in context or to describe a change to
+(usually `data.txt`, which can run to hundreds of KB). `get` hands you that one block instead of
+the whole file; `put` replaces it blind, knowing neither its size, its format, nor what is in it.
+
+- **Get**: `typebulb get <file> <kind>` prints that block to stdout (`kind` is `code`, `css`, `html`, `data`, `infer`, `insight`, `config`, or `notes`), so `… | jq` works. No content — absent or empty — exits **2**, apart from real errors (exit 1), so a probe can tell "nothing there yet" from a bad path.
+- **Put**: `typebulb put <file> <kind>=<source>` writes a file's content into that block; `<kind>=-` reads stdin. Several pairs in one command are one atomic write. It replaces the block, appends it when absent, writes nothing when the content is identical, and **removes** the block when the source is empty — the only way to clear one.
+- Only the named block changes; every other block and the frontmatter survive byte-for-byte. A running bulb hot-reloads on a `put`.
 
 ## Charts
 

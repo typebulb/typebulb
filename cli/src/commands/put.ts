@@ -1,5 +1,5 @@
 import * as fs from 'fs/promises'
-import { parseBulb, replaceBulbBlock, blocks, type SubscriptKind } from 'typebulb/format'
+import { parseBulb, replaceBulbBlock, removeBulbBlock, blocks, type SubscriptKind } from 'typebulb/format'
 import type { BlockPair } from '../blockPairs.js'
 
 /**
@@ -7,7 +7,10 @@ import type { BlockPair } from '../blockPairs.js'
  * surgically (TB-Get-Put.md): the terminal gesture over `replaceBulbBlock`, sibling to the infer
  * modal's Save-to-bulb. Upsert (replace in place, append when absent), atomic across pairs (one
  * read → every replacement in memory → one write), and a no-op when nothing changed — a
- * byte-identical rewrite would still bump mtime and spuriously hot-reload a served bulb.
+ * byte-identical rewrite would still bump mtime and spuriously hot-reload a served bulb. An empty
+ * source **removes** the block: the format holds empty === absent everywhere (`toBulbData`,
+ * `serializeBulb`, `pull`'s comparison), so removal is that state's canonical spelling, and it is
+ * the only way to clear block clutter.
  * Trust-free: editing your own file at your own command is the editor tier. Payload sanity is the
  * caller's — an invalid source file is written verbatim, by design.
  */
@@ -37,7 +40,9 @@ export async function runPut(bulbPath: string, pairs: BlockPair[]): Promise<void
 
   await fs.writeFile(bulbPath, outcome.text)
   for (const w of outcome.written) {
-    console.log(`${blocks[w.kind].path}: ${w.created ? 'created' : 'replaced'} from ${w.label} (${w.chars.toLocaleString()} chars)`)
+    console.log(w.action === 'removed'
+      ? `${blocks[w.kind].path}: removed (${w.label} is empty)`
+      : `${blocks[w.kind].path}: ${w.action} from ${w.label} (${w.chars.toLocaleString()} chars)`)
   }
 }
 
@@ -46,14 +51,14 @@ export interface ResolvedPut { kind: SubscriptKind; content: string; label?: str
 
 export interface PutOutcome {
   text: string
-  written: { kind: SubscriptKind; created: boolean; chars: number; label?: string }[]
+  written: { kind: SubscriptKind; action: 'replaced' | 'created' | 'removed'; chars: number; label?: string }[]
   upToDate: SubscriptKind[]
 }
 
 /**
  * The pure core, all-or-nothing: apply every put to the bulb text in memory, or throw — a non-bulb,
- * or an unterminated target fence (the one refusal `replaceBulbBlock` signals by returning its
- * input, told apart from the deliberate up-to-date no-op by comparing the current block body first).
+ * or an unterminated target fence (the one refusal the primitives signal by returning their input,
+ * told apart from the deliberate up-to-date no-op by checking the current block first).
  * The comparison normalizes both sides, so a line-ending-only difference is a no-op, not a rewrite.
  */
 export function applyPuts(original: string, puts: ResolvedPut[]): PutOutcome {
@@ -65,14 +70,21 @@ export function applyPuts(original: string, puts: ResolvedPut[]): PutOutcome {
   for (const { kind, content, label } of puts) {
     const path = blocks[kind].path
     const current = parsed.files.get(path)
+    // Empty content means "no content", and the format spells that as an absent block — so remove
+    // it. Nothing is lost that wasn't already empty, and a bulb that never had the block is
+    // already in the requested state.
+    if (!content) {
+      if (current === undefined) { upToDate.push(kind); continue }
+      text = refuseIfUnchanged(removeBulbBlock(text, kind), text, path)
+      written.push({ kind, action: 'removed', chars: 0, label })
+      continue
+    }
     if (current !== undefined && normalizeContent(current) === content) {
       upToDate.push(kind)
       continue
     }
-    const next = replaceBulbBlock(text, kind, content)
-    if (next === text) throw new Error(`the **${path}** block's fence is unterminated; refusing to rewrite inside it`)
-    text = next
-    written.push({ kind, created: current === undefined, chars: content.length, label })
+    text = refuseIfUnchanged(replaceBulbBlock(text, kind, content), text, path)
+    written.push({ kind, action: current === undefined ? 'created' : 'replaced', chars: content.length, label })
   }
   return { text, written, upToDate }
 }
@@ -84,6 +96,12 @@ export function applyPuts(original: string, puts: ResolvedPut[]): PutOutcome {
 export function normalizeContent(raw: string): string {
   const noBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
   return noBom.replace(/\r\n/g, '\n').trimEnd()
+}
+
+/** A primitive that returns its input has hit the one defect it refuses to guess at. */
+function refuseIfUnchanged(next: string, previous: string, path: string): string {
+  if (next === previous) throw new Error(`the **${path}** block's fence is unterminated; refusing to rewrite inside it`)
+  return next
 }
 
 function fail(message: string): never {
