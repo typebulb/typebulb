@@ -16,7 +16,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 ## Features
 
 - **Server-side code** — Add a `**server.ts**` section; exported functions become callable from the browser via `tb.server.<name>()` (e.g., `export async function query(...)` → `await tb.server.query(...)`). An `export async function*` **streams**: consume it with `for await (const chunk of tb.server.gen())`. Requires `--trust`.
-- **CLI logging** — `tb.server.log(...)` prints to the CLI's stdout
+- **CLI logging** — `tb.log(...)` prints to the CLI's stdout, from `code.tsx` and `server.ts` alike (no trust needed)
 - **Wake-on-event** — `typebulb wait <file|agent>` blocks until the target server logs a new line, prints it, and exits. Run in the background, that exit *is* an agent's wake-up: a user action a bulb logs, or an embed's render outcome — no polling.
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
@@ -190,6 +190,7 @@ everywhere.
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
 | `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when embedded (no host AI) | |
 | `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | |
+| `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
 | `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when embedded (no sender) | |
 | `tb.fs.read/readBytes/write` | Read and write local files | yes |
 | `tb.dir` | The bulb's folder (absolute path), where relative `tb.fs` paths land | |
@@ -267,7 +268,7 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 
 A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no port, absent from the launcher. Under `--trust` its code can use `tb.fs`, and call `tb.ai`, `tb.ai.stream`, and `tb.models` against your `.env` keys.
 
-- **Invoke one export with `typebulb call <file> <fn> [args…] --trust`.** It boots, runs that export, prints the `return` as JSON to stdout, and exits — a fresh boot per call. Log with `console.log` (no `tb.server.log` here); under `call` logs go to stderr, so the JSON result owns stdout.
+- **Invoke one export with `typebulb call <file> <fn> [args…] --trust`.** It boots, runs that export, prints the `return` as JSON to stdout, and exits — a fresh boot per call. Under `call`, logs (`console.log` / `tb.log`) go to stderr, so the JSON result owns stdout.
 
 ## Sizing
 
@@ -290,7 +291,8 @@ The host owns a bulb's **width**; you own its **height**.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
 - **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).
-- **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout — and despite the name needs **no `server.ts` block**, working from `code.tsx` on a Restricted bulb, so a client-only bulb has a log channel), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
+- **See what's already running** — `typebulb logs` with no argument lists every running bulb and mirror; check it before launching anything.
+- **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.log(...)`, and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.

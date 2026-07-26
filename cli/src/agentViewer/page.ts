@@ -5,7 +5,7 @@
  * map, the full `tb` shim, the embed protocol. The mirror needs none of that — it's
  * ordinary bundled code, so its client (`client.js`) is a self-contained ESM module
  * with no bare imports to resolve, and it talks to its `server.ts` through one tiny
- * surface: `tb.server.<name>()` / `tb.server.log()`. This builds the trimmed page:
+ * surface: `tb.server.<name>()` / `tb.log()`. This builds the trimmed page:
  * the no-flash theme engine (so nested embeds inherit the host theme), the mirror's
  * styles and mount stub, the minimal `tb`, and the module script tag.
  */
@@ -17,7 +17,7 @@ export const clientBundleUrl = (agent: string) => `/agents/${agent}/client.js`
 
 /**
  * The mirror's `tb`. Only `tb.server.<name>(...)` (RPC → `POST /__api/<name>`, the exact
- * transport from `bulb/shim.ts`) and `tb.server.log(...)` (→ `POST /__log`). No embed,
+ * transport from `bulb/shim.ts`) and `tb.log(...)` (→ `POST /__log`). No embed,
  * fs, ai, proxy, or theme paths — the mirror uses none of them, and it always runs
  * `trusted`, so `/__api` is never 403 for it. The `__TYPEBULB_WATCH__` listener mirrors
  * the shim's hot-reload (an esbuild rebuild restarts the server, dropping the SSE; the
@@ -35,7 +35,7 @@ const AGENT_TB_SHIM = `
     if (!resp.ok) throw new Error(data.error || 'API call failed');
     return data.result;
   };
-  const serverLog = async (...args) => {
+  const tbLog = async (...args) => {
     try {
       const resp = await fetch('/__log', {
         method: 'POST',
@@ -46,10 +46,9 @@ const AGENT_TB_SHIM = `
     } catch { console.log(...args); }
   };
   globalThis.tb = Object.freeze({
+    log: (...args) => { void tbLog(...args); },
     server: new Proxy({}, {
-      get: (_, name) => name === 'log'
-        ? (...args) => serverLog(...args)
-        : (...args) => api(name, ...args)
+      get: (_, name) => (...args) => api(name, ...args)
     })
   });
   if (window.__TYPEBULB_WATCH__) {

@@ -55,7 +55,7 @@ The parser is deliberately tolerant: blank lines between a header and its fence 
 * **`tb` is a pre-declared global** (no import), ready before the first line runs. Its authoritative shape is the `.d.ts` the CLI hands `tsc` on `npx typebulb check`, single-sourced in `typebulb/dts` ([`tbTypings.ts`](../dts/src/tbTypings.ts)). The `data` and `insight` blocks can be accessed with `tb.data()` / `tb.json()` / `tb.insight()`.
 * **`tb.mode` tells you where you are**: `local` (CLI), `embedded` (sandboxed iframe), or `editor` / `published` (typebulb.com).
 * **It runs in the browser**, and reaches the server through `tb.*`. In local mode you can add your own server-side code in a `server.ts` block; its exports are callable from the browser as `tb.server.<name>()`.
-* **Logging.** `tb.server.log()` posts to the CLI and prints to its stdout (what `typebulb logs` reads back). Plain `console.log` and uncaught errors go to the browser console; an embedded bulb additionally forwards its runtime errors out to the host.
+* **Logging.** `tb.log()` posts to the CLI and prints to its stdout (what `typebulb logs` reads back). Plain `console.log` and uncaught errors go to the browser console; an embedded bulb additionally forwards its runtime errors out to the host.
 
 ## HTML
 

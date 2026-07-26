@@ -116,12 +116,12 @@ export const typebulbShim = `
     }
   };
 
-  // Diagnostic logging (tb.server.log). Routes to the UNGATED /__log endpoint, which only ever
+  // Diagnostic logging (tb.log). Routes to the UNGATED /__log endpoint, which only ever
   // runs the server's built-in console.log — never a user server.ts export — so it crosses no
   // capability boundary and works even on a Restricted (untrusted) bulb (the FAQ's recommended
   // debugging path). Embedded bulbs have no host, and any transport failure degrades to the page's
   // own console: a diagnostic log must never throw or block.
-  const serverLog = async (...args) => {
+  const tbLog = async (...args) => {
     if (isEmbedded) { console.log(...args); return; }
     try {
       const resp = await fetch('/__log', {
@@ -349,17 +349,19 @@ export const typebulbShim = `
       return location.origin && location.origin !== 'null' ? location.origin + rel : rel;
     },
 
+    // The bulb's log channel: prints on the CLI's stdout (\`typebulb logs\` reads it back). Ungated —
+    // no server.ts, no trust — see tbLog above.
+    log: (...args) => { void tbLog(...args); },
+
     // Server API - call functions from **server.ts**. Returns the hybrid call object: await it for
     // a normal export's result, or for-await it for an async-generator export's stream.
     api: (name, ...args) => serverCall(name, args),
 
-    // Server proxy - tb.server.fn(...) delegates to serverCall. 'log' is special: it's the ungated
-    // diagnostic (serverLog -> /__log, built-in only), so it prints untrusted; everything else is a
-    // gated /__api call into the bulb's own server.ts.
+    // Server proxy - tb.server.fn(...) delegates to serverCall: purely the bulb's own server.ts
+    // exports, every one a gated /__api call. (The ungated diagnostic lives at tb.log, so no
+    // built-in shadows a user export.)
     server: new Proxy({}, {
-      get: (_, name) => name === 'log'
-        ? (...args) => serverLog(...args)
-        : (...args) => serverCall(name, args)
+      get: (_, name) => (...args) => serverCall(name, args)
     }),
 
     // Filesystem - local CLI extension
@@ -374,7 +376,7 @@ export const typebulbShim = `
     },
 
     // Receive a value pushed from the terminal via \`typebulb send\` (data-in, the dual of the
-    // ungated tb.server.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
+    // ungated tb.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
     // sender; the handler is registered but never fires (cf. tb.models returning []). A handler's
     // non-undefined return (awaited) becomes the reply \`send --wait\` prints (TB-Interrogation.md).
     onMessage: (handler) => {

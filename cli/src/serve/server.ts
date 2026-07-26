@@ -208,7 +208,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     app.use(route, csrfGuard)
   }
 
-  // Diagnostic log — `tb.server.log`. Deliberately NOT a privileged route: it only ever runs the
+  // Diagnostic log — `tb.log`. Deliberately NOT a privileged route: it only ever runs the
   // built-in `console.log` (below), never a user `server.ts` export, so it spends no keys, touches
   // no fs, and runs no user Node — it crosses no capability boundary. That's why it's ungated: a
   // Restricted bulb can still print debug output (the FAQ's recommended debugging path) without
@@ -225,7 +225,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // `typebulb send` push (TB-CLI.md) — re-emit the posted body to every connected page as a
   // `message` SSE event the shim hands to `tb.onMessage`. Data-in, the dual of the ungated
-  // `tb.server.log` (data-out): it runs no user code, spends no key, touches no fs, so it crosses no
+  // `tb.log` (data-out): it runs no user code, spends no key, touches no fs, so it crosses no
   // capability boundary and needs no --trust. Still CSRF-guarded like /__log: the CLI (no Origin)
   // passes, a cross-site browser POST is refused, so no other page can inject into the bulb. The
   // body is forwarded verbatim; the shim interprets it (JSON-or-string). Returns the connected-page

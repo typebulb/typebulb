@@ -236,7 +236,7 @@ const onMessage = `
   /**
    * Subscribe to a value pushed from the terminal via \`typebulb send <file> [message]\`.
    *
-   * The dual of \`tb.server.log\` (data out): a value sent *in* from the CLI, no \`--trust\` required.
+   * The dual of \`tb.log\` (data out): a value sent *in* from the CLI, no \`--trust\` required.
    * Use it to start expensive work on demand instead of on load — e.g. \`tb.onMessage(() => start())\`
    * — so hot reloads don't re-trigger it while you edit, and an agent kicks off one run when ready.
    *
@@ -251,13 +251,22 @@ const onMessage = `
    */
   onMessage(handler: (message: any) => unknown): () => void;`
 
+const log = `
+  /**
+   * Print to the CLI's stdout — the bulb's log channel, read back with \`typebulb logs <file>\`.
+   *
+   * Ungated: needs no \`server.ts\` block and no \`--trust\`, so a Restricted client-only bulb can
+   * instrument itself. Args cross to the CLI as JSON; where no CLI serves the page (web, embedded,
+   * or a transport failure) it falls back to the browser console. Works in \`server.ts\` too (same
+   * as \`console.log\` there).
+   */
+  log(...args: any[]): void;`
+
 const clientServerProxy = `
   /**
    * Server-side function proxy.
    *
    * In the CLI, calls exported functions from the \`**server.ts**\` section.
-   * \`tb.server.log(...)\` is a built-in that prints to CLI stdout (falls back to console.log on web).
-   * User exports override built-ins of the same name.
    *
    * A normal export is awaited for its result (\`await tb.server.fn()\`). An \`async function*\`
    * export streams: \`for await (const chunk of tb.server.gen())\`. The call object supports both;
@@ -271,18 +280,26 @@ export const clientTbTypings = `${aiChunkType}
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${clientServerProxy}${onMessage}${ai}${fs}${dir}${models}${theme}${mode}
+declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${log}${clientServerProxy}${onMessage}${ai}${fs}${dir}${models}${theme}${mode}
 };
 `
 
+const serverLog = `
+  /**
+   * Print to the CLI's stdout — the same channel as \`console.log\` here (the server's console IS
+   * the bulb's log). One log verb across blocks: page-side \`tb.log\` reaches this same stdout.
+   */
+  log(...args: any[]): void;`
+
 /** Typebulb globals available in Node-side code (server.ts).
  *  Only what carries a bulb-specific rule Node can't know — tb.ai, tb.fs, tb.dir (TB-FS.md);
- *  the browser-only helpers are intentionally absent. Must match serverTb.ts's runtime surface. */
+ *  plus the tb.log uniformity exception (serverTb.ts). The browser-only helpers are intentionally
+ *  absent. Must match serverTb.ts's runtime surface. */
 export const serverTbTypings = `${aiChunkType}
 /**
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${ai}${fs}${dir}${models}${mode}
+declare const tb: {${serverLog}${ai}${fs}${dir}${models}${mode}
 };
 `

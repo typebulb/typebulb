@@ -24,9 +24,11 @@ describe('predictTrust', () => {
     expect(predictTrust(bulb("fetch('/__ai', {})"))).toBe('AI (your API keys)')
   })
 
-  it('flags tb.server.<fn> but NOT the ungated tb.server.log', () => {
+  it('flags every tb.server.<fn>; the ungated tb.log does not flag', () => {
     expect(predictTrust(bulb('await tb.server.query(1)'))).toBe('server-side code (server.ts)')
-    expect(predictTrust(bulb('tb.server.log("hi")'))).toBeUndefined()
+    // A `log` export is an ordinary gated export now — the ungated diagnostic moved to tb.log.
+    expect(predictTrust(bulb('tb.server.log("hi")'))).toBe('server-side code (server.ts)')
+    expect(predictTrust(bulb('tb.log("hi")'))).toBeUndefined()
   })
 
   it('flags an infer.md block structurally, and tb.infer usage in code', () => {

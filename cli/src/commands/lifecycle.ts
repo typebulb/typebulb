@@ -69,7 +69,7 @@ function requireServer(servers: BulbServer[], arg: string, verb: string, cwd?: s
 /**
  * `typebulb logs [file|pid]` — print a running bulb server's captured console (its `<pid>.log`).
  * Built for an agent (or a user) that launched a bulb without watching its terminal and now needs its
- * `tb.server.log` / error output — the terminal-side equivalent of claude.bulb's logs pane. No arg
+ * `tb.log` / error output — the terminal-side equivalent of claude.bulb's logs pane. No arg
  * lists the running servers; `--follow` streams new output; `--lines N` tails the last N lines.
  */
 export async function runLogs(arg: string | undefined, opts: { follow: boolean; clear?: boolean; run?: number | 'latest'; lines?: number }): Promise<void> {

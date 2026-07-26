@@ -26,8 +26,8 @@ export function predictTrust(bulb: { code: string; server: string; infer: string
   if (/\btb\s*\.\s*ai\b/.test(code) || code.includes('/__ai')) return 'AI (your API keys)'
   // An infer.md block is structural like server.ts: tb.infer() runs against the user's keys.
   if (bulb.infer.trim() || /\btb\s*\.\s*infer\b/.test(code)) return 'AI (your API keys)'
-  // tb.server.<fn> other than the ungated tb.server.log, or a raw /__api call.
-  if (/\btb\s*\.\s*server\s*\.\s*(?!log\b)\w/.test(code) || code.includes('/__api')) {
+  // Any tb.server.<fn> — every export is gated; the ungated diagnostic is tb.log — or a raw /__api call.
+  if (/\btb\s*\.\s*server\s*\.\s*\w/.test(code) || code.includes('/__api')) {
     return 'server-side code (server.ts)'
   }
   return undefined

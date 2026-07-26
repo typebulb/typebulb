@@ -9,7 +9,10 @@
  *
  * Surface rule (TB-FS.md): mirror what carries a bulb-specific rule Node can't know — `tb.ai`
  * (.env provider resolution), `tb.fs` (relative→bulb's-folder resolution, creation on write),
- * `tb.dir` — never what plain Node or the browser already owns (`console.log`, theme, proxy, copy).
+ * `tb.dir` — never what plain Node or the browser already owns (theme, proxy, copy). One uniformity
+ * exception: `tb.log` is `console.log` here, so the bulb's one log verb works in every block —
+ * page-side `tb.log` reaches this same stdout over `/__log`, and erroring instead would punish the
+ * agent that logs the same way in both.
  */
 
 import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
@@ -74,6 +77,8 @@ export function installServerTb(dir: string, containRoot = process.cwd()): void 
     },
   }
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
+    // The uniformity exception (see header): the server's console IS the bulb's log channel.
+    log: (...args: unknown[]) => { console.log(...args) },
     ai,
     fs: tbFs,
     // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to spawned tools);

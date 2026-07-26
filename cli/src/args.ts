@@ -349,7 +349,7 @@ Usage:
                                  (no arg: list this project's running servers;
                                  --run latest|N shows just one hot-reload run;
                                  --clear empties it). For agents: fetch
-                                 tb.server.log / errors of a bulb you launched
+                                 tb.log / errors of a bulb you launched
                                  without watching its terminal.
   typebulb send <file> [msg]     Push a message into a running bulb's page —
                                  its tb.onMessage(cb) handlers receive it. The
@@ -464,7 +464,7 @@ Server API:
   .env / .env.local load from the working directory; --mode <name> adds .env.<name>.
 
 Built-in server functions (available without a **server.ts** section):
-  tb.server.log(...)            Print to the CLI's stdout
+  tb.log(...)                   Print to the CLI's stdout
 
 AI API:
   Bulbs can call AI providers via tb.ai(). Set API keys in .env:
