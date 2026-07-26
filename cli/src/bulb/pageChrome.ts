@@ -99,8 +99,10 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
  * Riding out a drop is the point. A relaunch stops the predecessor, compiles, then binds the same
  * slot, so the stream is down for seconds; closing on the first error leaves a zombie page — stale
  * render, no hot reload, and invisible to `typebulb send`, which counts open streams. EventSource
- * retries on its own, so all we do is bound how long: a deliberate stop still ends with a dead page,
- * just not instantly. A successor serves bytes we don't have, so a boot id other than the one we
+ * retries on its own, so all we do is bound how long. The window is long (30 min) because a CRASHED
+ * server sits dead until its agent notices and relaunches — a tab that gave up early greets that
+ * successor as a zombie, and localhost retries are free. A deliberate stop still ends with a dead
+ * page, eventually. A successor serves bytes we don't have, so a boot id other than the one we
  * opened with means reload rather than resume.
  *
  * Leaves `es` in scope: the bulb shim adds its own `message` listener (the `typebulb send` channel)
@@ -110,7 +112,7 @@ export const reloadClientScript = `
     const es = new EventSource('/__reload');
     let bootId = null;
     let firstErrorAt = 0;
-    const RETRY_WINDOW_MS = 60000;
+    const RETRY_WINDOW_MS = 30 * 60000;
     es.addEventListener('open', () => { firstErrorAt = 0; });
     es.addEventListener('hello', (e) => {
       if (bootId === null) bootId = e.data;

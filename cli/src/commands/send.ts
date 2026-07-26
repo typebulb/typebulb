@@ -1,6 +1,7 @@
 import * as path from 'path'
 import * as http from 'http'
 import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
+import { lastRunTimes } from '../serve/portBlocks.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
 
 /**
@@ -55,6 +56,11 @@ function postToServer(url: string, body: string): Promise<{ status: number; text
   })
 }
 
+const relAgo = (t: number) => {
+  const m = Math.round((Date.now() - t) / 60_000)
+  return m < 1 ? 'moments ago' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`
+}
+
 export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
   const reserved = message !== undefined && message.startsWith('tb:')
   if (reserved && waitMs <= 0) waitMs = DEFAULT_SEND_WAIT_MS
@@ -62,7 +68,13 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   const abs = path.resolve(file)
   const server = serversForBulb(await listBulbServers(), abs)[0]
   if (!server) {
-    console.error(`No running server for '${file}'. Start it first: npx typebulb ${file}`)
+    // Report what is observed (TB-CLI.md): a bulb that HAS run holds a sticky slot, so a relaunch
+    // lands on the same URL — the bare "start it" imperative read as "spawn a fresh window" to an
+    // agent whose user owned the still-open tab.
+    const last = (await lastRunTimes(process.cwd()))(abs)
+    console.error(last
+      ? `No running server for '${file}' — it last ran ${relAgo(last)}. Relaunching reuses the same URL (a stale tab is one reload from live): npx typebulb ${file}`
+      : `No running server for '${file}'. Start it first: npx typebulb ${file}`)
     process.exit(1)
   }
 

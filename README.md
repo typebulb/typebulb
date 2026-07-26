@@ -243,7 +243,7 @@ The agent mirror turns that block into a live, sandboxed app, with a *breakout �
 
 ### Emitting a local bulb
 
-- **Launch once, and share the printed link.** `npx typebulb foo.bulb.md` starts the server and opens a tab (in VS Code's terminal it prints the link for the user to click instead). The link stays good — a bulb keeps its port across runs.
+- **Launch once, and share the printed link.** `npx typebulb foo.bulb.md` starts the server (in VS Code's terminal and agent shells it prints the link to share rather than opening a tab). The link stays good — a bulb keeps its port across runs.
 
 ### Iterating on a local bulb
 

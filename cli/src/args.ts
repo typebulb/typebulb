@@ -1,6 +1,7 @@
 import { parseLocalFlag, type LocalOverride } from './localOverride.js'
 import { parseBlockKind, parseBlockPairs, type BlockPair } from './blockPairs.js'
 import type { SubscriptKind } from 'typebulb/format'
+import { detectCallerHarness } from './agentViewer/resolve.js'
 
 /** `send --wait` (no value) waits this long for a page to (re)attach, then bounds the reply hold.
  *  Sized to cover an npx-booted reload's reconnect window without a long hang when nothing is
@@ -96,17 +97,20 @@ function tryParse<T>(fn: () => T): T {
 }
 
 export function parseArgs(args: string[]): CliArgs {
-  // Auto-open the external browser by default — except inside VS Code's integrated terminal, where the
-  // printed URL is a clickable terminal link: left-click opens it inline in a Simple Browser pane,
-  // right-click offers the external browser. Auto-opening external there picks the heavier option and
-  // throws that per-launch choice away. `--open` / `--no-open` override this either way.
-  const inVsCode = process.env.TERM_PROGRAM === 'vscode'
+  // Auto-open the external browser by default — except where the printed URL is the better handoff.
+  // VS Code's integrated terminal: the URL is a clickable link (left-click opens the Simple Browser
+  // pane), so auto-opening external picks the heavier option and throws that per-launch choice away.
+  // An agent harness's shell (detectCallerHarness — CC/pi env markers): the agent's job is to share
+  // the link, and a window popped at the user is the orphaned-window class — worst on a relaunch
+  // whose predecessor DIED, where nothing is "replaced" yet the user's stale tab is one reload from
+  // live on the same sticky port (TB-CLI.md). `--open` / `--no-open` override this either way.
+  const linkIsBetter = process.env.TERM_PROGRAM === 'vscode' || detectCallerHarness() !== undefined
 
   const result: CliArgs = {
     subcommand: 'run',
     file: '',
     watch: true,
-    open: !inVsCode,
+    open: !linkIsBetter,
     server: false,
     trust: false,
     noTrust: false,
@@ -418,8 +422,8 @@ Options:
                               whose reply you read.
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Bind this exact port (fails if taken; default: the project's assigned slot)
-  --open                      Force-open the external browser (default off
-                              inside VS Code's integrated terminal)
+  --open                      Force-open the external browser (default off in
+                              VS Code's integrated terminal and agent shells)
   --no-open                   Don't auto-open browser
   --trust                     Grant privileged capabilities (filesystem, AI,
                               and server.ts) for this run. Without it a bulb runs
