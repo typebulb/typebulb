@@ -7,6 +7,7 @@
  */
 export { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, serverLogPath, type BulbServer } from './serve/serverRegistry.js'
 export { listBulbFiles, listBulbBatches, type BulbFileInfo } from './serve/bulbFiles.js'
+export { lastRunTimes } from './serve/portBlocks.js'
 // Proactive trust prediction — scan a bulb for privileged tb.* usage so a host can offer --trust
 // before launching (TB-Security.md "Proactive prediction"). A hint, never a gate.
 export { predictBulbTrust } from './serve/predictBulbTrust.js'

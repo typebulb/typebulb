@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, isAbsolute } from 'path'
-import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, listBulbBatches, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
+import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, listBulbBatches, lastRunTimes, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { extractDescription } from 'typebulb/format'
@@ -88,6 +88,9 @@ export async function stopBreakout(pid: number) {
 // there's nothing to exclude from this file walk — the running mirror is dropped from the *server*
 // list by its `agent` field, not here. The host only overlays each bulb's remembered trust tier.
 export async function listBulbFiles() {
+  // `lastRunAt`: the port block's per-bulb launch time (0 when never run), so the pill's MRU can
+  // rank by use as well as by edit — a daily-driven bulb isn't buried under editing churn elsewhere.
+  const lastRun = await lastRunTimes(projectCwd)
   return listProjectBulbFiles(projectCwd)
     // Headless (server-only) bulbs run in console mode with no port, so the launcher's dev-server
     // model — play → `:port` link, stop — can't represent them (a play click spawns a process that
@@ -95,7 +98,7 @@ export async function listBulbFiles() {
     .filter(f => !f.serverOnly)
     // `batches`: the bulb's named batch scopes (TB-Batch.md Invariant 7), newest first, so the
     // row's picker can show the scope before launch. Empty for the common batch-less bulb.
-    .map(f => ({ ...f, trusted: isBulbTrusted(f.path), batches: listBulbBatches(f.path) }))
+    .map(f => ({ ...f, trusted: isBulbTrusted(f.path), batches: listBulbBatches(f.path), lastRunAt: lastRun(f.path) }))
 }
 
 // Full-text search over the project's bulb files — the launcher's analogue of searchSessions, for

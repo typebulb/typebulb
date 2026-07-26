@@ -22,3 +22,42 @@ describe('standalone page height chain', () => {
     expect(renderHtml({ ...base, embedded: true })).not.toContain(CHAIN)
   })
 })
+
+/**
+ * One coordinate space (TB-CLI.md): the served script is padded so its line numbers ARE the
+ * `.bulb.md`'s, and named with `//# sourceURL` so a stack reports that file instead of the document.
+ * Alignment is what makes `error.stack` — which no source map can reach — correct, so it is worth
+ * pinning: adding a line to the script preamble silently shifts every reported position.
+ */
+describe('the served script speaks the bulb\'s coordinates', () => {
+  const scriptBody = (html: string) => html.split('<script type="module">')[1].split('</script>')[0]
+
+  it('lands the code block\'s first line on its real file line', () => {
+    const code = 'const a = 1\nthrow new Error("x")'
+    const body = scriptBody(renderHtml({ ...base, code, source: { file: 'b.bulb.md', codeLine: 9 } }))
+    // Script line 1 is the newline after the opening tag, so index 8 is line 9.
+    expect(body.split('\n')[8]).toBe('const a = 1')
+    expect(body.split('\n')[9]).toBe('throw new Error("x")')
+  })
+
+  it('names the script after the bulb and points devtools at the file itself', () => {
+    const body = scriptBody(renderHtml({ ...base, code: 'const a = 1', source: { file: 'b.bulb.md', codeLine: 9 } }))
+    expect(body).toContain('//# sourceURL=b.bulb.md')
+
+    const map = JSON.parse(decodeURIComponent(body.match(/sourceMappingURL=data:application\/json;charset=utf-8,(.*)/)![1]))
+    expect(map.sources).toEqual(['/__source/b.bulb.md'])
+    // Identity mapping — alignment already put the two in step, so every line maps to its own.
+    expect(map.mappings.split(';').slice(0, 3)).toEqual(['AAAA', 'AACA', 'AACA'])
+  })
+
+  it('leaves an embed alone — it has no file to point at', () => {
+    const body = scriptBody(renderHtml({ ...base, code: 'const a = 1', embedded: true }))
+    expect(body).not.toContain('sourceURL')
+    expect(body).not.toContain('sourceMappingURL')
+  })
+
+  it('opens a line for the annotations, so a trailing // comment cannot swallow them', () => {
+    const body = scriptBody(renderHtml({ ...base, code: 'const a = 1\n// done', source: { file: 'b.bulb.md', codeLine: 9 } }))
+    expect(body).toContain('\n//# sourceURL=b.bulb.md')
+  })
+})

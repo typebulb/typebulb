@@ -6,6 +6,7 @@ import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
+import { resolvePort } from '../serve/portBlocks.js'
 import { watchPath } from '../serve/watcher.js'
 import { startServerLog, findProjectViewer } from '../serve/serverRegistry.js'
 import { isKnownAgent, listAgentNames, loadAgentServer } from './registry.js'
@@ -78,12 +79,21 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     watch: args.watch,
   })
 
+  // The project block's mirror slot for this harness — one per harness, so a project holding both a
+  // claude and a pi mirror never has them compete, and each keeps its URL all week.
+  const { port: assignedPort, note: portNote } = await resolvePort({
+    explicit: args.port,
+    target: { kind: 'mirror', agent },
+    cwd: basePath,
+  })
+
   // Start + register the mirror, and get the shared SIGINT/SIGTERM cleanup shell (serveSession.ts).
   // The registry identity is the `agent` field, not a `.bulb.md` path (a mirror has none) —
   // `typebulb agent`'s URL line and the launcher's self-exclusion find it that way
   // (TB-Agent-Mirror.md). `file` is a sentinel for `logs`/`stop` display only.
   const { port, url, onCleanup } = await startAndRegister({
-    portPreference: args.port,
+    port: assignedPort,
+    portNote,
     displayName,
     stopLog,
     makeServerOptions: (port) => ({

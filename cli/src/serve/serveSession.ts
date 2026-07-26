@@ -1,5 +1,6 @@
-import { startServer, findAvailablePort, type ServerOptions } from './server.js'
+import { startServer, type ServerOptions } from './server.js'
 import { registerServer, unregisterServer, type BulbServer } from './serverRegistry.js'
+import { reportPortInUse } from './portBlocks.js'
 
 /**
  * The shared server-lifecycle spine of the two long-running runners — the bulb dev server
@@ -22,8 +23,11 @@ export interface ServeSession {
 }
 
 export interface StartAndRegisterOpts {
-  /** Preferred port; findAvailablePort bumps past a busy one and the print notes it. */
-  portPreference: number
+  /** The port to bind, already decided by `serve/portBlocks.ts` (a project block's sticky slot, or
+   *  an explicit `--port`). Binding is the caller's decision by then: we bind it or we fail. */
+  port: number
+  /** Printed under the URL when the port isn't the target's assigned slot — silent otherwise. */
+  portNote?: string
   /** Build the startServer options once the true bound port is known. */
   makeServerOptions: (port: number) => ServerOptions
   /** Build the registry entry once the true port + url are known. */
@@ -35,10 +39,14 @@ export interface StartAndRegisterOpts {
 }
 
 export async function startAndRegister(opts: StartAndRegisterOpts): Promise<ServeSession> {
-  const { portPreference, makeServerOptions, makeEntry, displayName, stopLog } = opts
+  const { port, portNote, makeServerOptions, makeEntry, displayName, stopLog } = opts
 
-  const port = await findAvailablePort(portPreference)
-  const server = await startServer(makeServerOptions(port))
+  const server = await startServer(makeServerOptions(port)).catch(async (e) => {
+    // Lost the port in the gap since we probed it (portBlocks pre-checks, but the window is real).
+    // Same message either way — the collision is reported in exactly one place.
+    if ((e as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw e
+    return reportPortInUse(port)
+  })
   const url = `http://localhost:${port}`
 
   // Self-register so hosts (and other terminals) can discover/stop this server. We're listening now,
@@ -48,9 +56,9 @@ export async function startAndRegister(opts: StartAndRegisterOpts): Promise<Serv
 
   console.log(`\n  ${displayName}`)
   console.log(`  ${url}`)
-  // findAvailablePort bumps past a busy port; say so, or the URL silently lands somewhere other than
-  // where the caller asked (the wrong-port confusion this avoids).
-  if (port !== portPreference) console.log(`  (port ${portPreference} was busy)`)
+  // Only when we didn't land on the assigned slot. A bulb that got its own sticky port says nothing —
+  // announcing a default as "busy" reads as "your URL moved" when it didn't (TB-CLI.md).
+  if (portNote) console.log(`  ${portNote}`)
 
   const cleanups: Array<() => void | Promise<void>> = []
 

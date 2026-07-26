@@ -3,6 +3,8 @@
  * This JavaScript is injected into the HTML and runs in the browser.
  */
 
+import { reloadClientScript } from './pageChrome.js'
+
 export const typebulbShim = `
 (() => {
   // Embedded (bulb-in-a-bulb): runs inside a sandboxed iframe with no parent
@@ -449,11 +451,7 @@ export const typebulbShim = `
   // origin, not an embed); a srcdoc embed or a file:// static export has no server, so onMessage just
   // stays inert there. Opening it independent of watch is what lets send reach a --no-watch page.
   if (!isEmbedded && location.protocol.indexOf('http') === 0) {
-    const es = new EventSource('/__reload');
-    es.addEventListener('reload', () => {
-      console.log('[typebulb] Reloading...');
-      window.location.reload();
-    });
+${reloadClientScript}
     es.addEventListener('message', async (e) => {
       // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved
       // namespace (TB-Interrogation.md): answered by a built-in handler, never delivered to
@@ -486,10 +484,6 @@ export const typebulbShim = `
         try { fetch('/__send-reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results, errors }) }); } catch {}
       }
     });
-    es.onerror = () => {
-      // Server closed, stop trying
-      es.close();
-    };
   }
 })();
 `

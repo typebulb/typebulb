@@ -34,7 +34,9 @@ export interface CliArgs {
    *  target) ensures this project's mirror is up and prints what-to-do guidance;
    *  `typebulb skill` prints the skill. */
   agentTarget?: string
-  port: number
+  /** Explicit `--port` only. Absent means the project block assigns a sticky slot
+   *  (serve/portBlocks.ts) — there is no default port to fall back to. */
+  port?: number
   watch: boolean
   open: boolean
   server: boolean
@@ -103,7 +105,6 @@ export function parseArgs(args: string[]): CliArgs {
   const result: CliArgs = {
     subcommand: 'run',
     file: '',
-    port: 3000,
     watch: true,
     open: !inVsCode,
     server: false,
@@ -416,7 +417,7 @@ Options:
                               Use it right after an edit, and for any send
                               whose reply you read.
   --no-watch                  Disable hot reload (watch is on by default)
-  -p, --port <port>           Use a specific port (default: 3000)
+  -p, --port <port>           Bind this exact port (fails if taken; default: the project's assigned slot)
   --open                      Force-open the external browser (default off
                               inside VS Code's integrated terminal)
   --no-open                   Don't auto-open browser

@@ -89,3 +89,38 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
     })();
   </script>`
 }
+
+/**
+ * The `/__reload` client, shared by the bulb page (`shim.ts`) and the mirror (`agentViewer/page.ts`):
+ * hot reload, plus the reconnect half of a contract whose server half is `startServer`'s per-instance
+ * boot id. Both pages have to behave identically here, and one copy is what stops them drifting —
+ * the same reason the theme script lives in this file.
+ *
+ * Riding out a drop is the point. A relaunch stops the predecessor, compiles, then binds the same
+ * slot, so the stream is down for seconds; closing on the first error leaves a zombie page — stale
+ * render, no hot reload, and invisible to `typebulb send`, which counts open streams. EventSource
+ * retries on its own, so all we do is bound how long: a deliberate stop still ends with a dead page,
+ * just not instantly. A successor serves bytes we don't have, so a boot id other than the one we
+ * opened with means reload rather than resume.
+ *
+ * Leaves `es` in scope: the bulb shim adds its own `message` listener (the `typebulb send` channel)
+ * to the same stream.
+ */
+export const reloadClientScript = `
+    const es = new EventSource('/__reload');
+    let bootId = null;
+    let firstErrorAt = 0;
+    const RETRY_WINDOW_MS = 60000;
+    es.addEventListener('open', () => { firstErrorAt = 0; });
+    es.addEventListener('hello', (e) => {
+      if (bootId === null) bootId = e.data;
+      else if (e.data !== bootId) window.location.reload();
+    });
+    es.addEventListener('reload', () => {
+      console.log('[typebulb] Reloading...');
+      window.location.reload();
+    });
+    es.onerror = () => {
+      if (!firstErrorAt) firstErrorAt = Date.now();
+      if (Date.now() - firstErrorAt > RETRY_WINDOW_MS) es.close();
+    };`

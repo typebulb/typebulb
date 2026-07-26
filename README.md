@@ -61,7 +61,7 @@ typebulb stop --global         Stop every running bulb and mirror, all projects 
 typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted bulbs)
 typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
 typebulb --no-watch <file>     Disable hot reload
-typebulb --port 3333 <file>    Custom port
+typebulb --port 3333 <file>    Bind this exact port (fails if taken)
 typebulb --no-open <file>      Don't auto-open browser
 typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
 typebulb --batch <name> <file> Scope tb.dir + relative tb.fs paths to <bulb-folder>/batches/<name> (batch runs)
@@ -242,13 +242,13 @@ The agent mirror turns that block into a live, sandboxed app, with a *breakout �
 
 ### Emitting a local bulb
 
-- **Launch once, with `--no-open`.** `npx typebulb foo.bulb.md --no-open` starts the server; share the printed link for the user to open.
+- **Launch once, and share the printed link.** `npx typebulb foo.bulb.md` starts the server and opens a tab (in VS Code's terminal it prints the link for the user to click instead). The link stays good — a bulb keeps its port across runs.
 
 ### Iterating on a local bulb
 
 That one launch *is* the loop: the server watches the file, so every save recompiles and reloads the page (`server.ts` included) — editing the file is the iteration.
 
-- **Don't relaunch, and don't wrap it in `timeout`.** A relaunch only replaces the running server (one per bulb file); `timeout` kills it, and the racing relaunch is what spawns a second window on a fresh port.
+- **Don't relaunch, and don't wrap it in `timeout`.** A relaunch replaces the running server (one per bulb file), reclaiming the same port so the open tab reloads itself — it costs the page's in-memory state and nothing else. `timeout` kills it outright, and the racing relaunch is what spawns extra windows.
 - **What needs a restart:** a `.env` change (read once at boot) and in-memory `server.ts` state (reset on each reload).
 - **Each reload re-runs the bulb.** A save re-executes `code.tsx` from scratch, so work you start on mount repeats every edit — re-spending GPU/network, re-firing side effects, flooding the log. Put expensive or side-effecting work behind a trigger: `tb.onMessage(() => start())`, then `typebulb send <file>` when ready (also a general terminal→page channel — pass params, drive a loop).
 - **Reading the log:** it appends across every reload, so `typebulb logs --run latest <file>` shows just the current run (no need to clear).
@@ -261,7 +261,7 @@ That one launch *is* the loop: the server watches the file, so every save recomp
 - **Structured selftest** — a handler that returns `{ count, verdict }` beats one that logs prose: `typebulb send <file> selftest --wait` prints the object as JSON, and you assert on fields instead of parsing `logs`. At most one handler, in one page, may return a value; a slow check needs `--wait=<ms>` above the 5s default.
 - **Rendered truth** — `typebulb send <file> tb:snapshot` prints the page's accessibility outline (roles, names, visible text) without disturbing its state. Use it when logs say ok but the screen might not, and as the first probe on a live page in a state you can't reproduce — a save would hot-reload and destroy it. (`tb:` messages are answered by the runtime, never your handlers, and imply `--wait`.)
 - **Poking state** — to tweak a value in a live page (a save hot-reloads and destroys its state), author a set-handler up front: a `tb.onMessage` branch that takes a data payload (JSON arrives parsed), applies it to your state — committing the change if your framework needs an explicit step — and returns the new state: `typebulb send <file> '{"set":"speed","value":2}' --wait` prints it. In React, register it in an effect so it closes over the setters (the returned unsubscribe is the cleanup). Adding the handler later is itself the edit that destroys the state.
-- **A page must be open** — `send` reports "no page connected" until someone opens the printed link; the CLI runs no browser of its own.
+- **A page must be open** — the CLI runs no browser of its own, so every client-side check waits on a real window (and `--no-open` means there isn't one). `send` says which case it is: nobody has ever connected (share the link), or a page dropped and hasn't returned (it's stale — reload it).
 
 ### Emitting a server-only bulb
 
@@ -290,7 +290,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
 - **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).
-- **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout, captured in the log — and works **even on a Restricted bulb**), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
+- **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.server.log(...)` (prints to the server's stdout — and despite the name needs **no `server.ts` block**, working from `code.tsx` on a Restricted bulb, so a client-only bulb has a log channel), and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.

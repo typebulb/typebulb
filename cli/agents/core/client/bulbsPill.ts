@@ -142,7 +142,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       const files = await tb.server.listBulbFiles() as BulbFile[]
       const changed =
         files.length !== this.files.length ||
-        files.some((f, i) => f.path !== this.files[i]?.path || f.mtime !== this.files[i]?.mtime)
+        files.some((f, i) => f.path !== this.files[i]?.path || f.mtime !== this.files[i]?.mtime || f.lastRunAt !== this.files[i]?.lastRunAt)
       this.files = files
       if (changed) { this.update(); this.keepBottom() }
     } catch (err) {
@@ -180,8 +180,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
 
   // Project files ∪ running servers, keyed by path. The host's own file (and byte-identical copies)
   // are already dropped server-side in listBulbFiles; its own running server is dropped here by pid.
-  // A running server outside the project still shows so the off-switch stays unified. MRU = max(file
-  // mtime, server startedAt).
+  // A running server outside the project still shows so the off-switch stays unified. MRU = max(last
+  // edit, last run, live server startedAt) — the run half persists past the stop, so a bulb you drove
+  // all afternoon holds its place instead of teleporting back to wherever its last edit put it.
   merged(): BulbRow[] {
     const byKey = new Map<string, BulbRow>()
     const fileKeys = this.files.map(f => pathKey(f.path))
@@ -199,7 +200,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       }
     }
     this.files.forEach((f, i) => {
-      byKey.set(fileKeys[i], { path: f.path, name: f.name, recent: f.mtime, trusted: f.trusted, batches: f.batches })
+      byKey.set(fileKeys[i], { path: f.path, name: f.name, recent: Math.max(f.mtime, f.lastRunAt ?? 0), trusted: f.trusted, batches: f.batches })
     })
     for (const s of this.servers) {
       if (s.pid === this.parent.ownPid) continue
@@ -764,9 +765,10 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         hitsBadge(r.hitCount),
         pullError ? span({ class: 'pull-error' }, pullError) : null,
       ),
-      // The scope column — its own subgrid track between identity and the control cluster.
-      this.scopeCell(r, s),
+      // push/pull sits beside the name cell's typebulb.com link — one sync cluster; the scope column
+      // then heads the execution controls (trust · logs · port), where picking a batch belongs.
       this.syncCell(r),
+      this.scopeCell(r, s),
       // Trust toggle. Shown for a running server (the live tier matters) or a trusted-remembered
       // stopped bulb; a plain restricted stopped bulb shows an empty cell — "restricted" is the
       // implicit default and repeating it down every row is noise — but the cell still holds its grid

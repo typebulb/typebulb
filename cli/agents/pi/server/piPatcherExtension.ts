@@ -23,7 +23,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Type } from 'typebox'
-import { Patcher, PatchInputFile, PatchParserException } from 'matchu-patchu'
+import { Patcher, PatchInputFile, PatchOutputFile, PatchParserException } from 'matchu-patchu'
 
 // Replaced at build time by esbuild `define` with the package's description.md verbatim — the same
 // text the MCP server presents, so both harnesses teach the tool identically. Literal = tsc fallback.
@@ -53,14 +53,14 @@ const errorBlocks = (errors: { toString(): string }[]) => {
   return parts.join('\n')
 }
 
-// Zero edits is a no-op, not a normal success: say why, and don't touch the file
-// (a rewrite of identical content still churns mtime/watchers).
-const noOpMessage = (target: string, alreadyApplied: number) =>
-  alreadyApplied > 0
-    ? `Applied 0 edit(s) to ${target}: the file already contains this change (${alreadyApplied} chunk(s) detected as already applied). File left unmodified.`
-    : `Applied 0 edit(s) to ${target}: the patch parsed but produced no changes for this file. File left unmodified.`
-
-const fuzzNote = (fuzz: number) => (fuzz > 0 ? ` (applied with fuzz factor ${fuzz})` : '')
+// This layer reports only what it did with the bytes; WHY the patch landed this way (already
+// applied, fuzz, truncation, a skipped context-only hunk) is the lib's Notices, rendered verbatim
+// and never re-derived here. Zero edits also means we don't touch the file — a rewrite of
+// identical content still churns mtime/watchers.
+const outcomeMessage = (target: string, out: PatchOutputFile) =>
+  `Applied ${out.Edits.length} edit(s) to ${target}.` +
+  (out.Edits.length > 0 ? '' : ' File left unmodified.') +
+  out.Notices.map(n => ' ' + n).join('')
 
 /**
  * The file keys a diff's headers name, exactly as the patcher will group hunks: an Apply with no
@@ -83,12 +83,11 @@ function applySingle(cwd: string, filePath: string, diff: string, dryRun: boolea
   if (!existsSync(abs)) return { ok: false, message: `Error: file not found: ${filePath}` }
   const out = Patcher.Apply(diff, [new PatchInputFile('', readFileSync(abs, 'utf-8'))]).Files[0]
   if (out.Errors.length > 0) return { ok: false, message: errorBlocks(out.Errors) }
-  if (out.Edits.length === 0) return { ok: true, message: noOpMessage(filePath, out.AlreadyAppliedCount) }
-  if (!dryRun) writeFileSync(abs, out.OutputFullText)
+  if (out.Edits.length > 0 && !dryRun) writeFileSync(abs, out.OutputFullText)
   return {
     ok: true,
     message:
-      `Successfully applied ${out.Edits.length} edit(s) to ${filePath}${fuzzNote(out.Fuzz)}.` +
+      outcomeMessage(filePath, out) +
       (dryRun ? `\n\n--- patched output ---\n${out.OutputFullText}` : ''),
   }
 }
@@ -111,13 +110,11 @@ function applyMulti(cwd: string, diff: string, dryRun: boolean): PatchOutcome {
   const lines: string[] = []
   const dryOutputs: string[] = []
   for (const out of result.Files) {
-    if (out.Edits.length === 0) {
-      lines.push(noOpMessage(out.Key, out.AlreadyAppliedCount))
-      continue
+    if (out.Edits.length > 0) {
+      if (!dryRun) writeFileSync(resolve(cwd, out.Key), out.OutputFullText)
+      else dryOutputs.push(`--- patched output: ${out.Key} ---\n${out.OutputFullText}`)
     }
-    if (!dryRun) writeFileSync(resolve(cwd, out.Key), out.OutputFullText)
-    else dryOutputs.push(`--- patched output: ${out.Key} ---\n${out.OutputFullText}`)
-    lines.push(`Successfully applied ${out.Edits.length} edit(s) to ${out.Key}${fuzzNote(out.Fuzz)}.`)
+    lines.push(outcomeMessage(out.Key, out))
   }
   return { ok: true, message: [lines.join('\n'), ...dryOutputs].join('\n\n') }
 }

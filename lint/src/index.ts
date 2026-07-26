@@ -11,6 +11,8 @@
  * `export =` / `import =`, `module {}`, redundant `tb`) applies to both.
  */
 
+import { codeView } from './codeView.js'
+
 export type LintTarget = 'client' | 'server'
 
 export type LintIssueType =
@@ -76,11 +78,11 @@ function importRoot(spec: string): string | null {
 
 /** Each bare-import root's FIRST occurrence in `source`, in first-seen order — the one walk shared
  *  by `bareImportRoots` and the UNDECLARED_IMPORT rule, so what a caller *derives* into config.json
- *  (e.g. the CLI's `breakout`) matches exactly what that rule would *demand* — the two can't drift. */
+ *  (e.g. the CLI's `breakout`) matches exactly what that rule would *demand* — the two can't drift.
+ *  Takes a `codeView` (comments and template literals blanked), never raw source. */
 function firstBareRoots(source: string): { root: string; lineIndex: number }[] {
   // Whole-source matching, NOT per-line: a multi-line import (`import {\n x,\n} from 'react'`)
-  // is invisible line-by-line but seen by the resolver, which applies these same regexes to the
-  // full text — matching scope is part of the "can't drift" contract above.
+  // is invisible line-by-line but is a real import, so the scope has to be the whole text.
   const matches: { root: string; index: number }[] = []
   for (const pattern of IMPORT_FROM) {
     for (const m of source.matchAll(pattern)) {
@@ -105,7 +107,7 @@ function firstBareRoots(source: string): { root: string; lineIndex: number }[] {
  * specifiers are excluded (not packages).
  */
 export function bareImportRoots(source: string): string[] {
-  return firstBareRoots(source).map(o => o.root)
+  return firstBareRoots(codeView(source)).map(o => o.root)
 }
 
 /**
@@ -120,16 +122,27 @@ export function bareImportRoots(source: string): string[] {
  * would otherwise resolve undeclared imports anyway). typebulb.com omits it: the web
  * *derives* config.json from the imports, so there's nothing to enforce. Pass `{}` to
  * enforce against an empty/absent dependencies block (every bare import then fails).
+ *
+ * `lineOffset` is the block's first line **in its containing `.bulb.md`**, so issues report the
+ * coordinates of the file the caller actually edits. It must be an input rather than a rewrite of
+ * the output: the number is baked into the AI-facing message prose ("Found on line N"), and a
+ * header disagreeing with the body is worse than the offset it fixes. typebulb.com omits it — the
+ * editor's coordinate space *is* the block (TB-Lint-Transpile.md Invariant 8).
  */
-export function lint(source: string, options: { target: LintTarget; dependencies?: Record<string, string> }): LintIssue[] {
+export function lint(source: string, options: { target: LintTarget; dependencies?: Record<string, string>; lineOffset?: number }): LintIssue[] {
   if (!source) return []
   const { target, dependencies } = options
+  const shift = (options.lineOffset ?? 1) - 1
   const issues: LintIssue[] = []
   const lines = source.split('\n')
+  // Rules match TEXT, so they run against the code view — comments and template-literal bodies
+  // blanked — while `lineContent` still quotes the real line. Without it an inline Web Worker's
+  // source trips URL_IMPORT and its bulb can never pass `check` (codeView.ts).
+  const viewLines = codeView(source).split('\n')
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const lineNumber = i + 1
+    const line = viewLines[i]
+    const lineNumber = i + 1 + shift
     for (const rule of RULES) {
       if (!rule.targets.includes(target)) continue
       if (!rule.pattern.test(line)) continue
@@ -138,7 +151,7 @@ export function lint(source: string, options: { target: LintTarget; dependencies
         severity: 'error',
         message: messageFor(rule.type, lineNumber),
         lineNumber,
-        lineContent: line,
+        lineContent: lines[i],
       })
     }
   }
@@ -146,7 +159,7 @@ export function lint(source: string, options: { target: LintTarget; dependencies
   // Undeclared-import rule — client-only (server.ts deps are npm-installed by name, not declared),
   // and only when the caller supplied the declared set (typebulb.com omits it; it derives config
   // from the imports, so the rule stays dormant there).
-  if (target === 'client' && dependencies) issues.push(...undeclaredImportIssues(lines, dependencies))
+  if (target === 'client' && dependencies) issues.push(...undeclaredImportIssues(viewLines, lines, dependencies, shift))
 
   return issues
 }
@@ -156,17 +169,21 @@ export function lint(source: string, options: { target: LintTarget; dependencies
  * (first line it appears on), so a package imported many times reports once. The root, not the
  * specifier, is what's declared (`react-dom/client` → `react-dom`).
  */
-function undeclaredImportIssues(lines: string[], dependencies: Record<string, string>): LintIssue[] {
+function undeclaredImportIssues(viewLines: string[], lines: string[], dependencies: Record<string, string>, shift: number): LintIssue[] {
   const declared = new Set(Object.keys(dependencies))
-  return firstBareRoots(lines.join('\n'))
+  return firstBareRoots(viewLines.join('\n'))
     .filter(({ root }) => !declared.has(root))
-    .map(({ root, lineIndex }) => ({
-      type: 'UNDECLARED_IMPORT' as const,
-      severity: 'error' as const,
-      message: undeclaredImportMessage(root, lineIndex + 1),
-      lineNumber: lineIndex + 1,
-      lineContent: lines[lineIndex],
-    }))
+    .map(({ root, lineIndex }) => {
+      // One computation for the field and the message prose — the two can't disagree (Invariant 8).
+      const lineNumber = lineIndex + 1 + shift
+      return {
+        type: 'UNDECLARED_IMPORT' as const,
+        severity: 'error' as const,
+        message: undeclaredImportMessage(root, lineNumber),
+        lineNumber,
+        lineContent: lines[lineIndex],
+      }
+    })
 }
 
 function undeclaredImportMessage(root: string, lineNumber: number): string {

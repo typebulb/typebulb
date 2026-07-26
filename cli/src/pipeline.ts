@@ -53,12 +53,14 @@ export function conventionalIdentity(absPath: string): { userSlug: string; slug:
  * CLI-only `server.ts`) and the parsed `config.json` block. Throws on malformed
  * input — callers decide whether to exit or propagate.
  */
-export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; config: ReturnType<typeof parseConfig>; warnings: string[] }> {
+export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; config: ReturnType<typeof parseConfig>; warnings: string[]; starts: Map<string, number> }> {
   const content = await fs.readFile(bulbPath, 'utf-8')
   const parsed = parseBulb(content)
   if (!parsed) throw new Error('Invalid .bulb.md file format')
   const bulb = toLocalBulb(parsed)
-  return { bulb, config: parseConfig(bulb.config), warnings: validateBulbStructure(content) }
+  // `starts` carries each block's first line in the .bulb.md — what maps a tool's block coordinates
+  // back to the file the user edits (TB-CLI.md, One coordinate space).
+  return { bulb, config: parseConfig(bulb.config), warnings: validateBulbStructure(content), starts: parsed.starts }
 }
 
 /** The compiled server module's path: `.typebulb/<slug>.server.mjs` beside the bulb. Keyed by the
@@ -107,7 +109,7 @@ export async function importServerModule(serverSource: string, bulbPath: string,
 }
 
 export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: boolean, local: ResolvedLocalOverride | undefined, batch?: string) {
-  const { bulb, config } = await readBulb(bulbPath)
+  const { bulb, config, starts } = await readBulb(bulbPath)
   const dataChunks = splitIntoChunks(bulb.data)
 
   // Enforce the CLI's authored-config contract before compiling — every bare client import declared in
@@ -160,6 +162,8 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     importMap,
     dir: bulbDataDir(bulbPath, batch),
     watch,
+    // The served script speaks this file's coordinates (TB-CLI.md, One coordinate space).
+    source: { file: path.basename(bulbPath), codeLine: starts.get('code.tsx') ?? 1 },
   })
 
   // Env is already loaded into process.env by the caller (index.ts runWeb/runConsole) from the

@@ -26,11 +26,17 @@ export interface RenderOptions {
   /** The bulb's folder, absolute (TB-FS.md) — injected as window.__TB_DIR__ for tb.dir.
    *  Omitted for embeds (no filesystem) and hosts without a bulb file. */
   dir?: string
+  /**
+   * Names the `.bulb.md` this page was compiled from, so the served script speaks the file's
+   * coordinates (TB-CLI.md, One coordinate space). `codeLine` is the 1-based line of `code.tsx`'s
+   * first content line in that file. Local runs only: an embed has no file to point at.
+   */
+  source?: { file: string; codeLine: number }
 }
 
 /** Render a bulb to a complete HTML page */
 export function renderHtml(options: RenderOptions): string {
-  const { name, code, css, html, data, insight, importMap, theme, embedded, dir } = options
+  const { name, code, css, html, data, insight, importMap, theme, embedded, dir, source } = options
 
   // Default HTML if none provided
   const userHtml = html.trim() || '<div id="app"></div>'
@@ -77,13 +83,58 @@ ${typebulbShim}
 
 ${embedProtocol}
 
-<script type="module">
-globalThis.__tbEntryRan = true; /* import graph resolved — the load-failure backstop's signal (imports hoist above this line) */
-await globalThis.__tbBoot; /* #tb= fragment restore, set by the shim when present (TB-Inference.md) */
-${escapeScript(code)}
-</script>
+${moduleScript(code, source)}
 </body>
 </html>`
+}
+
+/** Runs before the bulb's own code, inside the same module script. */
+const MODULE_PREAMBLE = [
+  'globalThis.__tbEntryRan = true; /* import graph resolved — the load-failure backstop\'s signal (imports hoist above this line) */',
+  'await globalThis.__tbBoot; /* #tb= fragment restore, set by the shim when present (TB-Inference.md) */',
+]
+
+/**
+ * The module script, assembled as lines so its line numbering is derived rather than asserted.
+ *
+ * A browser numbers an inline script from the character after the opening tag's `>`, which is the
+ * newline ending that line — so line 1 is always empty, and `leading` below IS the offset the bulb's
+ * code starts at. Given `source`, blank lines push the code down until the script's line numbers ARE
+ * the `.bulb.md`'s. Sucrase preserves line numbers, so from there every position agrees end to end,
+ * including `error.stack` — which a source map cannot touch (maps are devtools-side, and the runtime's
+ * uncaught-error forwarding reads the raw stack).
+ */
+function moduleScript(code: string, source: RenderOptions['source']): string {
+  const leading = ['', ...MODULE_PREAMBLE]
+  const padding: string[] = source ? Array(Math.max(0, source.codeLine - leading.length - 1)).fill('') : []
+  const script = [...leading, ...padding, escapeScript(code)].join('\n')
+  return `<script type="module">${script}${sourceAnnotations(source, script)}\n</script>`
+}
+
+/**
+ * `sourceURL` gives the inline script the bulb's own identity — without it a stack names the document
+ * and counts from the top of the HTML. `sourceMappingURL` then points devtools at the real file, so
+ * the Sources panel shows the `.bulb.md` you edit rather than the transpiled JS. The mapping is
+ * identity because `moduleScript`'s padding already made the two line up; the source is fetched from the dev
+ * server (`/__source/…`) rather than inlined, so a bulb with a large `data.txt` doesn't ship twice.
+ *
+ * Both annotations open a line of their own. Appended to the code's last line instead, a bulb whose
+ * final line is a `//` comment would swallow them whole.
+ */
+function sourceAnnotations(source: RenderOptions['source'], script: string): string {
+  if (!source) return ''
+  const lines = script.split('\n').length
+  const map = {
+    version: 3,
+    file: source.file,
+    sources: [`/__source/${source.file}`],
+    names: [],
+    // One segment per generated line, all zero-delta but the original line: "AAAA" then "AACA" each.
+    mappings: ['AAAA', ...Array(Math.max(0, lines - 1)).fill('AACA')].join(';'),
+  }
+  // sourceURL is whitespace-delimited: encode spaces or `my bulb.bulb.md` names the script `my`.
+  return `\n//# sourceURL=${source.file.replace(/\s/g, '%20')}\n`
+    + `//# sourceMappingURL=data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(map))}`
 }
 
 // Host↔embed protocol (bulb-in-a-bulb) + uncaught-error forwarding. When framed it posts
@@ -105,13 +156,16 @@ const embedProtocol = `<script>
   var post = function (m) { try { parent.postMessage(m, '*'); } catch (e) {} };   /* framed only */
   var lastError;
   var errorPosted = false;
-  var postError = function (message) {
+  var postError = function (message, where) {
     message = String(message);
     if (message === lastError) return;   /* a tight error loop reports once, not per frame */
     lastError = message;
     errorPosted = true;
     if (framed) post({ __typebulbEmbed: true, kind: 'error', message: message });
-    else { try { fetch('/__log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ args: ['[runtime error] ' + message] }) }).catch(function () {}); } catch (e) {} }
+    /* Standalone only: the script is line-aligned to the .bulb.md and named by sourceURL, so the
+       position is the user's own file — worth carrying into the log an agent reads. An embed has no
+       such file (its frames name the srcdoc), so the host branch stays message-only. */
+    else { try { fetch('/__log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ args: ['[runtime error] ' + message + (where ? ' (' + where + ')' : '')] }) }).catch(function () {}); } catch (e) {} }
   };
   // Capture phase: a resource/module load failure (a <script>/<link>/<img> that 404s) does NOT
   // bubble, so it reaches window only here, carrying the failing element as e.target (no message).
@@ -124,7 +178,7 @@ const embedProtocol = `<script>
     // The benign "ResizeObserver loop completed…" notice surfaces as a window error in
     // some browsers; it's not a bulb fault, so don't forward it to the host as one.
     if (m.indexOf('ResizeObserver') !== -1) return;
-    postError(m);
+    postError(m, e && e.filename ? e.filename + ':' + e.lineno + ':' + e.colno : '');
   });
   window.addEventListener('unhandledrejection', function (e) {
     var r = e && e.reason;

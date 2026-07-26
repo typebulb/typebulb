@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { startServer, findAvailablePort } from '../src/serve/server.js'
+import { startServer } from '../src/serve/server.js'
+import { findAvailablePort } from '../src/serve/portBlocks.js'
 
 /**
  * runtime-specs/TB-Proxy.md Invariant 1/3, end-to-end. The CLI serves esm.sh module bytes from localhost, so

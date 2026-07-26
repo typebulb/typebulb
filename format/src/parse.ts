@@ -22,6 +22,13 @@ export interface ParsedBulb {
   frontmatter: BulbFrontmatter
   /** Block contents keyed by filename (e.g. `code.tsx`). */
   files: Map<string, string>
+  /**
+   * 1-based line number, in the `.bulb.md`, of each block's FIRST content line (the line after its
+   * opening fence), keyed by filename. A bulb is a container: every tool inside it — tsc, lint, a
+   * browser stack trace — reports block coordinates, while the only file the user can open and link
+   * to is the bulb. This is the offset that maps one to the other (TB-CLI.md, One coordinate space).
+   */
+  starts: Map<string, number>
   /** Structural defects tolerated during parse (an unterminated fence); empty when well-formed. */
   warnings: string[]
   /**
@@ -60,6 +67,7 @@ export function parseBulb(content: string): ParsedBulb | null {
 
     // Parse file sections
     const files = new Map<string, string>()
+    const starts = new Map<string, number>()
     const warnings: string[] = []
     // Where the body ends: bumped to the line past each captured block's closing fence. Starts at the
     // first line after the frontmatter, so a block-less bulb reports that.
@@ -86,6 +94,7 @@ export function parseBulb(content: string): ParsedBulb | null {
         const fence = fenceMatch[1]
         i++
 
+        const startLine = i + 1   // 1-based: the first line inside the fence
         const contentLines: string[] = []
         const closeRe = fenceCloseRe(fence)
         while (i < lines.length && !lines[i]?.match(closeRe)) {
@@ -97,13 +106,14 @@ export function parseBulb(content: string): ParsedBulb | null {
 
         warnings.push(...blockWarnings(filename, contentLines, terminated))
         files.set(filename, contentLines.join('\n'))
+        starts.set(filename, startLine)
         bodyEndLine = i
       } else {
         i++
       }
     }
 
-    return { frontmatter, files, warnings, bodyEndLine }
+    return { frontmatter, files, warnings, bodyEndLine, starts }
   } catch {
     return null
   }

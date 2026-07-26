@@ -8,6 +8,7 @@ import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/fo
 import { predictTrust } from '../bulb/predictTrust.js'
 import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
+import { resolvePort } from '../serve/portBlocks.js'
 import { watchPath } from '../serve/watcher.js'
 import { startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
@@ -44,6 +45,16 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // lands on the same port and an old tab's reload reconnects.
   const replaced = await stopServersForBulb(bulbPath)
   if (replaced.length) console.log(`Replacing the running server for this bulb (pid ${replaced.map(s => s.pid).join(', ')})`)
+
+  // The project block's sticky slot for this bulb (TB-CLI.md, Port allocation) — the same port every
+  // run, so the replace above cannot move the URL out from under the user's open tab. Resolved right
+  // after stopping the predecessor (which frees the slot to reclaim) and before the compile, so an
+  // explicit `--port` that's taken fails immediately instead of after a build's worth of output.
+  const { port: assignedPort, note: portNote } = await resolvePort({
+    explicit: args.port,
+    target: { kind: 'bulb', file: bulbPath },
+    cwd: process.cwd(),
+  })
 
   // Run id: run 1 is this process's initial compile, each successful hot reload bumps it. Emitting
   // the marker here (the first teed line) makes all of run 1's output — startup chrome and the bulb's
@@ -84,7 +95,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // (serveSession.ts). The cross-project registry entry is what breakout's launch/list/stop
   // builds on (TB-Agent-Mirror-Embed.md).
   const { port, url, onCleanup } = await startAndRegister({
-    portPreference: args.port,
+    port: assignedPort,
+    portNote,
     displayName: bulb.name,
     stopLog,
     // Dynamic HTML/exports getters so a hot reload swaps the served bytes in place.
@@ -108,6 +120,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
       bulbAssets: { dirs: assetsDirs, remoteBase: identity && hostedAssetsBase(identity.userSlug, identity.slug) },
+      // Backs the page's source map: devtools fetches the bulb itself from /__source/.
+      sourceFile: bulbPath,
       trusted: args.trust,
       trustHint,
     }),
@@ -199,9 +213,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   onCleanup(() => fs.rm(serverModulePath(bulbPath), { force: true }))
 
   // Open browser — unless this launch replaced a live server on the same port, in which case its
-  // existing tab reconnects over SSE and reloads on its own. Opening a second tab would only pile up
-  // (the orphaned-tab complaint); the relaunch loop reuses one tab instead. (Stopping the predecessor
-  // before findAvailablePort is what frees the port in time to land on it again — see above.)
+  // existing tab reconnects over SSE and reloads itself (the shim's boot-id check). Opening a second
+  // tab would only pile up (the orphaned-tab complaint); the relaunch loop reuses one tab instead.
   if (args.open) {
     if (replaced.some(s => s.port === port)) console.log('  Reusing the open browser tab.\n')
     else await open(url)

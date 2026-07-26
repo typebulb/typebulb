@@ -30,6 +30,9 @@ const LOOPBACK = '127.0.0.1'
 // DNS-rebinding domain pointed at 127.0.0.1) addresses us by a name we don't own.
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
+/** Counts server instances in this process, so two started in the same millisecond still differ. */
+let serverInstances = 0
+
 /** Hostname of a `Host` header (`127.0.0.1:3000`) or an `Origin` (`http://…:3000`),
  *  port and IPv6 brackets stripped. undefined if absent/unparseable. */
 function hostnameOf(value: string | undefined): string | undefined {
@@ -103,6 +106,9 @@ export interface ServerOptions {
    *  hosted base (TB-Assets-Push.md Invariant 2); a miss in every dir 302s there when set,
    *  else 404s. */
   bulbAssets?: { dirs: string[]; remoteBase?: string }
+  /** The `.bulb.md` this page was compiled from. Served read-only at `/__source/…` so devtools can
+   *  fetch the file the page's source map points at (TB-CLI.md, One coordinate space). */
+  sourceFile?: string
 }
 
 export interface ServerInstance {
@@ -112,7 +118,13 @@ export interface ServerInstance {
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets, bulbAssets } = options
+  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets, bulbAssets, sourceFile } = options
+
+  // Identifies THIS server instance to a connected page: a replace hands our port to a successor, and
+  // the id changing across a reconnect is how the page knows to reload rather than resume. Per
+  // instance, not per process — a process can hold more than one server, and "the server you are
+  // talking to" is the thing the page actually needs to identify.
+  const bootId = `${process.pid}-${++serverInstances}-${Date.now()}`
   // Relative /__fs paths resolve here (the bulb's folder — TB-FS.md); containment stays basePath.
   const fsRoot = fsBase ?? basePath
 
@@ -223,6 +235,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // response until every page then connected has POSTed `/__send-reply` for that id, or the window
   // elapses. Aggregation only — the one-reply rule is the CLI's to enforce — and still never a
   // queue: zero connected pages resolves immediately, reply or not.
+  /** When a page's event stream last went away. The difference between "never opened" and "open but
+   *  stale", which is the whole diagnosis when a send finds nobody home. */
+  let lastPageDropAt = 0
   if (messageEmitter) {
     /** One held `/__send?reply` awaiting its pages' `/__send-reply` POSTs. */
     type PendingSend = { expected: number; received: number; results: string[]; errors: string[]; finish: (timedOut: boolean) => void }
@@ -234,9 +249,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       try { payload = await c.req.text() } catch { /* empty body ⇒ a bare trigger */ }
       const replyMs = Number(c.req.query('reply')) || 0
       const clients = messageEmitter.listenerCount('message')
+      // With nobody listening, report WHICH nothing this is: a bulb never opened, or a page that was
+      // here until seconds ago and hasn't come back — a stale tab the user is looking at right now.
+      // "No page connected" is true for both and useless for either (TB-CLI.md, observed state).
+      const dropped = clients === 0 && lastPageDropAt ? Date.now() - lastPageDropAt : undefined
       if (replyMs <= 0 || clients === 0) {
         messageEmitter.emit('message', { payload })
-        return c.json({ clients })
+        return c.json({ clients, droppedMsAgo: dropped })
       }
       const id = ++sendSeq
       const outcome = await new Promise<{ results: string[]; errors: string[]; timedOut: boolean }>(resolve => {
@@ -512,6 +531,19 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // CDN proxy — same-origin serving for Web Workers, WASM, AND all package
   // fetches that the import map routes here. Disk-cached so repeated runs
   // (and offline use) don't re-fetch.
+  // The bulb's own source, for devtools: the page's source map points here, so the Sources panel
+  // shows the `.bulb.md` rather than the transpiled script. Read fresh, so a save shows up on the
+  // next look. Ungated — it is the source of the page you are already looking at — and it serves one
+  // configured file whatever the path says, so there is nothing to traverse.
+  if (sourceFile) {
+    app.get('/__source/*', async (c) => {
+      const text = await fs.readFile(sourceFile, 'utf-8').catch(() => undefined)
+      return text === undefined
+        ? c.text('Not Found', 404)
+        : new Response(text, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+    })
+  }
+
   const PROXY_ALLOWED_HOSTS = ['esm.sh', 'unpkg.com', 'cdn.jsdelivr.net', 'cdnjs.cloudflare.com']
   const proxyCache = new FsProxyCache()
 
@@ -620,7 +652,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         stream.onAbort(() => {
           reloadEmitter?.removeListener('reload', onReload)
           messageEmitter?.removeListener('message', onMessage)
+          lastPageDropAt = Date.now()
         })
+
+        // Who the page just connected to. A replace hands the same port to a NEW process serving new
+        // bytes, so a page that reconnects and sees a different boot id reloads itself; the same id
+        // (a laptop wake, a network blip) resumes silently. Without this a reconnected tab is a
+        // zombie showing the dead server's render — TB-CLI.md, "A replace keeps the user's tab".
+        await stream.writeSSE({ event: 'hello', data: bootId })
 
         // Keep connection alive. Checking `aborted` is what lets this coroutine end when the
         // page disconnects — Hono's `sleep` ignores abort, and the stream only closes once
@@ -651,6 +690,17 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     port,
     hostname: LOOPBACK,
   })
+
+  // A bind failure arrives as an 'error' event on the underlying http server, never a throw — so
+  // wait for `listening` and surface EADDRINUSE as a rejection instead of an uncaught crash. The
+  // caller (serveSession) is where it becomes a message naming whoever holds the port.
+  if (!server.listening) {
+    await new Promise<void>((resolveListen, reject) => {
+      const onError = (e: unknown) => reject(e)
+      server.once('error', onError)
+      server.once('listening', () => { server.removeListener('error', onError); resolveListen() })
+    })
+  }
 
   return {
     port,
@@ -696,25 +746,4 @@ async function readServable(rel: string, dir: string, extraHeaders: Record<strin
   const body = await fs.readFile(abs).catch(() => undefined)
   if (!body) return undefined
   return new Response(body as unknown as BodyInit, { headers: { 'Content-Type': contentTypeFor(abs), ...extraHeaders } })
-}
-
-/** Find an available port starting from the preferred port, probing loopback so
- *  the check matches the interface the server actually binds. */
-export async function findAvailablePort(preferred: number): Promise<number> {
-  const net = await import('net')
-
-  return new Promise((resolve) => {
-    const server = net.createServer()
-
-    server.listen(preferred, LOOPBACK, () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address ? address.port : preferred
-      server.close(() => resolve(port))
-    })
-
-    server.on('error', () => {
-      // Port in use, try next
-      resolve(findAvailablePort(preferred + 1))
-    })
-  })
 }

@@ -177,6 +177,16 @@ The agent mirror is live at http://localhost:3000.`
     expect(src.split('\n')[p.bodyEndLine - 1]).toBe('```')
     expect(src.split('\n').slice(p.bodyEndLine).join('\n')).toContain('trailing prose')
   })
+
+  // Each block's first content line in the .bulb.md — the offset that maps a tool's block-relative
+  // position (tsc, lint, a stack trace) onto the file the user actually edits.
+  it('records each block\'s first content line, 1-based, in the .bulb.md', () => {
+    const src = '---\nformat: typebulb/v1\nname: x\n---\n\n**code.tsx**\n\n```tsx\nfirst\nsecond\n```\n\n**styles.css**\n\n```css\nbody {}\n```'
+    const p = parseBulb(src)!
+    const lines = src.split('\n')
+    expect(lines[p.starts.get('code.tsx')! - 1]).toBe('first')
+    expect(lines[p.starts.get('styles.css')! - 1]).toBe('body {}')
+  })
 })
 
 describe('parse — strictness (settled behaviour, do not regress)', () => {

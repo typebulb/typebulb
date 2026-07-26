@@ -1,4 +1,5 @@
 import * as path from 'path'
+import * as http from 'http'
 import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
 
@@ -24,7 +25,35 @@ import { DEFAULT_SEND_WAIT_MS } from '../args.js'
  * error, as is a handler throw. `tb:*` messages are shim-answered (never reach `tb.onMessage`) and
  * imply `--wait` — a reply is their only purpose, so silence is an error for them alone.
  */
-interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean }
+interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number }
+
+/**
+ * POST to the running server over `node:http` rather than global `fetch`. `--wait` is the only ceiling
+ * the exchange has: undici (what `fetch` is) caps a response at a 300s header timeout, so a longer
+ * `--wait` died at five minutes as a bare `fetch failed` — on exactly the long-running client work
+ * `send` exists to drive. Node exposes no dispatcher to raise it, and the target is loopback plain
+ * HTTP, so we make the request directly and disable timeouts outright (TB-CLI.md).
+ */
+function postToServer(url: string, body: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url)
+    const req = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname + target.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      let text = ''
+      res.setEncoding('utf8')
+      res.on('data', chunk => { text += chunk })
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }))
+    })
+    req.setTimeout(0)
+    req.on('error', reject)
+    req.end(body)
+  })
+}
 
 export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
   const reserved = message !== undefined && message.startsWith('tb:')
@@ -38,16 +67,12 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   }
 
   const post = async (replyMs: number): Promise<SendOutcome> => {
-    const resp = await fetch(`${server.url}/__send${replyMs > 0 ? `?reply=${replyMs}` : ''}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: message ?? '',
-    })
-    if (!resp.ok) {
+    const resp = await postToServer(`${server.url}/__send${replyMs > 0 ? `?reply=${replyMs}` : ''}`, message ?? '')
+    if (resp.status < 200 || resp.status >= 300) {
       console.error(`send failed: HTTP ${resp.status} from ${server.url}/__send`)
       process.exit(1)
     }
-    return (await resp.json().catch(() => ({}))) as SendOutcome
+    try { return JSON.parse(resp.text) as SendOutcome } catch { return {} }
   }
 
   let outcome: SendOutcome = {}
@@ -66,8 +91,15 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   const clients = outcome.clients ?? 0
   const pages = `${clients} page${clients === 1 ? '' : 's'}`
   if (clients === 0) {
-    if (waitMs > 0) console.error(`No page connected after ${waitMs / 1000}s — is the bulb open?`)
-    else console.error('Sent, but no page is connected yet — open the bulb and retry.')
+    // Report what the server observed, not just that nobody answered: a page that WAS attached and
+    // hasn't come back is a stale tab in front of the user, and saying so is the whole difference
+    // between a one-keystroke fix and an hour of hunting (TB-CLI.md, observed state).
+    const dropped = outcome.droppedMsAgo
+    const stale = dropped !== undefined
+      ? ` — a page disconnected ${Math.round(dropped / 1000)}s ago and hasn't reconnected; reload it, or open ${server.url}`
+      : ` — no page has ever connected; open ${server.url}`
+    if (waitMs > 0) console.error(`No page connected after ${waitMs / 1000}s${stale}`)
+    else console.error(`Sent, but no page is connected${stale}`)
     if (reserved) process.exit(1)   // a tb:* message exists only for its reply
     return
   }

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readdir, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, rm, readdir, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, runMarker, sliceRunLog, type BulbServer } from '../src/serve/serverRegistry.js'
+import { resolvePort, assignedPortFor, findAvailablePort, lastRunTimes } from '../src/serve/portBlocks.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -52,6 +53,73 @@ describe('serverRegistry', () => {
   it('listBulbServers returns [] when the registry dir does not exist', async () => {
     await rm(dir, { recursive: true, force: true })
     expect(await listBulbServers()).toEqual([])
+  })
+
+  // Port allocation (TB-CLI.md) shares this per-user home. The property that matters is stickiness:
+  // a bulb answers on the same port every run, which is what keeps an open tab pointed at a live
+  // server across a relaunch. Distinct projects must not overlap, or one project's bulb would
+  // silently take another's slot. Assertions go through `assignedPortFor` — the bookkeeping half —
+  // so they stay hermetic: `resolvePort` probes real ports, and a developer running any bulb would
+  // otherwise fail the suite (which is exactly what happened while writing it).
+  describe('port blocks', () => {
+    it('gives a bulb the same port on every run, and separates projects into blocks', async () => {
+      const projA = path.join(dir, 'a')
+      const projB = path.join(dir, 'b')
+      // The project dirs must exist: a block whose cwd is gone is reclaimed on sight (that prune is
+      // what stops deleted projects hoarding the band), so absent dirs would hand B the same block.
+      await mkdir(projA, { recursive: true })
+      await mkdir(projB, { recursive: true })
+      const bulb1 = path.join(projA, 'one.bulb.md')
+      const bulb2 = path.join(projA, 'two.bulb.md')
+
+      const first = (await assignedPortFor({ kind: 'bulb', file: bulb1 }, projA))!
+      expect(await assignedPortFor({ kind: 'bulb', file: bulb1 }, projA)).toBe(first)
+
+      // A second bulb in the same project takes a different slot in the same block.
+      // Bulbs count up from +1, so the two are consecutive and the units read as "app 1, app 2".
+      const other = (await assignedPortFor({ kind: 'bulb', file: bulb2 }, projA))!
+      expect(other).toBe(first + 1)
+      expect(first % 100).toBe(1)
+
+      // A different project gets its own block entirely.
+      const elsewhere = (await assignedPortFor({ kind: 'bulb', file: path.join(projB, 'one.bulb.md') }, projB))!
+      expect(Math.floor(elsewhere / 100)).not.toBe(Math.floor(first / 100))
+    })
+
+    it('gives the project its home port and keeps a second harness clear of app numbering', async () => {
+      const proj = path.join(dir, 'proj')
+      await mkdir(proj, { recursive: true })
+      const claude = (await assignedPortFor({ kind: 'mirror', agent: 'claude' }, proj))!
+      const pi = (await assignedPortFor({ kind: 'mirror', agent: 'pi' }, proj))!
+      const bulb = (await assignedPortFor({ kind: 'bulb', file: path.join(proj, 'x.bulb.md') }, proj))!
+
+      // The first harness owns +0 (the block base); the second counts down from the far end, leaving
+      // the first bulb on +1 either way.
+      expect(claude % 100).toBe(0)
+      expect(pi % 100).toBe(99)
+      expect(bulb).toBe(claude + 1)
+      // Sticky, like a bulb's: `typebulb agent` lands on the same URL all week.
+      expect(await assignedPortFor({ kind: 'mirror', agent: 'claude' }, proj)).toBe(claude)
+    })
+
+    it('honours an explicit port without consulting a block', async () => {
+      const proj = path.join(dir, 'proj')
+      await mkdir(proj, { recursive: true })
+      // A port we've just confirmed free, so the strictness check passes and the test stays hermetic.
+      const free = await findAvailablePort(45000)
+      expect((await resolvePort({ explicit: free, target: { kind: 'bulb', file: path.join(proj, 'x.bulb.md') }, cwd: proj })).port).toBe(free)
+    })
+
+    it('reports when a bulb last ran, and 0 before any run', async () => {
+      const proj = path.join(dir, 'lr')
+      await mkdir(proj, { recursive: true })
+      const bulb = path.join(proj, 'x.bulb.md')
+      // Read-only: asking must not claim a block for a project that has run nothing.
+      expect((await lastRunTimes(proj))(bulb)).toBe(0)
+      const t0 = Date.now()
+      await assignedPortFor({ kind: 'bulb', file: bulb }, proj)   // a run's bookkeeping
+      expect((await lastRunTimes(proj))(bulb)).toBeGreaterThanOrEqual(t0)
+    })
   })
 
   // Self-exclusion (TB-Agent-Mirror.md): the cwd-scoped list — what a launcher's

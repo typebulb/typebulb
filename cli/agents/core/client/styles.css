@@ -118,21 +118,27 @@ body {
   gap: .4rem;
   align-items: center;
 }
-/* Chip shape shared by EVERY word-label control — the status-bar pills (interactive and
-   passive) AND the floating overlay pills (copy, breakout, code⇄run). One rule = one source
-   of vertical alignment; when these drift apart it reads as amateurish.
-   THE CENTERING RECIPE (don't re-tweak per button — fix it here or nowhere): Segoe UI's font
+/* THE CENTERING RECIPE for EVERY word-label control on any surface — the status-bar pills and
+   floating overlay pills below, and the launcher row's trust switch + B scope chip. One rule = one
+   source of vertical alignment; when these drift apart it reads as amateurish, so a new word
+   control joins this selector rather than centering itself (don't re-tweak per button — fix it
+   here or nowhere). Icon buttons opt back out, keeping flex (see .pill.glyph). Segoe UI's font
    ascent (~1.08em) dwarfs its descent (~0.25em), so anything that centers the LINE BOX —
    flex, line-height, padding — parks the glyphs ~2px low at pill sizes. `text-box` trims the
    line box to the glyphs (cap→baseline) so centering centers the letters themselves. It only
    applies to block containers (not flex), hence inline-block + align-content, not inline-flex
-   + align-items. Browsers without text-box (Firefox) fall back to plain line-box centering.
-   Opaque so pills read cleanly over the message text the transparent strip lets through. */
-.pill, .token, .overlay-pill {
+   + align-items. Browsers without text-box (Firefox) fall back to plain line-box centering. */
+.pill, .token, .overlay-pill, .trust-toggle, .batch-b {
   display: inline-block;
   align-content: center;
   text-align: center;
   text-box: trim-both cap alphabetic;
+}
+/* Chip shape shared by the status-bar pills (interactive and passive) AND the floating overlay
+   pills (copy, breakout, code⇄run) — opaque, so they read cleanly over the message text the
+   transparent strip lets through. The launcher row's pills take only the recipe above; their
+   shape is the row's (.trust-toggle, .batch-b). */
+.pill, .token, .overlay-pill {
   height: var(--pill-h);
   padding: 0 .7rem;
   border-radius: 7px;
@@ -821,9 +827,10 @@ a.server-port:hover { text-decoration: underline; }
    row's snippet line bleeds under the next row as overlapping text. max-content tracks never
    compress; the list scrolls, rows keep their content height. */
 .bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
-/* The scope column (TB-Batch.md Invariant 7): a seventh track between name and the control
-   cluster, present only while some row carries a scope (bulbsPill.ts anyScope — rows emit a
-   matching cell, spacer included). The B affordance keeps it ~1.3rem wide. */
+/* The scope column (TB-Batch.md Invariant 7): a seventh track heading the control cluster (before
+   trust — a launch scope is an execution concern, like a trust tier), present only while some row
+   carries a scope (bulbsPill.ts anyScope — rows emit a matching cell, spacer included). The B
+   affordance keeps it one --pill-h square. */
 .bulb-list.has-scope { grid-template-columns: auto 1fr auto auto auto auto auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
@@ -839,7 +846,11 @@ a.server-port:hover { text-decoration: underline; }
    the row shows THAT a scope applies, the tooltip and click-menu name it. Dim = batches exist but
    launch is unscoped; lit (.on) = play launches scoped (newest default) or running scoped.
    Static (running) keeps the lit look without the hand cursor. */
-.batch-b { font-size: .72rem; font-family: ui-monospace, monospace; line-height: 1; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 4px; width: 1.3rem; height: 1.15rem; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+/* Square (its one glyph has no text pill's width to earn) and otherwise typography-free: the shared
+   pill box, font and trim, so its B is the same size and sits on the same baseline as the trust
+   switch beside it. Its own font-family was the bug — a monospace cap is a different size from a
+   Segoe cap at one font-size, which reads as two badly-aligned widgets. */
+.batch-b { font-size: var(--pill-font); color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; width: var(--pill-h); height: var(--pill-h); padding: 0; cursor: pointer; }
 .batch-b.on { color: var(--accent); border-color: var(--accent); }
 .batch-b.static { cursor: default; }
 /* The B's menu rides the composer popup register (.at-popup/.at-row/.dlg-catcher — one mini-menu
@@ -876,18 +887,21 @@ a.server-port:hover { text-decoration: underline; }
 .bulb-list .picker-snippet { grid-column: 2 / -1; margin: 0 .4rem .2rem 0; }
 .bulb-time { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; text-align: right; margin-right: .4rem; }
 /* The row's chrome buttons share one reset; sizing + colour differ below. Play/stop are round icon
-   buttons (friendlier, space-economic); the trust switch is text. Logs is a link, not a button
-   (see .server-logs above), so it's not in this group. */
+   buttons (friendlier, space-economic) and stay flex — a replaced SVG mis-seats under the
+   word-pill trim, the .pill.glyph case; the trust switch is a word, so it seats via the shared
+   recipe. Logs is a link, not a button (see .server-logs above), so it's not in this group. */
 .server-stop, .bulb-launch, .trust-toggle {
   font: inherit; appearance: none; margin: 0; cursor: pointer; box-sizing: border-box;
   background: transparent; border: 1px solid var(--border); border-radius: 5px;
-  height: 1.7rem; display: inline-flex; align-items: center; justify-content: center;
+  height: 1.7rem;
 }
 /* Shorter than the icon buttons: a bordered text pill at full row height reads as cramped, where
-   the round play/stop icons are meant to fill it. */
-.trust-toggle { font-size: .76rem; height: 1.45rem; padding: 0 .5rem; color: var(--muted); justify-self: center; }
+   the round play/stop icons are meant to fill it. The shared pill box + font, not a bespoke pair —
+   its own .76rem/1.45rem seated the word a full 1px below every statusbar pill, which is exactly how
+   this drifts (measured: a per-control size is a per-control seating). */
+.trust-toggle { font-size: var(--pill-font); height: var(--pill-h); padding: 0 .5rem; color: var(--muted); justify-self: center; }
 .trust-toggle:hover, .trust-toggle.on { color: var(--accent); border-color: var(--accent); }
-.server-stop, .bulb-launch { width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
+.server-stop, .bulb-launch { display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
 .btn-icon { width: 16px; height: 16px; }
 /* A stopped bulb's play button is dormant — the title is the primary launch target — so it's
    hidden until the row is hovered or keyboard-selected. visibility (not display) reserves its slot,
@@ -895,9 +909,10 @@ a.server-port:hover { text-decoration: underline; }
    :port link: green is the live-app axis (play to launch → :port to open it), distinct from the
    blue source/name. The green even travels left→right as a bulb goes stopped→running. */
 .bulb-launch { color: var(--fold-marker); visibility: hidden; }
-/* A right triangle's visual mass sits left of its bounding box, so geometric centring reads
-   too-far-left in a round button — shift the play glyph. */
-.bulb-launch .icon svg { transform: translateX(1px); }
+/* No optical nudge on the play glyph, deliberately: Material's play_arrow already carries one (its
+   path spans 320→760 in a 0→960 frame — ~1px right at icon size, compensating a right triangle's
+   left-leaning mass). Our own translateX(1px) stacked a second correction and measured 2px right of
+   the button's centre. Any glyph that reads off-centre here is the frame's business, not the app's. */
 .server-row:hover .bulb-launch, .server-row.active .bulb-launch { visibility: visible; }
 .bulb-launch:hover { border-color: var(--fold-marker); background: color-mix(in srgb, var(--fold-marker) 12%, transparent); }
 /* Launching: stays visible (hover-independent) and shimmers until the row flips to a stop button,

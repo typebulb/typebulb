@@ -10,7 +10,7 @@
  * styles and mount stub, the minimal `tb`, and the module script tag.
  */
 
-import { escapeHtml, baseResetStyle, themeHeadScript } from '../bulb/pageChrome.js'
+import { escapeHtml, baseResetStyle, themeHeadScript, reloadClientScript } from '../bulb/pageChrome.js'
 
 /** Where the static route in `startServer` serves an agent's bundled client from (per agent name). */
 export const clientBundleUrl = (agent: string) => `/agents/${agent}/client.js`
@@ -53,9 +53,7 @@ const AGENT_TB_SHIM = `
     })
   });
   if (window.__TYPEBULB_WATCH__) {
-    const es = new EventSource('/__reload');
-    es.addEventListener('reload', () => { console.log('[typebulb] Reloading...'); window.location.reload(); });
-    es.onerror = () => { es.close(); };
+${reloadClientScript}
   }
 })();
 `

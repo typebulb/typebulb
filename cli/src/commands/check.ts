@@ -18,7 +18,13 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * found (lint or type errors), 2 checker unavailable (no TypeScript resolved).
  */
 export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride): Promise<void> {
-  const { bulb, config, warnings } = await readBulb(bulbPath)
+  const { bulb, config, warnings, starts } = await readBulb(bulbPath)
+
+  // Every position we print is in the .bulb.md's coordinates, not the extracted block's: the bulb is
+  // the only file the user (or an agent's tools) can open and link to, so `code.tsx(94,7)` costs a
+  // hand-count of the block offset on every diagnostic (TB-CLI.md, One coordinate space).
+  const bulbName = path.basename(bulbPath)
+  const startOf = (blockFile: string) => starts.get(blockFile) ?? 1
 
   if (!bulb.code && !bulb.server) {
     console.error('Bulb has neither **code.tsx** nor **server.ts**; nothing to check.')
@@ -37,8 +43,8 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   // the Node subset.
   // Pass `dependencies` to the client lint so the UNDECLARED_IMPORT rule fires (config-less / under-
   // declared bulbs fail) — `check` is the comprehensive gate, so it runs the full client ruleset.
-  if (bulb.code) anyFailed = reportLint(lint(bulb.code, { target: 'client', dependencies: config.dependencies ?? {} }), 'client') || anyFailed
-  if (bulb.server) anyFailed = reportLint(lint(bulb.server, { target: 'server' }), 'server') || anyFailed
+  if (bulb.code) anyFailed = reportLint(lint(bulb.code, { target: 'client', dependencies: config.dependencies ?? {}, lineOffset: startOf('code.tsx') }), 'client') || anyFailed
+  if (bulb.server) anyFailed = reportLint(lint(bulb.server, { target: 'server', lineOffset: startOf('server.ts') }), 'server') || anyFailed
 
   // Type-check needs a real, installed TypeScript — never `npx tsc`, which grabs the prank package
   // on a TS-less machine. Resolve after lint (independent, its output still stands) but before the
@@ -80,7 +86,7 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   for (const { role, dir } of emits) {
     const { stdout, exitCode } = await spawnTsc(tscJs, dir)
     for (const line of stdout.split(/\r?\n/)) {
-      if (line.trim()) console.log(`${role}\t${line}`)
+      if (line.trim()) console.log(`${role}\t${toBulbPositions(line, bulbName, startOf)}`)
     }
     if (exitCode !== 0) anyFailed = true
   }
@@ -101,6 +107,16 @@ function reportLint(issues: LintIssue[], role: 'client' | 'server'): boolean {
     for (const line of issue.message.split('\n')) console.log(`${role}\t${line}`)
   }
   return issues.length > 0
+}
+
+/**
+ * Rewrite `code.tsx(94,7)` / `server.ts(12,3)` in a tsc diagnostic to the bulb's own file and line.
+ * Only those two names: a position inside a `node_modules` type file is real and stays as it is.
+ * Pure rewrite, exported so the mapping is unit-testable without running tsc.
+ */
+export function toBulbPositions(line: string, bulbName: string, startOf: (blockFile: string) => number): string {
+  return line.replace(/\b(code\.tsx|server\.ts)\((\d+),(\d+)\)/g, (_m, blockFile: string, l: string, col: string) =>
+    `${bulbName}(${Number(l) + startOf(blockFile) - 1},${col})`)
 }
 
 /** Run a resolved `tsc.js` under the current Node in `cwd`, capturing combined stdout+stderr.

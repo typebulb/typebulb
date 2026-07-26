@@ -130,8 +130,9 @@ export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: st
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; batch?: string; predicted?: string; denied?: string }
 // `batches` = the bulb's named batch scopes (TB-Batch.md), newest first — what the stopped row's
-// scope picker lists; empty/absent for the common batch-less bulb.
-export interface BulbFile { path: string; name: string; mtime: number; trusted?: boolean; batches?: string[] }
+// scope picker lists; empty/absent for the common batch-less bulb. `lastRunAt` = the port block's
+// launch time for this bulb (0 when never run) — the use half of the launcher's MRU.
+export interface BulbFile { path: string; name: string; mtime: number; lastRunAt?: number; trusted?: boolean; batches?: string[] }
 // A typebulb.com remote bulb (tb.server.listSamples / listMyBulbs): a muted launcher row while no
 // local file exists — play pulls it to typebulbs/u/<user>/ and launches (server launcher.ts).
 export interface RemoteBulb { slug: string; name: string; description: string }
