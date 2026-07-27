@@ -122,3 +122,39 @@ describe('gemini effort → thinking config translation', () => {
     expect(thinkingConfig('gemini-3.5-flash', undefined)).toBeUndefined()
   })
 })
+
+/**
+ * Guards the Anthropic minimal rung: `effort: 0` must send the explicit `thinking.disabled` switch,
+ * not merely omit `thinking`. Omission reads as off on 4.6/4.7/4.8, but the 5 family thinks by
+ * default, so a silent minimal bought thinking (invisibly, since `display` defaults to 'omitted').
+ */
+describe('anthropic minimal effort → thinking off', () => {
+  const think = (model: string, effort?: 0 | 1 | 2 | 3) => {
+    const p: any = getProvider('anthropic').buildPayload(
+      [{ role: 'user', content: 'hi' }], model, { effort, webSearch: false }, false)
+    return { thinking: p.thinking, effort: p.output_config?.effort }
+  }
+
+  it('minimal disables thinking on the 5 family, where omitting it would not', () => {
+    expect(think('claude-opus-5', 0)).toEqual({ thinking: { type: 'disabled' }, effort: 'low' })
+    expect(think('claude-sonnet-5', 0)).toEqual({ thinking: { type: 'disabled' }, effort: 'low' })
+  })
+
+  it('fable / mythos always think — `disabled` is a 400, so minimal floors to low effort', () => {
+    expect(think('claude-fable-5', 0)).toEqual({ thinking: undefined, effort: 'low' })
+    expect(think('claude-mythos-5', 0)).toEqual({ thinking: undefined, effort: 'low' })
+  })
+
+  it('1–3 keep adaptive thinking with the trace requested', () => {
+    expect(think('claude-opus-5', 1))
+      .toEqual({ thinking: { type: 'adaptive', display: 'summarized' }, effort: 'low' })
+    expect(think('claude-opus-5', 3))
+      .toEqual({ thinking: { type: 'adaptive', display: 'summarized' }, effort: 'high' })
+  })
+
+  it('pre-4.6 models keep the legacy budget path (0 omits thinking, the off default there)', () => {
+    expect(think('claude-3-5-sonnet', 0)).toEqual({ thinking: undefined, effort: undefined })
+    expect(think('claude-3-5-sonnet', 2))
+      .toEqual({ thinking: { type: 'enabled', budget_tokens: 4096 }, effort: undefined })
+  })
+})

@@ -90,6 +90,7 @@ export type AnthropicSseEventDto =
 type AnthropicThinkingConfig =
   | { type: 'enabled'; budget_tokens: number }
   | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
+  | { type: 'disabled' }
 
 /** Anthropic web search tool definition */
 interface AnthropicWebSearchTool {
@@ -165,11 +166,12 @@ export class AnthropicProvider extends AIProvider {
     if (depth !== undefined) {
       if (this.isModernModel(model)) {
         // Opus 4.6+: adaptive thinking + effort parameter.
-        // 0 = minimal: send the lowest effort with NO `thinking` directive. On adaptive models where
-        // thinking is opt-in (Opus 4.7/4.8) omitting it runs the request *without* thinking — the real
-        // "off". On Sonnet 5 / Fable / Mythos, thinking is on-by-default or mandatory, so 0 floors to
-        // low-effort thinking rather than off (Anthropic has no sub-`low` effort rung).
+        // 0 = minimal: thinking off, via the explicit `thinking.disabled` switch. Omitting `thinking`
+        // is NOT off — 4.6/4.7/4.8 default to no-thinking, but the 5 family thinks by default, so
+        // silence bought thinking there anyway, and hid it (`display` defaults to 'omitted').
+        // `disabled` is rejected above effort `high`, which the 0–3 dial never reaches.
         if (depth === 0) {
+          if (!this.alwaysThinks(model)) payload.thinking = { type: 'disabled' }
           payload.output_config = { effort: 'low' }
         } else {
           const effortMap: Record<1 | 2 | 3, 'low' | 'medium' | 'high'> = {
@@ -284,6 +286,12 @@ export class AnthropicProvider extends AIProvider {
     const major = +m[1]
     const minor = m[2] ? +m[2] : 0
     return major > 4 || (major === 4 && minor >= 6)
+  }
+
+  /** Fable / Mythos think unconditionally: `thinking.disabled` is a 400 on them, not a no-op, so
+   *  minimal floors to low-effort thinking instead of off. */
+  private alwaysThinks(model: string): boolean {
+    return /^claude-(fable|mythos)\b/i.test(model)
   }
 
   private getMaxTokens(model: string): number {
