@@ -98,6 +98,15 @@ describe('parseArgs: push', () => {
   })
 })
 
+// `typebulb slug` serves Invariant 4's filename convention: it tells an agent the name its file
+// must take, since the derivation is a library rather than a rule you can apply in your head.
+describe('parseArgs: slug', () => {
+  it('joins bare positionals, so an unquoted multi-word title needs no shell quoting', () => {
+    expect(parseArgs(['slug', 'Bird', 'Migration']).slugName).toBe('Bird Migration')
+    expect(parseArgs(['slug', "Prisoner's Dilemma"]).slugName).toBe("Prisoner's Dilemma")
+  })
+})
+
 describe('pushBulb', () => {
   it('PUTs the file bytes with the Bearer token and mtime as If-Unmodified-Since', async () => {
     const d = await freshFile('send.bulb.md')

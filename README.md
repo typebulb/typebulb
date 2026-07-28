@@ -51,6 +51,7 @@ typebulb push <file>           Upload a local bulb to typebulb.com as you (needs
 typebulb check [file.bulb.md]  Type-check a bulb without running it
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
+typebulb slug <name>           Print the slug a title derives to — the filename to save the bulb as
 typebulb logs [file|agent]     Print a running bulb's (or `agent` mirror's) captured console (no arg: list running servers; -f follow, -n N tail, --run latest|N for one reload's output, --clear to empty it)
 typebulb wait [file|agent]     Block until the target logs a matching line, print it, exit — an agent's wake-up
                                (run it backgrounded; --match <substr> filters; exit 2 = gave up)
@@ -87,6 +88,11 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 | `**infer.md**` / `**insight.json**` | Runtime one-shot LLM call via `tb.infer()`: instructions + example output. `tb.insight()` reads the result. Requires `--trust` locally. |
 | `**notes.md**` | Persistent context for the AI assistant, carried across conversations and clones. Not run. |
 | `**server.ts**` | Node.js code; its exports become `tb.server.<name>()` in the browser. Mostly plain Node — log with `console.log` — but `tb.fs` and `tb.ai`/`tb.ai.stream`/`tb.models` are callable here too (under `--trust`). **Local only.** |
+
+### Frontmatter and config
+
+- **`name:`** (frontmatter) is the bulb's title — a few words, not a sentence — and the file takes its slug: `<slug>.bulb.md`, in the project's **`typebulbs/`** folder. The slug is derived, not chosen: `Counter` → `counter.bulb.md` is obvious, `Rock & Roll` → `rock-and-roll` is not, so run `npx typebulb slug "<name>"` rather than guess. Once pushed, that name is the bulb's URL.
+- **`description`** (in `config.json`) is the bulb's search-result blurb — what makes someone open it. Keep it short; it truncates past ~160 chars.
 
 ### Example
 
@@ -286,8 +292,6 @@ The host owns a bulb's **width**; you own its **height**.
 
 ## Tips for Agents
 
-- **`config.json` `description`** is the bulb's search-result blurb — what makes someone open it, kept short (it truncates past ~160 chars).
-- **The frontmatter `name:` is the bulb's title** — a few words, not a sentence — and the filename should be its slug (`name: Counter` → `counter.bulb.md`), saved in the project's **`typebulbs/`** folder.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
 - **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).

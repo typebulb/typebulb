@@ -3,7 +3,7 @@ import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
   validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
-  forbiddenAssetExt,
+  forbiddenAssetExt, slugify,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -394,5 +394,13 @@ old data
     expect(removeBulbBlock(noInsight, 'insight')).toBe(noInsight)
     const broken = '---\nformat: typebulb/v1\nname: P\n---\n\n**data.txt**\n\n```txt\nruns to eof'
     expect(removeBulbBlock(broken, 'data')).toBe(broken)
+  })
+})
+
+describe('slugify', () => {
+  it('is the one derivation every surface shares — the cases a hand-rolled regex got wrong', () => {
+    expect(slugify('Rock & Roll')).toBe('rock-and-roll')      // transliterates; a regex yields rock-roll
+    expect(slugify('café')).toBe('cafe')                      // folds accents; a regex strips them (caf)
+    expect(slugify("Prisoner's Dilemma")).toBe('prisoners-dilemma')   // apostrophe collapses, not hyphenates
   })
 })

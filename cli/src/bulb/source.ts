@@ -6,6 +6,8 @@
  * not host code.
  */
 
+import { slugify } from 'typebulb/format'
+
 /** The bulb's `name:` from its leading frontmatter, or undefined if absent.
  *  Tolerant (doesn't require a valid `format:`) so a malformed bulb still names. */
 export function bulbName(source: string): string | undefined {
@@ -14,10 +16,9 @@ export function bulbName(source: string): string | undefined {
   return nameLine ? nameLine[1].replace(/^["']|["']$/g, '') : undefined
 }
 
-/** A filesystem-safe slug from the bulb's name; 'bulb' when unnamed. */
+/** A filesystem-safe slug from the bulb's name; 'bulb' when unnamed or unslugifiable. */
 export function slugifyBulbName(source: string): string {
-  const raw = bulbName(source) ?? 'bulb'
-  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'bulb'
+  return slugify(bulbName(source) ?? 'bulb') || 'bulb'
 }
 
 /** The source with its leading `---` frontmatter block stripped (and the blank

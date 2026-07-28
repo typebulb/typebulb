@@ -1,6 +1,6 @@
 {
   "name": "typebulb",
-  "version": "0.41.2",
+  "version": "0.42.0",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
   "license": "MIT",
   "repository": {
@@ -68,6 +68,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
+    "@sindresorhus/slugify": "3.0.0",
     "chokidar": "^4.0.3",
     "es-module-lexer": "^1.7.0",
     "fflate": "^0.8.2",

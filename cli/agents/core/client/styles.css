@@ -212,6 +212,11 @@ body {
   max-height: var(--menu-h);
   overflow: hidden;
   padding: .35rem;
+  /* The bar's line-height:1 is for its fixed-height pills; a menu is a text surface, so restore
+     descender room HERE, once. Inherited, the 1 crops the tails of "g"/"j"/"p" under every row's
+     overflow:hidden (the ellipsis clip) — a leaf-by-leaf fix that had already been pasted three
+     times. Rows are floored at --menu-row-h with their paddings kept under it, so pitch is unchanged. */
+  line-height: 1.35;
   display: flex;
   flex-direction: column;
   gap: .15rem;
@@ -609,7 +614,7 @@ body {
      for unconditionally; tweak the 15px by eye). */
   padding: 0 calc(.55rem + 4px + 15px) 0 calc(.55rem + 7px + .6rem);
   border-bottom: 1px solid var(--border);
-  font-size: .74rem; line-height: 1.35; color: var(--muted);  /* line-height clears "g"/"y" descenders */
+  font-size: .74rem; color: var(--muted);
 }
 /* The external-override warning is the one case that still puts words on this row. */
 .model-route { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -710,9 +715,7 @@ body {
 .diag-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .35rem .5rem; background: var(--panel); border-bottom: 1px solid var(--border); }
 .diag-head-acts { display: flex; gap: .4rem; align-items: center; flex: none; }
 .diag-back:disabled { opacity: .5; cursor: default; }
-/* line-height clears descenders: the popover inherits the statusbar's line-height:1, and overflow:hidden
-   would otherwise crop the tails of "g"/"y" (same root cause as .shimmer-text's fix). */
-.diag-name { min-width: 0; color: var(--fg); font-size: .8rem; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.diag-name { min-width: 0; color: var(--fg); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .diag-back { font: inherit; font-size: .76rem; appearance: none; margin: 0; padding: .15rem .5rem; border-radius: 5px; background: transparent; border: 1px solid var(--border); color: var(--muted); cursor: pointer; white-space: nowrap; }
 .diag-back:hover { color: var(--accent); border-color: var(--accent); }
 .diag-body { display: flex; flex-direction: column; gap: .4rem; padding: .6rem; background: var(--bg); }

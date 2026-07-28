@@ -9,7 +9,7 @@ import { detectCallerHarness } from './agentViewer/resolve.js'
 export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'send' | 'pull' | 'push' | 'get' | 'put'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -31,6 +31,9 @@ export interface CliArgs {
   blockKind?: SubscriptKind
   /** `put <file> <kind>=<source>…`: the block writes, in order (`source`: a path, or `-` for stdin). */
   blockPairs?: BlockPair[]
+  /** `slug <name…>`: the bulb title to derive from — positionals joined, so an unquoted
+   *  multi-word name works as typed. */
+  slugName?: string
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
    *  target) ensures this project's mirror is up and prints what-to-do guidance;
    *  `typebulb skill` prints the skill. */
@@ -126,7 +129,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'send', 'pull', 'push', 'get', 'put'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -269,7 +272,7 @@ export function parseArgs(args: string[]): CliArgs {
       }
       result.argsJson = value
     } else if (!arg.startsWith('-')) {
-      if (['call', 'send', 'get', 'put'].includes(result.subcommand)) callPositionals.push(arg)
+      if (['call', 'send', 'get', 'put', 'slug'].includes(result.subcommand)) callPositionals.push(arg)
       else result.file = arg
     } else {
       // Unknown flag: fail rather than silently ignore — a typo'd `--no-wath` running with watch
@@ -300,6 +303,16 @@ export function parseArgs(args: string[]): CliArgs {
     }
     result.file = callPositionals[0]
     result.sendMessage = callPositionals[1]
+  }
+
+  // slug <name…>: every bare token is part of the title, so `slug Bird Migration` needs no quoting
+  // (quoting is still required for a name carrying shell metacharacters, e.g. `&`).
+  if (result.subcommand === 'slug') {
+    if (!callPositionals.length) {
+      console.error('Usage: typebulb slug <bulb name>')
+      process.exit(1)
+    }
+    result.slugName = callPositionals.join(' ')
   }
 
   // get <file> <kind>: exactly one block per invocation — stdout owns one payload (TB-Get-Put.md).
@@ -349,6 +362,10 @@ Usage:
                                  (fs / AI / server.ts) without running it.
   typebulb models                List AI models for tb.ai, filtered by the API
                                  keys in your .env (the exact ids to pass).
+  typebulb slug <name>           Print the slug a bulb title derives to — the name
+                                 its file should take (<slug>.bulb.md). One shared
+                                 derivation with typebulb.com, so the bulb keeps
+                                 its URL when pushed.
   typebulb logs [file|agent]     Print a running bulb server's (or the 'agent' mirror's) console
                                  (no arg: list this project's running servers;
                                  --run latest|N shows just one hot-reload run;

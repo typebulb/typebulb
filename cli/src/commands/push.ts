@@ -196,7 +196,15 @@ export async function runPush(arg: string | undefined, opts: { force: boolean; m
       process.exitCode = 1
       return
     case 'pushed': {
-      console.log(`pushed ${rel} → ${bulbUrl}${outcome.created ? ' (created, unlisted)' : ''}`)
+      console.log(`pushed ${rel} → ${bulbUrl}`)
+      // A first push and a post-rename push are indistinguishable here — identity is positional and
+      // nothing records where this file went last (Invariant 5's no-sidecar stance), so a create
+      // can't be refused, only made unmissable. As a trailing `(created)` it read exactly like an
+      // ordinary update, which is how a renamed file silently became a second bulb.
+      if (outcome.created) {
+        console.log(`  created a new bulb, unlisted — nothing existed at this URL before`)
+        console.log(`  if you renamed this file, its previous bulb is still live at the old URL`)
+      }
       if (outcome.serverStripped) console.log('note: the server.ts block was stripped on the server copy (CLI-only); your local file is untouched.')
       for (const d of outcome.assets?.deleted ?? []) console.log(`  deleted ${d} (no longer in assets/)`)
       if (outcome.assets?.pruneError) console.log(`note: asset cleanup incomplete — ${outcome.assets.pruneError}; the next push will retry.`)

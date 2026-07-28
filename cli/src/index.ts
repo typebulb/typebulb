@@ -30,6 +30,7 @@ import { runPredict } from './commands/predict.js'
 import { runTrust } from './commands/trust.js'
 import { runAgent } from './commands/agent.js'
 import { runModels } from './commands/models.js'
+import { runSlug } from './commands/slug.js'
 import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
@@ -109,6 +110,12 @@ async function main(): Promise<void> {
   }
   if (args.subcommand === 'models') {
     await runModels(args.mode)
+    return
+  }
+  if (args.subcommand === 'slug') {
+    // Pure string derivation — no bulb file, no env, no registry. Dispatch with the other
+    // file-less commands so naming a bulb never depends on one existing yet.
+    runSlug(args.slugName)
     return
   }
   if (args.subcommand === 'pull') {

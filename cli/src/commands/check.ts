@@ -2,10 +2,11 @@ import * as path from 'path'
 import { spawn, execSync } from 'child_process'
 import { createRequire } from 'module'
 import { existsSync } from 'fs'
-import { readBulb } from '../pipeline.js'
+import { readBulb, conventionalIdentity } from '../pipeline.js'
 import { emitClientTypecheck } from '../dts/emit.js'
 import { emitServerTypecheck } from '../dts/emitServer.js'
 import { lint, type LintIssue } from 'typebulb/lint'
+import { slugify } from 'typebulb/format'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -32,11 +33,25 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   }
 
   let anyFailed = false
+  let namingWarning = false
 
   // Structural problems (an unterminated fence swallowing a block) parse "successfully" but produce
   // wrong blocks, so a bulb can compile and run while malformed — `check` is the gate that catches it.
   for (const w of warnings) console.log(`structure\t${w}`)
   if (warnings.length) anyFailed = true
+
+  // Only a conventional path carries a remote identity (TB-Push-Pull.md Invariant 4), and only there
+  // does the filename mean anything: a scratch bulb in `typebulbs/` may be named `game-of-life-2` or
+  // `synth.full` freely, and warning about those is noise that teaches agents to ignore warnings.
+  // Where it IS an identity, a mismatch publishes at a URL nobody picked, and push refuses it
+  // outright when the bulb doesn't exist yet. A *warning*, never a failure: bulbs published before
+  // this check are grandfathered (push's update path writes the title, never the slug).
+  const identity = conventionalIdentity(path.resolve(bulbPath))
+  const expectedSlug = identity ? slugify(bulb.name) : ''
+  if (identity && expectedSlug && expectedSlug !== identity.slug) {
+    console.log(`naming\tfilename '${identity.slug}.bulb.md' doesn't match the title '${bulb.name}' — its slug derives to '${expectedSlug}'. Rename the file to '${expectedSlug}.bulb.md', or change name: to suit the filename.`)
+    namingWarning = true
+  }
 
   // Lint first — shared with typebulb.com via `typebulb/lint`, cheap, and catches the import-map /
   // Sucrase-unsupported patterns `tsc` can't see. `code.tsx` gets the browser ruleset, `server.ts`
@@ -97,7 +112,7 @@ export async function runCheck(bulbPath: string, local?: ResolvedLocalOverride):
   // "did nothing". Emit a one-line all-clear naming the blocks checked — on stderr, so stdout stays
   // empty for composition (`check && deploy`) and anything parsing it.
   const checked = [bulb.code && 'code.tsx', bulb.server && 'server.ts'].filter(Boolean).join(', ')
-  console.error(`✓ no issues (${checked})`)
+  console.error(namingWarning ? `✓ type-checks (${checked}) — see the naming warning above` : `✓ no issues (${checked})`)
 }
 
 /** Print lint issues role-prefixed (the same `role\tline` shape as the tsc output) and report whether
