@@ -1,5 +1,9 @@
 import * as net from 'net'
 import * as http from 'http'
+import * as fs from 'fs'
+import * as path from 'path'
+import { fileURLToPath } from 'url'
+import { spawn, type ChildProcess } from 'child_process'
 import { startServer, type ServerInstance } from '../../../src/serve/server.js'
 
 /** Reserve an ephemeral loopback port, then release it for a server to bind. */
@@ -11,6 +15,48 @@ export function freePort(): Promise<number> {
       const { port } = srv.address() as net.AddressInfo
       srv.close(() => resolve(port))
     })
+  })
+}
+
+/** The published bin (dist build) — for suites whose fidelity point is spawning the real CLI. */
+export const distBin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../dist/index.js')
+
+export function requireDistBuild(): void {
+  if (!fs.existsSync(distBin)) throw new Error(`${distBin} missing — run \`pnpm run build\` before the browser suite`)
+}
+
+/**
+ * Launch a bulb via the real bin the way a terminal does, resolving once it prints the URL it
+ * bound. `--no-watch` so only a replace can ever reload the page, never a save. The child lands in
+ * `track` for the caller's afterAll to reap.
+ */
+export function launchBulb(file: string, opts: { cwd: string; env: NodeJS.ProcessEnv; track: ChildProcess[] }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [distBin, file, '--no-open', '--no-watch'], { cwd: opts.cwd, env: opts.env })
+    opts.track.push(child)
+    let out = ''
+    const onData = (chunk: Buffer) => {
+      out += chunk.toString()
+      const m = out.match(/http:\/\/localhost:\d+/)
+      if (m) resolve(m[0])
+    }
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.on('exit', code => reject(new Error(`server exited (${code}): ${out}`)))
+    setTimeout(() => reject(new Error(`no URL printed: ${out}`)), 60_000)
+  })
+}
+
+/** Run the real bin once and collect its outcome (for `send` probes: the reply owns stdout). */
+export function runCli(args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [distBin, ...args], { cwd: opts.cwd, env: opts.env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (c: Buffer) => { stdout += c.toString() })
+    child.stderr?.on('data', (c: Buffer) => { stderr += c.toString() })
+    child.on('error', reject)
+    child.on('exit', code => resolve({ code: code ?? -1, stdout, stderr }))
   })
 }
 

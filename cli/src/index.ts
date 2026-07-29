@@ -50,6 +50,14 @@ import { runCall } from './run/call.js'
 declare const __TYPEBULB_VERSION__: string
 const VERSION: string = typeof __TYPEBULB_VERSION__ !== 'undefined' ? __TYPEBULB_VERSION__ : '0.0.0-dev'
 
+// A reader that walked away is not a reason to stop serving: `typebulb x.bulb.md | head` killed
+// the server with an unhandled EPIPE the moment head exited — and only agents hit it, because only
+// agents pipe everything (TB-Interrogation-Actuation.md, sharp edges). Swallow EPIPE on both std
+// streams; every other stream error stays fatal.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (e: NodeJS.ErrnoException) => { if (e?.code !== 'EPIPE') throw e })
+}
+
 /**
  * Server execution (the `server.ts` block) runs arbitrary local Node with no sandbox possible, so —
  * unlike a web run, which degrades to Restricted — it is refused outright without trust (TB-Security.md).

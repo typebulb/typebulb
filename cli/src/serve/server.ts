@@ -253,6 +253,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // here until seconds ago and hasn't come back — a stale tab the user is looking at right now.
       // "No page connected" is true for both and useless for either (TB-CLI.md, observed state).
       const dropped = clients === 0 && lastPageDropAt ? Date.now() - lastPageDropAt : undefined
+      // `?solo=1` marks an actuation (TB-Interrogation-Actuation.md): a gesture broadcast to two
+      // pages has fired twice before their replies can disagree, so — unlike the read-side
+      // one-reply rule, which judges after the fact — this refuses BEFORE dispatch unless exactly
+      // one page is connected. Zero pages keeps the sender's retry-and-report path.
+      if (c.req.query('solo') !== undefined && clients !== 1) {
+        return c.json({ clients, droppedMsAgo: dropped, refused: clients > 1 })
+      }
       if (replyMs <= 0 || clients === 0) {
         messageEmitter.emit('message', { payload })
         return c.json({ clients, droppedMsAgo: dropped })
@@ -649,6 +656,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         const onMessage = (envelope: { id?: number; payload: string }) => { stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }) }
         reloadEmitter?.on('reload', onReload)
         messageEmitter?.on('message', onMessage)
+        // A page attached where none was — the arrival wake (TB-Wait.md, "who speaks"): an agent
+        // that needs a live page ends its turn with the link and a background
+        // `wait --match "[page] connected"` armed; the user opening the page is the wake, never a
+        // popped window. 0→1 only, so extra tabs don't re-fire; a hot reload's drop-and-reattach
+        // re-logs, symmetric with the run markers.
+        if (messageEmitter && messageEmitter.listenerCount('message') === 1) console.log('[page] connected')
         stream.onAbort(() => {
           reloadEmitter?.removeListener('reload', onReload)
           messageEmitter?.removeListener('message', onMessage)

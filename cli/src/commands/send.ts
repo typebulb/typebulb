@@ -26,7 +26,7 @@ import { DEFAULT_SEND_WAIT_MS } from '../args.js'
  * error, as is a handler throw. `tb:*` messages are shim-answered (never reach `tb.onMessage`) and
  * imply `--wait` — a reply is their only purpose, so silence is an error for them alone.
  */
-interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number }
+interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number; refused?: boolean }
 
 /**
  * POST to the running server over `node:http` rather than global `fetch`. `--wait` is the only ceiling
@@ -64,6 +64,10 @@ const relAgo = (t: number) => {
 export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
   const reserved = message !== undefined && message.startsWith('tb:')
   if (reserved && waitMs <= 0) waitMs = DEFAULT_SEND_WAIT_MS
+  // Actuation verbs are gestures: the server must refuse them before dispatch unless exactly one
+  // page is connected (TB-Interrogation-Actuation.md) — a read broadcast twice is harmless, a
+  // gesture broadcast twice has fired in two divergent pages before the replies can disagree.
+  const actuation = message !== undefined && /^tb:(click|set)( |$)/.test(message)
 
   const abs = path.resolve(file)
   const server = serversForBulb(await listBulbServers(), abs)[0]
@@ -79,7 +83,8 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   }
 
   const post = async (replyMs: number): Promise<SendOutcome> => {
-    const resp = await postToServer(`${server.url}/__send${replyMs > 0 ? `?reply=${replyMs}` : ''}`, message ?? '')
+    const query = [replyMs > 0 ? `reply=${replyMs}` : '', actuation ? 'solo=1' : ''].filter(Boolean).join('&')
+    const resp = await postToServer(`${server.url}/__send${query ? `?${query}` : ''}`, message ?? '')
     if (resp.status < 200 || resp.status >= 300) {
       console.error(`send failed: HTTP ${resp.status} from ${server.url}/__send`)
       process.exit(1)
@@ -102,6 +107,10 @@ export async function runSend(file: string, message: string | undefined, waitMs 
 
   const clients = outcome.clients ?? 0
   const pages = `${clients} page${clients === 1 ? '' : 's'}`
+  if (outcome.refused) {
+    console.error(`Actuation needs exactly one connected page; ${pages} are open on ${server.url} — close the extras and retry.`)
+    process.exit(1)
+  }
   if (clients === 0) {
     // Report what the server observed, not just that nobody answered: a page that WAS attached and
     // hasn't come back is a stale tab in front of the user, and saying so is the whole difference
@@ -109,7 +118,7 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     const dropped = outcome.droppedMsAgo
     const stale = dropped !== undefined
       ? ` — a page disconnected ${Math.round(dropped / 1000)}s ago and hasn't reconnected; reload it, or open ${server.url}`
-      : ` — no page has ever connected; open ${server.url}`
+      : ` — no page has ever connected; share ${server.url} and arm: typebulb wait ${file} --match "[page] connected"`
     if (waitMs > 0) console.error(`No page connected after ${waitMs / 1000}s${stale}`)
     else console.error(`Sent, but no page is connected${stale}`)
     if (reserved) process.exit(1)   // a tb:* message exists only for its reply

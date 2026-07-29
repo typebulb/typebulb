@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { Browser } from 'playwright'
-import { spawn, type ChildProcess } from 'child_process'
+import type { ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
+import { launchBulb, requireDistBuild } from './harness/servers.js'
 
 /**
  * Tier B — the tab survives its server being replaced (TB-CLI.md, "A replace keeps the user's tab").
@@ -33,9 +33,6 @@ import { createRequire } from 'module'
 const nodeRequire = createRequire(import.meta.url)
 const { chromium } = nodeRequire('playwright') as typeof import('playwright')
 
-const runtimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const bin = path.join(runtimeRoot, 'dist', 'index.js')
-
 const bulbSource = (body: string) => `---
 format: typebulb/v1
 name: Reconnect
@@ -62,7 +59,7 @@ describe('a replaced server keeps the open tab (live browser)', () => {
   const running: ChildProcess[] = []
 
   beforeAll(() => {
-    expect(fs.existsSync(bin), `${bin} missing — run \`pnpm run build\` before the browser suite`).toBe(true)
+    requireDistBuild()
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-reconnect-'))
     bulb = path.join(home, 'reconnect.bulb.md')
     fs.writeFileSync(bulb, bulbSource('first'))
@@ -80,27 +77,11 @@ describe('a replaced server keeps the open tab (live browser)', () => {
     } catch { /* a temp dir the OS will reap */ }
   })
 
-  /** Launch the bulb the way a terminal does, resolving once it prints the URL it bound. */
-  function launch(): Promise<string> {
-    return new Promise((resolve, reject) => {
-      // --no-watch so the only thing that can reload the page is the replace itself, never a save.
-      const child = spawn(process.execPath, [bin, bulb, '--no-open', '--no-watch'], {
-        cwd: home,
-        env: { ...process.env, TYPEBULB_SERVERS_DIR: path.join(home, 'servers') },
-      })
-      running.push(child)
-      let out = ''
-      const onData = (chunk: Buffer) => {
-        out += chunk.toString()
-        const url = out.match(/http:\/\/localhost:(\d+)/)
-        if (url) resolve(url[0])
-      }
-      child.stdout?.on('data', onData)
-      child.stderr?.on('data', onData)
-      child.on('exit', code => reject(new Error(`server exited (${code}): ${out}`)))
-      setTimeout(() => reject(new Error(`no URL printed: ${out}`)), 60_000)
-    })
-  }
+  const launch = () => launchBulb(bulb, {
+    cwd: home,
+    env: { ...process.env, TYPEBULB_SERVERS_DIR: path.join(home, 'servers') },
+    track: running,
+  })
 
   it('reconnects to the successor on the same port and reloads itself', async () => {
     const url = await launch()

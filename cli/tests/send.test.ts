@@ -47,6 +47,15 @@ afterAll(() => {
 
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`
 
+/** Spy both console streams: runSend prints the one reply via log, status/errors via error. */
+const capture = () => {
+  const out: string[] = []
+  const errs: string[] = []
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)) })
+  const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)) })
+  return { out, errs, restore: () => { logSpy.mockRestore(); errSpy.mockRestore() } }
+}
+
 /** Raw http so we can forge `Sec-Fetch-Site` (fetch() refuses to set it). */
 function raw(p: string, headers: Record<string, string>, body = ''): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -151,12 +160,6 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
   // itself), and ppid is alive (isAlive treats EPERM as alive) and distinct. The URL points at our
   // in-test server, so the pid is just the registry key.
   const file = path.resolve('send-wait.bulb.md')
-  const captureLog = () => {
-    const lines: string[] = []
-    const logSpy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { lines.push(String(m)) })
-    const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { lines.push(String(m)) })
-    return { lines, restore: () => { logSpy.mockRestore(); errSpy.mockRestore() } }
-  }
 
   it('delivers once a page attaches mid-wait (no server-side buffering)', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
@@ -168,25 +171,25 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
     }
     // No listener at first (the reload gap); the page "re-attaches" ~400ms in.
     const attach = setTimeout(() => emitter.on('message', listener), 400)
-    const { lines, restore } = captureLog()
+    const { errs, restore } = capture()
     try {
       await runSend(file, 'go', 2000)
     } finally {
       restore(); clearTimeout(attach); emitter.removeListener('message', listener); await unregisterServer(process.ppid)
     }
     expect(received).toEqual(['go'])              // delivered exactly once
-    expect(lines.join('\n')).toContain('Sent to 1 page')
+    expect(errs.join('\n')).toContain('Sent to 1 page')
   })
 
   it('reports no page when the window elapses with nothing attached', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const { lines, restore } = captureLog()
+    const { errs, restore } = capture()
     try {
       await runSend(file, 'go', 300)
     } finally {
       restore(); await unregisterServer(process.ppid)
     }
-    expect(lines.join('\n')).toContain('No page connected after 0.3s')
+    expect(errs.join('\n')).toContain('No page connected after 0.3s')
   })
 })
 
@@ -206,13 +209,6 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
     }
     emitter.on('message', listener)
     return () => emitter.removeListener('message', listener)
-  }
-  const capture = () => {
-    const out: string[] = []
-    const errs: string[] = []
-    const logSpy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)) })
-    const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)) })
-    return { out, errs, restore: () => { logSpy.mockRestore(); errSpy.mockRestore() } }
   }
 
   it('prints a structured return as JSON on stdout; the delivery line moves to stderr', async () => {
@@ -257,5 +253,87 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
     } finally { restore(); off(); await unregisterServer(process.ppid) }
     expect(out).toEqual([])
     expect(errs.join('\n')).toContain('no reply within')
+  })
+})
+
+describe('actuation solo guard — /__send?solo=1 (TB-Interrogation-Actuation.md)', () => {
+  const file = path.resolve('send-solo.bulb.md')
+
+  it('refuses BEFORE the emit when two pages are connected — the gesture never fires', async () => {
+    const received: string[] = []
+    const l1 = (env: { payload: string }) => received.push(env.payload)
+    const l2 = (env: { payload: string }) => received.push(env.payload)
+    emitter.on('message', l1)
+    emitter.on('message', l2)
+    try {
+      const resp = await fetch(url('/__send?reply=1000&solo=1'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"' })
+      expect(await resp.json()).toEqual({ clients: 2, refused: true })
+      expect(received).toEqual([])
+    } finally {
+      emitter.removeListener('message', l1)
+      emitter.removeListener('message', l2)
+    }
+  })
+
+  it('dispatches normally to exactly one page', async () => {
+    const received: string[] = []
+    const listener = (env: { id?: number; payload: string }) => {
+      received.push(env.payload)
+      if (env.id !== undefined) void fetch(url('/__send-reply'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results: [], errors: [] }) })
+    }
+    emitter.on('message', listener)
+    try {
+      const resp = await fetch(url('/__send?reply=1500&solo=1'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"' })
+      expect(((await resp.json()) as { clients: number }).clients).toBe(1)
+      expect(received).toEqual(['tb:click button "x"'])
+    } finally {
+      emitter.removeListener('message', listener)
+    }
+  })
+
+  it('runSend reports the exactly-one error and exits 1 at two pages', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const l1 = () => {}
+    const l2 = () => {}
+    emitter.on('message', l1)
+    emitter.on('message', l2)
+    const { out, errs, restore } = capture()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
+    try {
+      await expect(runSend(file, 'tb:click button "x"', 2000)).rejects.toThrow('exit 1')
+    } finally {
+      exit.mockRestore(); restore()
+      emitter.removeListener('message', l1); emitter.removeListener('message', l2)
+      await unregisterServer(process.ppid)
+    }
+    expect(out).toEqual([])
+    expect(errs.join('\n')).toContain('exactly one connected page')
+  })
+})
+
+describe("the page-connect wake line — '[page] connected' (TB-Wait.md)", () => {
+  /** Open the events SSE like a page's shim would, resolving once the hello frame arrives. */
+  const openSse = () => new Promise<http.ClientRequest>((resolve, reject) => {
+    const u = new URL(url('/__reload'))
+    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname }, res => {
+      res.setEncoding('utf8')
+      res.on('data', (d: string) => { if (d.includes('event: hello')) resolve(req) })
+    })
+    req.on('error', reject)
+  })
+
+  it('logs once when a page attaches where none was; a second page does not re-fire', async () => {
+    // Let listeners from earlier tests' aborted streams drain, so the 0→1 edge is real.
+    for (let i = 0; i < 40 && emitter.listenerCount('message') > 0; i++) await new Promise(r => setTimeout(r, 50))
+    const { out, restore } = capture()
+    let a: http.ClientRequest | undefined
+    let b: http.ClientRequest | undefined
+    try {
+      a = await openSse()
+      b = await openSse()
+    } finally {
+      restore(); a?.destroy(); b?.destroy()
+    }
+    expect(out.filter(l => l.includes('[page] connected'))).toHaveLength(1)
   })
 })

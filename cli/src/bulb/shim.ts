@@ -394,58 +394,204 @@ export const typebulbShim = `
     set theme(v) { if (window.__tbTheme) window.__tbTheme.set(v); }
   });
 
-  // tb:snapshot — the page serializes its own accessibility outline (roles, names, visible text;
-  // the YAML-not-pixels shape) as the reply to \`typebulb send <file> tb:snapshot\`
-  // (TB-Interrogation.md). Heuristic by design: explicit role attr, a small
-  // implicit-role map, aria-label/alt/value then visible text for names — enough to catch
-  // text/structure divergence, which is what an agent can judge without pixels.
+  // tb:snapshot / tb:click / tb:set — the reserved interrogation-and-actuation namespace
+  // (TB-Interrogation.md, TB-Interrogation-Actuation.md). One walk is both the outline and the
+  // selector vocabulary: snapshot renders its lines, the verbs resolve targets from its entries,
+  // so nothing is targetable the outline doesn't name. Heuristic by design: explicit role attr, a
+  // small implicit-role map; names come from aria-label, label association, placeholder, then
+  // visible text — a form control's value is a stated facet ([value=…]), never its name, because a
+  // value-derived name is a self-invalidating selector.
   const IMPLICIT_ROLES = { BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', OPTION: 'option', IMG: 'img', NAV: 'navigation', MAIN: 'main', HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog', TABLE: 'table', TR: 'row', TH: 'columnheader', TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem', LABEL: 'label', P: 'paragraph', PROGRESS: 'progressbar', SUMMARY: 'button', FIGURE: 'figure', BLOCKQUOTE: 'blockquote', HR: 'separator' };
   const INPUT_ROLES = { checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', button: 'button', submit: 'button', reset: 'button', hidden: '' };
-  const snapshot = () => {
+  const FORM_TAGS = { INPUT: 1, TEXTAREA: 1, SELECT: 1 };
+  const squash = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const clip = (s) => (s.length > 200 ? s.slice(0, 200) + '…' : s);
+  const roleOf = (el) => {
+    const explicit = el.getAttribute('role');
+    if (explicit) return explicit;
+    const t = el.tagName;
+    if (t === 'A') return el.hasAttribute('href') ? 'link' : '';
+    if (t === 'INPUT') { const r = INPUT_ROLES[(el.getAttribute('type') || 'text').toLowerCase()]; return r === undefined ? 'textbox' : r; }
+    if (/^H[1-6]$/.test(t)) return 'heading';
+    return IMPLICIT_ROLES[t] || '';
+  };
+  const hiddenEl = (el) => {
+    if (el.hidden || el.getAttribute('aria-hidden') === 'true') return true;
+    const cs = getComputedStyle(el);
+    return cs.display === 'none' || cs.visibility === 'hidden';
+  };
+  // The associated label's text minus the control's own subtree (accname's core rule) — the
+  // stable identity a wrapping label's raw textContent would drown in the control's own text.
+  const labelName = (el) => {
+    const label = el.labels && el.labels[0];
+    if (!label) return '';
+    let t = '';
+    const gather = (n) => {
+      if (n === el) return;
+      if (n.nodeType === 3) { t += ' ' + n.nodeValue; return; }
+      if (n.nodeType !== 1) return;
+      for (let c = n.firstChild; c; c = c.nextSibling) gather(c);
+    };
+    gather(label);
+    return squash(t);
+  };
+  const collectOutline = () => {
     const MAX_LINES = 400;
-    const squash = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-    const clip = (s) => (s.length > 200 ? s.slice(0, 200) + '…' : s);
-    const roleOf = (el) => {
-      const explicit = el.getAttribute('role');
-      if (explicit) return explicit;
-      const t = el.tagName;
-      if (t === 'A') return el.hasAttribute('href') ? 'link' : '';
-      if (t === 'INPUT') { const r = INPUT_ROLES[(el.getAttribute('type') || 'text').toLowerCase()]; return r === undefined ? 'textbox' : r; }
-      if (/^H[1-6]$/.test(t)) return 'heading';
-      return IMPLICIT_ROLES[t] || '';
-    };
-    const hiddenEl = (el) => {
-      if (el.hidden || el.getAttribute('aria-hidden') === 'true') return true;
-      const cs = getComputedStyle(el);
-      return cs.display === 'none' || cs.visibility === 'hidden';
-    };
     const lines = [];
-    const walk = (node, depth) => {
-      for (let ch = node.firstChild; ch && lines.length <= MAX_LINES; ch = ch.nextSibling) {
+    const targets = [];   // { el, role, name } per role line, in outline order
+    const walk = (node, depth, inLabel) => {
+      // No early stop at MAX_LINES: the cap bounds what's PRINTED, below — a truncated outline
+      // must not make a below-the-cap target unresolvable (the walk is a plain DOM read anyway).
+      for (let ch = node.firstChild; ch; ch = ch.nextSibling) {
         if (ch.nodeType === 3) {
           const t = squash(ch.nodeValue);
-          if (t) lines.push('  '.repeat(depth) + '- text: ' + clip(t));
+          if (t && !inLabel) lines.push('  '.repeat(depth) + '- text: ' + clip(t));
           continue;
         }
         if (ch.nodeType !== 1) continue;
         const tag = ch.tagName;
         if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE' || tag === 'NOSCRIPT' || tag === 'LINK' || tag === 'META') continue;
         if (hiddenEl(ch)) continue;
+        // An associated label is naming material, not a node: its text is the control's name, so
+        // both its own line and its raw text would be duplicates. An orphan label keeps its line.
+        if (tag === 'LABEL' && ch.control) { walk(ch, depth, true); continue; }
         const role = roleOf(ch);
-        if (!role) { walk(ch, depth); continue; }   // structural (div/span/…): descend transparently
+        if (!role) { walk(ch, depth, inLabel); continue; }   // structural (div/span/…): descend transparently
         const attr = (n) => squash(ch.getAttribute(n) || '');
         const text = squash(ch.textContent);
-        const name = attr('aria-label') || (tag === 'IMG' ? attr('alt') : '') || (typeof ch.value === 'string' ? squash(ch.value) || attr('placeholder') : '') || text;
+        const formControl = FORM_TAGS[tag] && role !== 'button';
+        let name;
+        const aria = attr('aria-label');
+        if (aria) name = aria;
+        else if (tag === 'IMG') name = attr('alt') || text;
+        else if (formControl) name = labelName(ch) || attr('placeholder') || attr('title');
+        else if (tag === 'INPUT') name = squash(ch.value) || text;   // a button-role input: value is its caption
+        else name = text;
+        const facets = [];
+        if (role === 'heading') {
+          const lv = attr('aria-level') || (/^H[1-6]$/.test(tag) ? tag.charAt(1) : '');
+          if (lv) facets.push('level=' + lv);
+        }
+        if (formControl && role !== 'checkbox' && role !== 'radio') {
+          const v = tag === 'SELECT'
+            ? squash(ch.selectedOptions && ch.selectedOptions[0] ? ch.selectedOptions[0].textContent : ch.value)
+            : squash(ch.value);
+          if (v) facets.push('value=' + clip(v));
+        }
+        if ((role === 'checkbox' || role === 'radio') && ch.checked) facets.push('checked');
+        if (ch.disabled === true || attr('aria-disabled') === 'true') facets.push('disabled');
         let line = role + (name ? ' "' + clip(name) + '"' : '');
-        const lv = role === 'heading' ? (attr('aria-level') || (/^H[1-6]$/.test(tag) ? tag.charAt(1) : '')) : '';
-        if (lv) line += ' [level=' + lv + ']';
+        for (const f of facets) line += ' [' + f + ']';
         lines.push('  '.repeat(depth) + '- ' + line);
-        if (!(name && name === text)) walk(ch, depth + 1);   // subtree ≡ name ⇒ the one line says it all
+        targets.push({ el: ch, role, name: name || '' });
+        if (!(name && name === text)) walk(ch, depth + 1, false);   // subtree ≡ name ⇒ the one line says it all
       }
     };
-    walk(document.body, 0);
+    walk(document.body, 0, false);
     if (lines.length > MAX_LINES) { lines.length = MAX_LINES; lines.push('- … (truncated)'); }
+    return { lines, targets };
+  };
+  const snapshot = () => {
+    const { lines } = collectOutline();
     return lines.length ? lines.join('\\n') : '(empty page)';
+  };
+
+  // tb:click / tb:set (TB-Interrogation-Actuation.md). A target is role + name exactly as the
+  // outline prints them: exact name first, else a unique case-insensitive substring; zero or
+  // several is a reported error, never a guess. Errors throw — the reply leg carries them to
+  // stderr and a non-zero exit.
+  const describeEl = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className ? '.' + el.className.split(/\\s+/)[0] : '');
+  const resolveTarget = (role, name) => {
+    const ofRole = collectOutline().targets.filter((t) => t.role === role);
+    if (!ofRole.length) throw new Error('no ' + role + ' in the outline — run tb:snapshot for the vocabulary');
+    const named = ofRole.filter((t) => t.name);
+    const exact = named.filter((t) => t.name === name);
+    const q = name.toLowerCase();
+    const hits = exact.length ? exact : named.filter((t) => t.name.toLowerCase().indexOf(q) !== -1);
+    if (hits.length === 1) return hits[0].el;
+    if (!hits.length) {
+      const unnamed = ofRole.length - named.length;
+      throw new Error('no ' + role + ' named "' + name + '"'
+        + (named.length ? ' — ' + role + ' names here: ' + named.slice(0, 8).map((t) => '"' + t.name + '"').join(', ') : '')
+        + (unnamed ? ' (' + unnamed + ' unnamed — an aria-label would make them targetable)' : ''));
+    }
+    throw new Error(hits.length + ' ' + role + 's match "' + name + '" (' + hits.map((t) => '"' + t.name + '"').join(', ') + ') — name one exactly');
+  };
+  // A dead control is a finding, not a no-op — one sentence, whatever deadened it.
+  const deadControl = (role, name, state) => new Error(role + ' "' + name + '" is ' + state + ' — a dead control is a finding, not a no-op');
+  const requireEnabled = (el, role, name) => {
+    if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') throw deadControl(role, name, 'disabled');
+  };
+  // The gesture's own preamble: a user scrolls to a control before clicking it (this is not a
+  // scroll verb — and instant, because a page's \`scroll-behavior: smooth\` would animate while the
+  // geometry reads below saw pre-scroll layout, silently disarming the hit-test). A center the
+  // viewport can't reach, or whose click another element would receive, is a finding.
+  const requireClickable = (el, role, name) => {
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const r = el.getBoundingClientRect();
+    const p = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    const top = document.elementFromPoint(p.x, p.y);
+    if (!top) throw new Error(role + ' "' + name + '" is not clickable: its center is outside the viewport even after scrolling it into view (clipped by overflow?)');
+    if (top !== el && !el.contains(top)) throw new Error(role + ' "' + name + '" is not clickable: a click at its center lands on ' + describeEl(top));
+    return p;
+  };
+  // Reply after a double rAF registered post-dispatch (so a rAF-rendering framework's scheduled
+  // frame lands first; the second survives one scheduled from a microtask), RACED against a short
+  // timer: a hidden or occluded document runs no frames at all, and a page the browser isn't
+  // rendering must still answer with its current DOM rather than hang the sender into a false
+  // "stale tab" diagnosis. (The Playwright tier can't cover the hidden case — Playwright keeps
+  // backgrounded pages rendered.) Either way: the immediate rendered consequence, never the
+  // settled outcome — settled truth is the caller's follow-up tb:snapshot.
+  const postFrameSnapshot = () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(snapshot()); } };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 150);
+  });
+  const parseActuation = (usage, rest) => {
+    const m = /^\\s*([\\w-]+)\\s+(?:"([^"]*)"|(\\S+))\\s*([\\s\\S]*)$/.exec(rest);
+    if (!m) throw new Error('usage: ' + usage);
+    return { role: m[1], name: m[2] !== undefined ? m[2] : m[3], rest: m[4] };
+  };
+  const actClick = (rest) => {
+    const t = parseActuation('tb:click <role> "<name>"', rest);
+    if (t.rest) throw new Error('usage: tb:click <role> "<name>"');
+    const el = resolveTarget(t.role, t.name);
+    requireEnabled(el, t.role, t.name);
+    const p = requireClickable(el, t.role, t.name);
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      const Ctor = type.indexOf('pointer') === 0 && window.PointerEvent ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, view: window, clientX: p.x, clientY: p.y }));
+    }
+    return postFrameSnapshot();
+  };
+  const actSet = (rest) => {
+    const t = parseActuation('tb:set <role> "<name>" = <value>', rest);
+    const vm = /^=\\s*([\\s\\S]*)$/.exec(t.rest.trim());
+    if (!vm) throw new Error('usage: tb:set <role> "<name>" = <value>');
+    let value = vm[1].trim();
+    if (value.length >= 2 && value.charAt(0) === '"' && value.charAt(value.length - 1) === '"') value = value.slice(1, -1);
+    const el = resolveTarget(t.role, t.name);
+    const tag = el.tagName;
+    if (!FORM_TAGS[tag]) throw new Error('tb:set targets form controls (input, textarea, select) — for app state beyond a control, author a poke handler (README, "Poking state")');
+    const type = tag === 'INPUT' ? (el.getAttribute('type') || 'text').toLowerCase() : '';
+    if (type === 'checkbox' || type === 'radio') throw new Error('a ' + t.role + ' takes tb:click, not a value');
+    requireEnabled(el, t.role, t.name);
+    if (el.readOnly === true) throw deadControl(t.role, t.name, 'readonly');
+    if (tag === 'SELECT') {
+      const opts = Array.from(el.options);
+      const hit = opts.find((o) => o.value === value) || opts.find((o) => squash(o.textContent).toLowerCase() === value.toLowerCase());
+      if (!hit) throw new Error('no option "' + value + '" in ' + t.role + ' "' + t.name + '" — options: ' + opts.map((o) => '"' + squash(o.textContent) + '"').join(', '));
+      value = hit.value;
+    }
+    // The NATIVE prototype setter, not the instance property: a framework's value tracker
+    // (React) shadows the instance to dedupe events, and a plain assignment goes unseen.
+    const proto = tag === 'SELECT' ? HTMLSelectElement.prototype : tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return postFrameSnapshot();
   };
 
   // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
@@ -471,8 +617,11 @@ ${reloadClientScript}
         } catch (err) { errors.push('reply is not JSON-serializable: ' + errText(err)); }
       };
       const reservedCall = async () => {
-        if (env.payload === 'tb:snapshot') return snapshot();
-        throw new Error('unknown reserved message: ' + env.payload);
+        const p = env.payload;
+        if (p === 'tb:snapshot') return snapshot();
+        if (p === 'tb:click' || p.indexOf('tb:click ') === 0) return actClick(p.slice(9));
+        if (p === 'tb:set' || p.indexOf('tb:set ') === 0) return actSet(p.slice(7));
+        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:click, tb:set)');
       };
       const value = parseMsg(env.payload);
       const calls = typeof env.payload === 'string' && env.payload.indexOf('tb:') === 0

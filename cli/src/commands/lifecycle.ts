@@ -93,11 +93,17 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
 
   const snap = readServerLog(server.pid)
   let text = snap.text
-  // `--run latest|N`: slice to one hot-reload run's output (TB-CLI.md). A run absent from the
-  // size-capped log yields nothing — say so rather than printing a silent blank.
+  // `--run latest|N`: slice to one hot-reload run's output (TB-CLI.md). An empty slice always says
+  // so on stderr — empty stdout with exit 0 reads exactly like a hang, so silence must have a
+  // stated cause (TB-Interrogation-Actuation.md, sharp edges).
   if (opts.run !== undefined) {
     text = sliceRunLog(text, opts.run)
-    if (!text && opts.run !== 'latest') console.error(`No output for run ${opts.run} (it hasn't started, or was trimmed from the log).`)
+    if (!text) console.error(opts.run === 'latest'
+      ? 'No output in the latest run yet (the server has logged nothing since its last reload).'
+      : `No output for run ${opts.run} (it hasn't started, or was trimmed from the log).`)
+  } else if (!text && !opts.follow) {
+    // The same stated-cause rule for the plain read: an empty log and a hang look identical.
+    console.error('Log is empty — this server has logged nothing yet.')
   }
   if (opts.lines && opts.lines > 0) {
     const lines = text.split('\n')
