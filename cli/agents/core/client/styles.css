@@ -229,6 +229,24 @@ body {
   border-radius: 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
+/* Menu-list scrollbars: the channel is ALWAYS reserved (overflow-y: scroll on all three lists) and
+   the scrollbar is owned — no arrow buttons, transparent track, a floating thumb only when the list
+   actually overflows. Native auto scrollbars made a row band's right inset depend on list length: a
+   project with no bulbs of its own (one collapsed fold row) ran its band 15px nearer the popover
+   edge than the filter box under it, and bare overflow:scroll parked a vestigial arrow-stub beside
+   the short list. Width stays 15px, the native width .model-head's alignment padding hardcodes.
+   Chromium pseudos on purpose: setting the standard scrollbar-color would disable them. */
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar { width: 15px; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-button { display: none; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-track { background: transparent; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--fg) 28%, transparent);
+  border-radius: 8px;
+  /* Transparent border + padding-box clip floats a slim pill in the 15px channel. */
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 45%, transparent); }
 /* Popover alignment — which edge of the pill the menu aligns to (floating-UI's start/center/end
    vocabulary; "end", right edges flush and growing left, is the unnamed default above). Tagged on
    the pill's WRAP, not each popover root: a menu with several drilled-in views (the model pill's
@@ -466,7 +484,7 @@ body {
 /* The filter (.bulb-filter-control) pins at the bottom — the popover's anchored edge, so it never
    jumps as the filtered list changes height; the row list scrolls inside the capped box, resting at
    its end (newest-at-bottom) — same shape as the launcher's .servers-pop / .bulb-list. */
-.picker-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.picker-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: scroll; padding-right: 4px; }
 /* Positioned wrapper around just the list (not the filter) so the hover-peek card anchors to the
    list's bottom edge, sitting above the filter input. */
 .picker-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -829,7 +847,12 @@ a.server-port:hover { text-decoration: underline; }
    the popover cap, plain auto rows compress to each row's min-height contribution, so a full-text
    row's snippet line bleeds under the next row as overlapping text. max-content tracks never
    compress; the list scrolls, rows keep their content height. */
-.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: auto; }
+/* overflow-y: scroll, not auto — the scrollbar channel is 15px of the row band's right inset, so a
+   list short enough not to scroll (a project with no bulbs of its own: one collapsed fold row) had
+   its rows run 15px nearer the edge than the filter box below them. Keeping the channel always
+   present makes that inset one number — the same "effectively always present" the model menu's
+   header padding already hardcodes. (scrollbar-gutter is the stated fix and is ignored here.) */
+.bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: scroll; }
 /* The scope column (TB-Batch.md Invariant 7): a seventh track heading the control cluster (before
    trust — a launch scope is an execution concern, like a trust tier), present only while some row
    carries a scope (bulbsPill.ts anyScope — rows emit a matching cell, spacer included). The B
@@ -880,7 +903,6 @@ a.server-port:hover { text-decoration: underline; }
   background: linear-gradient(var(--veil), var(--veil)), var(--panel);
 }
 .fold-row:not(:has(+ .fold-row)) { border-radius: 0 0 6px 6px; }
-.sample-group .caret-tri { justify-self: center; }
 .sample-group-label { grid-column: 2 / -1; color: var(--accent); }
 /* The 1fr name column: name + (in full-text mode) its hit count read together, the badge
    right-aligned at the column's end by the name's flex:1 — the session row's preview/hits layout. */
@@ -904,7 +926,10 @@ a.server-port:hover { text-decoration: underline; }
    this drifts (measured: a per-control size is a per-control seating). */
 .trust-toggle { font-size: var(--pill-font); height: var(--pill-h); padding: 0 .5rem; color: var(--muted); justify-self: center; }
 .trust-toggle:hover, .trust-toggle.on { color: var(--accent); border-color: var(--accent); }
-.server-stop, .bulb-launch { display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
+/* .fold-caret shares only this geometry line (not the bordered-button rule above): the fold header's
+   caret rides an invisible play-button-sized box, so a samples-only list sizes the button column
+   exactly as a list with real buttons does, and the caret centres where the play glyphs do. */
+.server-stop, .bulb-launch, .fold-caret { display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; padding: 0; border-radius: 50%; margin-left: .4rem; }
 .btn-icon { width: 16px; height: 16px; }
 /* A stopped bulb's play button is dormant — the title is the primary launch target — so it's
    hidden until the row is hovered or keyboard-selected. visibility (not display) reserves its slot,
@@ -1016,7 +1041,7 @@ a.server-port:hover { text-decoration: underline; }
 .gitdiff-pill .icon { width: 8px; height: 12px; }
 .gitdiff-count { font-size: var(--pill-font); font-variant-numeric: tabular-nums; }
 .gitdiff-pop { width: min(480px, calc(100vw - 2rem)); }
-.gitdiff-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.gitdiff-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: scroll; padding-right: 4px; }
 .gitdiff-row { display: flex; align-items: center; gap: .55rem; flex: none; min-height: var(--menu-row-h); padding: .05rem .45rem; border-radius: 6px; font-size: .85rem; cursor: pointer; }
 .gitdiff-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .gitdiff-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
@@ -1782,11 +1807,13 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   color: var(--fg);
 }
 
-/* Path link: plain accent, underline only on hover. skip-ink:none so the
-   underline stays solid under a path's descenders and slashes. */
+/* Path link: plain accent, underline only on hover. skip-ink:none so the underline stays solid
+   under a path's descenders and slashes; the cursor is explicit because the anchor carries no href
+   (the click is a server RPC, not navigation) and so defaults to the surrounding prose's caret. */
 .tool-sum.link {
   color: var(--accent);
   text-decoration: none;
+  cursor: pointer;
 }
 .tool-sum.link:hover { text-decoration: underline; text-decoration-skip-ink: none; }
 

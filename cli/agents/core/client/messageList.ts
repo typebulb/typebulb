@@ -21,7 +21,7 @@ const LOGO_DARK = new URL('typebulb-inv.png', import.meta.url).href
 
 function toolSummary(input: Record<string, unknown>): string {
   if (!input || typeof input !== 'object') return ''
-  return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
+  return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.filePath) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
 }
 
 // A multi-line summary (a heredoc Bash command) must not break the one-line row: first line + '…'.
@@ -60,15 +60,15 @@ function udiffView(s: string) {
   return div({ class: 'udiff' }, rows)
 }
 
-// File-aware tools whose path should open in VS Code / Cursor on click.
-const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep'])
-
 // Edit tools whose diff is interesting enough to auto-expand in the live session.
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
-function filePathOf(toolName: string, input: Record<string, unknown>): string | undefined {
-  if (!FILE_TOOLS.has(toolName) || !input || typeof input !== 'object') return undefined
-  return (asStr(input.file_path) ?? asStr(input.path)) || undefined
+// The path an input names, sniffed by FIELD name rather than tool name (the decoupling
+// looksLikeUnifiedDiff uses) — so an MCP editor's path links without joining a hardcoded list.
+// A junk path costs nothing: openFile refuses anything that isn't a real file.
+function filePathOf(input: Record<string, unknown>): string | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  return (asStr(input.file_path) ?? asStr(input.filePath) ?? asStr(input.path)) || undefined
 }
 
 // Normalize each edit tool's input to (old → new) hunks. undefined = no diff view.
@@ -641,7 +641,7 @@ export class MessageList extends Component {
 
   tool(t: Tool) {
     const open = this.openTools.has(t.id)
-    const filePath = filePathOf(t.name, t.input)
+    const filePath = filePathOf(t.input)
     const todos = todosOf(t)
     // File paths display project-relative (full path in the title + the click); the rest one-lined.
     const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input))

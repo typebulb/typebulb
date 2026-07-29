@@ -290,12 +290,11 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     this.update()
   }
 
-  // The fold header's texts; any owner beyond the two curated names (a future foreign fold)
-  // falls back to their slug.
+  // The fold header's texts. Every owner reads the same — "antypica's bulbs" names the account
+  // where "Your typebulb.com bulbs" only named the relationship; the title below still says which
+  // one is yours, and carries the "on typebulb.com" origin the label drops.
   foldLabel(user: string): string {
-    return user === 'samples' ? 'Samples from typebulb.com'
-      : user === this.myUser ? 'Your typebulb.com bulbs'
-      : `${user} on typebulb.com`
+    return user === 'samples' ? 'Samples from typebulb.com' : `${user}'s bulbs`
   }
   foldTitle(user: string): string {
     return user === 'samples'
@@ -815,8 +814,10 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     )
   }
 
-  // A catalog's fold header — a full-width row (caret + muted label) in the ordinary row slot, so
-  // the keyboard cursor and highlight treat it like any other row; Enter/click toggles the fold.
+  // A catalog's fold header — a full-width row in the ordinary row slot, so the keyboard cursor and
+  // highlight treat it like any other row; Enter/click toggles the fold. The caret rides a
+  // play-button-sized box (.fold-caret), so the button column exists — same width, same margins —
+  // even when no local row renders a real button, and the caret centres under the play glyphs.
   groupRow(r: BulbRow, i: number, dimmed: boolean) {
     const { user, count } = r.group!
     const open = this.openFolds.has(user)
@@ -824,7 +825,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         title: open ? 'Collapse' : this.foldTitle(user),
         onMouseEnter: () => this.hoverRow(i),
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleFold(user) } },
-      icon('caret', ['caret-tri', open ? 'open' : '']),
+      span({ class: 'fold-caret' }, icon('caret', ['caret-tri', open ? 'open' : ''])),
       span({ class: 'sample-group-label' }, `${r.name} (${count})`),
     )
   }
