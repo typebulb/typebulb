@@ -85,6 +85,8 @@ tracked.addEventListener("input", () => {
 <label>mute <input id="mute" type="checkbox"></label>
 <input id="anon">
 <input id="ro" readonly aria-label="frozen" value="x">
+<div style="height:9.6px"></div>
+<button id="frac" style="display:block;height:22.7px">Fractional</button>
 <div style="height:1600px"></div>
 <button id="far">Far Away</button>
 \`\`\`
@@ -345,6 +347,20 @@ describe('tb:rect (live browser)', () => {
     const r = await sendCli(bulb, 'tb:rect button "Missing"')
     expect(r.code).not.toBe(0)
     expect(r.stderr).toContain('no button named "Missing"')
+  })
+
+  // The fixture's fractional spacer + height make per-field rounding off by one here: edges must
+  // round and dimensions derive, so derived sums are alignment-safe (TB-Interrogation.md).
+  it('derived edges are the rounded true edges', async () => {
+    const r = await sendCli(bulb, 'tb:rect button "Fractional"')
+    expect(r.code).toBe(0)
+    const rect = JSON.parse(r.stdout)
+    const b = await tab.evaluate(() => {
+      const el = document.getElementById('frac')!.getBoundingClientRect()
+      return { right: el.right, bottom: el.bottom }
+    })
+    expect(rect.x + rect.width).toBe(Math.round(b.right))
+    expect(rect.y + rect.height).toBe(Math.round(b.bottom))
   })
 })
 

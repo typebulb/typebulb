@@ -584,9 +584,12 @@ export const typebulbShim = `
     const el = resolveTarget(t.role, t.name);
     const r = el.getBoundingClientRect();
     const de = document.scrollingElement || document.documentElement;
+    // Edges round, dimensions derive: x + width IS the rounded true right edge (same vertically),
+    // so controls truly sharing an edge always read equal — per-field rounding could put them 1px apart.
+    const x = Math.round(r.left), y = Math.round(r.top);
     return {
-      x: Math.round(r.x), y: Math.round(r.y),
-      width: Math.round(r.width), height: Math.round(r.height),
+      x, y,
+      width: Math.round(r.right) - x, height: Math.round(r.bottom) - y,
       viewport: { width: de.clientWidth, height: de.clientHeight }
     };
   };
