@@ -1,7 +1,20 @@
 {
   "name": "typebulb",
-  "version": "0.44.0",
+  "version": "0.44.1",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
+  "keywords": [
+    "bulb",
+    "bulbs",
+    "markdown",
+    "single-file",
+    "tsx",
+    "cli",
+    "agent",
+    "coding-agent",
+    "agent-skill",
+    "claude-code",
+    "llm"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -221,8 +221,6 @@ Start it yourself with `npx typebulb agent` (it auto-detects your harness) — d
 
 One exception: if `TYPEBULB_MIRROR=1` is set in your environment, the user is prompting you from the mirror itself — it's already open in front of them, so skip `npx typebulb agent` and don't end with its link; just emit bulbs.
 
-If the user asks to keep this document on hand across sessions, copy its packaged skill form — `SKILL.md`, at the path `npx typebulb agent` prints — into your skills folder (e.g. for Claude Code, `.claude/skills/typebulb/SKILL.md`).
-
 ### When agents should output local vs embedded bulbs
 
 - **First, can it even embed?** A bulb needing `tb.ai`, `tb.infer`, `tb.fs`, or `server.ts` must be **local** — embeds are client-only, so those calls fail there. The choice below is only for client-only bulbs.

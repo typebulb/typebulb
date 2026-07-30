@@ -25,7 +25,7 @@ describe('buildSkill', () => {
     const out = buildSkill('# x', '9.9.9')
     expect(out).toContain('version: 9.9.9')
     expect(out).toContain('Generated from typebulb v9.9.9')
-    expect(out).toContain('re-copying the packaged SKILL.md')   // the refresh instruction the stamp makes actionable
+    expect(out).toContain('replace this file with that one')   // the refresh instruction the stamp makes actionable
   })
 
   it('emits the whole README — top half and bottom half', () => {

@@ -8,8 +8,8 @@
  * The skill IS the package README, in full — one source of truth; SKILL.md is generated and
  * gitignored, so it can't drift. The README carries no YAML frontmatter of its own (so it renders
  * clean on npm/GitHub); the `name`/`description` discovery metadata is the only thing wrapped on
- * here, at build time. The CLI never installs the skill anywhere — the agent persists a copy only
- * if asked (Skill-spec "the CLI never plants the skill").
+ * here, at build time. The CLI never installs the skill anywhere (Skill-spec "the CLI never plants
+ * the skill"); whether an agent caches a copy is its own call, made safe by the version stamp.
  */
 
 import { readFileSync, existsSync } from 'fs'
@@ -52,14 +52,16 @@ version: ${version}
 ---`
 }
 
-/** A one-line freshness self-check emitted just under the frontmatter. A persisted SKILL.md can't
+/** A one-line freshness self-check emitted just under the frontmatter. A cached SKILL.md can't
  *  refresh itself, and the CLI can't refresh it either — the never-plant invariant means it never
  *  learns where the agent saved the copy, so it can't compare versions against it (Skill-spec). So
- *  the check lives in the artifact, actionable by the reader: if the installed CLI has moved on, the
- *  agent re-copies the packaged SKILL.md. (The packaged copy is rebuilt with every release, so it is
- *  always fresh; `typebulb agent` prints its current path.) */
+ *  the check lives in the artifact, actionable by the reader, and keys off `typebulb agent`: its
+ *  banner prints the running version beside the packaged SKILL.md path, so the one command the agent
+ *  runs anyway yields both halves of the comparison — where `--version` costs a second command for a
+ *  fact the first already printed. (The packaged copy is rebuilt with every release, so it's always
+ *  the fresh one.) */
 export function freshnessNote(version: string): string {
-  return `> Generated from typebulb v${version}. If \`npx typebulb --version\` reports a newer version, refresh this file by re-copying the packaged SKILL.md (\`npx typebulb agent\` prints its path).`
+  return `> Generated from typebulb v${version}. \`npx typebulb agent\` prints the running version alongside the path to its packaged SKILL.md: if that version is newer than this one, replace this file with that one.`
 }
 
 /** The full emittable skill: discovery frontmatter (with version stamp), the freshness self-check,
