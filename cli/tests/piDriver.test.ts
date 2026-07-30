@@ -724,13 +724,11 @@ describe('mirror driver lifecycle (per-conversation drivers, view-scoped slices)
 })
 
 describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirror orientation)', () => {
-  it('resolves both path placeholders to JS string literals of real skill-part files', () => {
+  it('resolves the skill-path placeholder to a JS string literal of the packaged SKILL.md', () => {
     const src = piExtensionSource()
-    expect(src).not.toContain('__TB_DESCRIPTION_PATH__')
-    expect(src).not.toContain('__TB_README_PATH__')
+    expect(src).not.toContain('__TB_SKILL_PATH__')
     // JSON-encoded absolute paths — Windows backslashes must arrive escaped, not raw.
-    expect(src).toMatch(/var TB_README_PATH = "(.+README\.md)";/)
-    expect(src).toMatch(/var TB_DESCRIPTION_PATH = "(.+description\.md)";/)
+    expect(src).toMatch(/var TB_SKILL_PATH = "(.+SKILL\.md)";/)
   })
 
   it('carries the mirror orientation gated on TYPEBULB_MIRROR, with the agent.ts decision lines verbatim', () => {

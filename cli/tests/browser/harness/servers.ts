@@ -28,11 +28,11 @@ export function requireDistBuild(): void {
 /**
  * Launch a bulb via the real bin the way a terminal does, resolving once it prints the URL it
  * bound. `--no-watch` so only a replace can ever reload the page, never a save. The child lands in
- * `track` for the caller's afterAll to reap.
+ * `track` for the caller's afterAll to reap. `args` appends extra flags (e.g. `--trust`).
  */
-export function launchBulb(file: string, opts: { cwd: string; env: NodeJS.ProcessEnv; track: ChildProcess[] }): Promise<string> {
+export function launchBulb(file: string, opts: { cwd: string; env: NodeJS.ProcessEnv; track: ChildProcess[]; args?: string[] }): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [distBin, file, '--no-open', '--no-watch'], { cwd: opts.cwd, env: opts.env })
+    const child = spawn(process.execPath, [distBin, file, '--no-open', '--no-watch', ...(opts.args ?? [])], { cwd: opts.cwd, env: opts.env })
     opts.track.push(child)
     let out = ''
     const onData = (chunk: Buffer) => {

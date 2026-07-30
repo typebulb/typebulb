@@ -31,7 +31,6 @@ import { runTrust } from './commands/trust.js'
 import { runAgent } from './commands/agent.js'
 import { runModels } from './commands/models.js'
 import { runSlug } from './commands/slug.js'
-import { runSkill } from './commands/skill.js'
 import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
 import { runPull } from './commands/pull.js'
@@ -110,10 +109,6 @@ async function main(): Promise<void> {
     // Resolves the target in the registry by file path (like logs/stop) — no bulb file needs to
     // exist on disk, and the push is trust-free, so dispatch before file/trust resolution.
     await runSend(args.file, args.sendMessage, args.sendWaitMs ?? 0)
-    return
-  }
-  if (args.subcommand === 'skill') {
-    await runSkill(VERSION)
     return
   }
   if (args.subcommand === 'models') {

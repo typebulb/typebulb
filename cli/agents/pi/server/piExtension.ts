@@ -42,7 +42,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { bundledDescriptionPath, bundledReadmePath } from '../../../src/servers.js'
+import { bundledSkillPath } from '../../../src/servers.js'
 
 const piHome = () => path.join(homedir(), '.pi', 'agent')
 const extensionPath = () => path.join(piHome(), 'extensions', 'typebulb.ts')
@@ -61,8 +61,8 @@ const patcherTargetPath = () => path.join(piHome(), 'extensions', 'matchu-patchu
 /**
  * The shim source, written verbatim into pi's extensions dir and loaded by pi (via jiti) inside the
  * pi process — so `node:*` builtins are available and `pi`/`ctx`/`sendUserMessage` are pi's own.
- * The two `__TB_*_PATH__` placeholders are the exception to "verbatim": `piExtensionSource()` resolves
- * them to this install's absolute skill-part paths at write time (JSON-encoded, so Windows
+ * The `__TB_SKILL_PATH__` placeholder is the exception to "verbatim": `piExtensionSource()` resolves
+ * it to this install's absolute packaged-SKILL.md path at write time (JSON-encoded, so Windows
  * backslashes survive as valid JS string escapes).
  *
  * `String.raw` so the regex backslashes (`\b`, `\s`) and the `\n` survive into the file literally
@@ -95,10 +95,9 @@ function resolveBash() {
   } catch (e) { return null; }
 }
 
-// Resolved at shim-write time to this install's absolute skill-part paths (same files
-// commands/agent.ts prints — readable without a permission prompt, unlike the npx command).
-var TB_DESCRIPTION_PATH = "__TB_DESCRIPTION_PATH__";
-var TB_README_PATH = "__TB_README_PATH__";
+// Resolved at shim-write time to this install's absolute packaged SKILL.md (the same path
+// commands/agent.ts prints — readable without a permission prompt, and too big to emit on stdout).
+var TB_SKILL_PATH = "__TB_SKILL_PATH__";
 
 // Orientation for a MIRROR-DRIVEN session (TYPEBULB_MIRROR=1 — set only by the mirror's composer
 // driver). A composer-driven agent never runs "typebulb agent", so the guaranteed-delivery block
@@ -115,10 +114,7 @@ var TB_MIRROR_BLOCK = [
   "    arm a wait for its render verdict — run it plainly:",
   '    • typebulb wait agent --match "[embed <name>"',
   "  Read the authoring skill before writing a bulb:",
-  "    • npx typebulb skill — assembles one SKILL.md",
-  "    • or, open its parts:",
-  "        " + TB_DESCRIPTION_PATH,
-  "        " + TB_README_PATH,
+  "    • " + TB_SKILL_PATH,
 ].join("\n");
 
 export default function (pi) {
@@ -221,11 +217,10 @@ export default function (pi) {
 }
 `
 
-/** The extension with its path placeholders resolved — what ensurePiExtension actually writes. */
+/** The extension with its path placeholder resolved — what ensurePiExtension actually writes. */
 export function piExtensionSource(): string {
   return PI_EXTENSION_SOURCE
-    .replace('"__TB_DESCRIPTION_PATH__"', JSON.stringify(bundledDescriptionPath()))
-    .replace('"__TB_README_PATH__"', JSON.stringify(bundledReadmePath()))
+    .replace('"__TB_SKILL_PATH__"', JSON.stringify(bundledSkillPath()))
 }
 
 /**

@@ -146,6 +146,6 @@ export async function runSend(file: string, message: string | undefined, waitMs 
       console.error(`No reply to '${message}' within ${waitMs / 1000}s — reload the page and retry.`)
       process.exit(1)
     }
-    console.error(`(no reply within ${waitMs / 1000}s — a slow handler's return needs a larger --wait=ms)`)
+    console.error(`(no reply within ${waitMs / 1000}s — slow work needs a larger --wait=ms; a reply that NEVER comes is a done-promise that missed an exit)`)
   }
 }

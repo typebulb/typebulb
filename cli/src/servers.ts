@@ -30,10 +30,10 @@ export { normalizeOllamaHost } from './serve/modelCatalog.js'
 // The tb.ai primitives (env-cascade provider resolution + one streamed chat request), so a mirror
 // feature (the composer's paste naming) makes its cheap model call through this public entry.
 export { resolveLocalProvider, sendTbAi } from './serve/localProvider.js'
-// The skill's two on-disk parts, so the pi extension's mirror-orientation block
-// (agents/pi/server/piExtension.ts) points at the same artifacts `typebulb skill` and
-// `typebulb agent` emit — through this public entry, per the agent-boundary rule.
-export { bundledReadmePath, bundledDescriptionPath } from './skill.js'
+// The packaged skill's on-disk path, so the pi extension's mirror-orientation block
+// (agents/pi/server/piExtension.ts) points at the same artifact `typebulb agent` prints —
+// through this public entry, per the agent-boundary rule.
+export { bundledSkillPath } from './skill.js'
 // One-bulb transfer from a typebulb host (TB-Push-Pull.md) — the mirror's sample download is a
 // pull with force on, so it shares this instead of its own fetch-and-write.
 export { pullBulb, bulbRelPath, parsePullTarget, type PullTarget, type PullOutcome } from './commands/pull.js'

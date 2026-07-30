@@ -1,21 +1,23 @@
 /**
- * `typebulb skill` — emit the bulb-authoring skill to stdout, so a cold agent bootstraps with no
- * ecosystem knowledge: "tell your agent to run `npx typebulb skill`" works against any agent that
- * understands the cross-agent Agent Skills format (TB-Skill.md).
+ * The bulb-authoring skill: the package README wrapped in discovery frontmatter, shipped as
+ * `SKILL.md` at the package root. Assembled by the BUILD (esbuild.config.mjs imports `buildSkill`
+ * from tsc's output), never at runtime: a cold agent bootstraps by reading a file — `typebulb
+ * agent` prints its path — which no permission classifier gates and no agent tool-output cap
+ * truncates, the two ways emitting ~46KB on stdout failed (TB-Skill.md).
  *
- * The skill IS the package README, in full — one source of truth, no separate SKILL.md to drift. The
- * README carries no YAML frontmatter of its own (so it renders clean on npm/GitHub); the
- * `name`/`description` discovery metadata is the only thing wrapped on here, at emit time. This is
- * read-only: emitting a skill never writes it anywhere — the agent persists it only if asked
- * (Skill-spec "the CLI never installs the skill").
+ * The skill IS the package README, in full — one source of truth; SKILL.md is generated and
+ * gitignored, so it can't drift. The README carries no YAML frontmatter of its own (so it renders
+ * clean on npm/GitHub); the `name`/`description` discovery metadata is the only thing wrapped on
+ * here, at build time. The CLI never installs the skill anywhere — the agent persists a copy only
+ * if asked (Skill-spec "the CLI never plants the skill").
  */
 
 import { readFileSync, existsSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
-/** The `typebulb` package root, where npm ships the README and, alongside it, the skill's
- *  `description.md`. Found by walking up to the nearest `package.json` rather than assuming a fixed
+/** The `typebulb` package root, where npm ships the README and, alongside it, the assembled
+ *  `SKILL.md`. Found by walking up to the nearest `package.json` rather than assuming a fixed
  *  depth: the shipped bundle lives at `<root>/dist/index.js` but the source (under `cli/src/`) sits
  *  a folder deeper, and only the package root has a `package.json` to anchor on. */
 function packageRoot(): string {
@@ -28,15 +30,16 @@ function packageRoot(): string {
   return dir
 }
 
-/** The skill's two on-disk pieces, resolved here so `skill` (which assembles them) and `agent`
- *  (which hands their paths to the agent) can't drift. The README *is* the skill body;
- *  `description.md` is the discovery blurb — both shipped so an agent can read either directly. */
+/** The skill's on-disk pieces, resolved here so the build (which assembles SKILL.md from the parts)
+ *  and `agent` (which hands the assembled path to the agent) can't drift. The README *is* the skill
+ *  body; `description.md` is the discovery blurb; `SKILL.md` is the shipped assembly. */
 export function bundledReadmePath(): string { return path.join(packageRoot(), 'README.md') }
 export function bundledDescriptionPath(): string { return path.join(packageRoot(), 'description.md') }
+export function bundledSkillPath(): string { return path.join(packageRoot(), 'SKILL.md') }
 
-/** Discovery metadata wrapped onto the README at emit time (the README itself carries none). The
- *  `description` is read from `description.md` — the single source the `agent` output also points
- *  at — flattened to one line and JSON-quoted (a JSON string is a valid YAML scalar; unquoted, any
+/** Discovery metadata wrapped onto the README at build time (the README itself carries none). The
+ *  `description` is read from `description.md` — a build-time source, its own file rather than a
+ *  string in the build script — flattened to one line and JSON-quoted (a JSON string is a valid YAML scalar; unquoted, any
  *  `: ` in the prose parses as a nested mapping and the whole frontmatter fails); `version` stamps
  *  the typebulb release the skill was cut from, so a persisted copy is self-identifying and its
  *  staleness is checkable (see freshnessNote). */
@@ -53,9 +56,10 @@ version: ${version}
  *  refresh itself, and the CLI can't refresh it either — the never-plant invariant means it never
  *  learns where the agent saved the copy, so it can't compare versions against it (Skill-spec). So
  *  the check lives in the artifact, actionable by the reader: if the installed CLI has moved on, the
- *  agent re-runs `skill`. (The live path — re-running `agent`/`skill` — is always fresh regardless.) */
+ *  agent re-copies the packaged SKILL.md. (The packaged copy is rebuilt with every release, so it is
+ *  always fresh; `typebulb agent` prints its current path.) */
 export function freshnessNote(version: string): string {
-  return `> Generated from typebulb v${version}. If \`npx typebulb --version\` reports a newer version, re-run \`npx typebulb skill\` to refresh this file.`
+  return `> Generated from typebulb v${version}. If \`npx typebulb --version\` reports a newer version, refresh this file by re-copying the packaged SKILL.md (\`npx typebulb agent\` prints its path).`
 }
 
 /** The full emittable skill: discovery frontmatter (with version stamp), the freshness self-check,

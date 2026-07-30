@@ -1,7 +1,7 @@
 import * as readline from 'readline'
 import { launchAgentViewer, type BulbServer } from '../serve/serverRegistry.js'
 import { resolveAgent } from '../agentViewer/resolve.js'
-import { bundledReadmePath, bundledDescriptionPath } from '../skill.js'
+import { bundledSkillPath } from '../skill.js'
 
 /**
  * The one place the CLI's colors are defined. ANSI only when stdout is a real terminal — piped output
@@ -72,16 +72,14 @@ async function launchAndReport(version: string, name: string): Promise<void> {
 
   const { lit, litLink, brand } = palette(process.stdout.isTTY === true)
 
-  // Read-the-skill directive, shared by both cases. The direct file paths are ESSENTIAL: the agent reads
-  // them with its (ungated) Read tool, whereas `npx typebulb skill` is a Bash command the host's
-  // permission classifier can gate. They're read by the agent, not clicked by a human, so they stay
-  // plain — but don't drop them to save their npm-cache length; losing the no-prompt read route regresses.
+  // Read-the-skill directive, shared by both cases. A direct file path, ESSENTIAL in that form: the
+  // agent reads it with its (ungated) Read tool, whereas a command emit is Bash the host's permission
+  // classifier can gate — and the skill's ~46KB overflows agent tool-output caps. It's read by the
+  // agent, not clicked by a human, so it stays plain — but don't drop it to save its npm-cache
+  // length; losing the no-prompt read route regresses.
   const skill = [
     `    Read the authoring skill before writing a bulb:`,
-    `      • ${lit('npx typebulb skill')} — assembles one SKILL.md`,
-    `      • or, open its parts:`,
-    `          ${lit(bundledDescriptionPath())}`,
-    `          ${lit(bundledReadmePath())}`,
+    `      • ${lit(bundledSkillPath())}`,
   ]
 
   const body = viewer

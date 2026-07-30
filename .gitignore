@@ -7,6 +7,7 @@ dist/
 **/dist/
 .tsbuild/
 *.tsbuildinfo
+/SKILL.md
 
 # Env / secrets
 .env

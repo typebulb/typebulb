@@ -1,6 +1,6 @@
 {
   "name": "typebulb",
-  "version": "0.43.1",
+  "version": "0.44.0",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
   "license": "MIT",
   "repository": {
@@ -55,7 +55,7 @@
   },
   "files": [
     "dist",
-    "description.md"
+    "SKILL.md"
   ],
   "scripts": {
     "typecheck": "tsc --build",
@@ -94,7 +94,7 @@
     "highlight.js": "^11.10.0",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
-    "matchu-patchu": "^0.3.3",
+    "matchu-patchu": "^0.3.5",
     "playwright": "^1.60.0",
     "rimraf": "^6.0.1",
     "typebox": "^1.3.4",

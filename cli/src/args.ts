@@ -9,7 +9,7 @@ import { detectCallerHarness } from './agentViewer/resolve.js'
 export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'skill' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -35,8 +35,7 @@ export interface CliArgs {
    *  multi-word name works as typed. */
   slugName?: string
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
-   *  target) ensures this project's mirror is up and prints what-to-do guidance;
-   *  `typebulb skill` prints the skill. */
+   *  target) ensures this project's mirror is up and prints what-to-do guidance. */
   agentTarget?: string
   /** Explicit `--port` only. Absent means the project block assigns a sticky slot
    *  (serve/portBlocks.ts) — there is no default port to fall back to. */
@@ -129,7 +128,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'skill', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -346,12 +345,10 @@ Usage:
   typebulb [file.bulb.md]        Run a bulb (defaults to .bulb.md in cwd)
   typebulb agent                 An agent's first command — auto-detects the calling
                                  harness, brings up the agent mirror without opening a
-                                 browser, prints its URL and the authoring-skill paths.
+                                 browser, prints its URL and the authoring-skill path.
                                  Always exits 0 (a status report).
   typebulb agent:{claude|pi}     Open a named harness's mirror in the foreground (a browser
                                  view of your coding agent's sessions) — explicit / override.
-  typebulb skill                 Print this README as an Agent Skill (stdout), for the
-                                 agent to read and copy into its own skills folder.
   typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints
                                  its return as JSON to stdout, logs/errors to
                                  stderr. Gated by trust like --server. Args after

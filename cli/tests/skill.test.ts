@@ -5,8 +5,8 @@ import { fileURLToPath } from 'url'
 import { buildSkill, skillFrontmatter, freshnessNote } from '../src/skill.js'
 
 /**
- * The skill is the entire package README with the discovery frontmatter wrapped on at emit time
- * (TB-Skill.md). There is no body split — the human-facing intro, the usage list, and the
+ * The skill is the entire package README with the discovery frontmatter wrapped on at build time
+ * — the shipped SKILL.md (TB-Skill.md). There is no body split — the human-facing intro, the usage list, and the
  * bulb-format example are all part of the emitted skill.
  */
 
@@ -25,7 +25,7 @@ describe('buildSkill', () => {
     const out = buildSkill('# x', '9.9.9')
     expect(out).toContain('version: 9.9.9')
     expect(out).toContain('Generated from typebulb v9.9.9')
-    expect(out).toContain('`npx typebulb skill`')   // the refresh instruction the stamp makes actionable
+    expect(out).toContain('re-copying the packaged SKILL.md')   // the refresh instruction the stamp makes actionable
   })
 
   it('emits the whole README — top half and bottom half', () => {

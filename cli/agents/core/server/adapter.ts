@@ -111,10 +111,10 @@ export abstract class AgentAdapter<E = unknown> {
   //    same src→adapter direction detectsSelf uses) ──
   /**
    * Install whatever CLI-side support this harness needs. The default is a no-op — Claude Code's
-   * case (`run_in_background` is native, and the skill stays emit-only per TB-Skill.md). Pi
+   * case (`run_in_background` is native, and the CLI never plants the skill per TB-Skill.md). Pi
    * overrides it: the background-`wait` shim extension (TB-Wait.md — pi has no background bash),
-   * and the bulb-authoring skill into pi's global skills dir (TB-Skill.md's scoped pi exception —
-   * a composer-driven session has no cold-start command to learn from). Runs on the CLI hot path,
+   * whose mirror-orientation block also points a composer-driven session — which has no cold-start
+   * command to learn from — at the packaged SKILL.md. Runs on the CLI hot path,
    * so an override MUST be idempotent, gated (write nothing if the harness isn't present), and
    * never throw.
    */

@@ -197,7 +197,9 @@ function lineRunId(line: string): number | undefined {
  * Slice a captured log to one run's output: the run's marker line plus everything up to the next
  * marker. `'latest'` is the highest-id run present. A log with no markers degrades gracefully — the
  * whole text for `'latest'`, '' for a specific id; a specific run trimmed out of the size-capped log
- * also returns '' (the caller notes it).
+ * also returns '' (the caller notes it). Slicing is positional, so a line the OLD run flushes late
+ * (an old page's last write landing after the new marker) is attributed to the new run — accepted;
+ * the write-side fixes are parked designs (TB-Log-Records-Parked.md).
  */
 export function sliceRunLog(text: string, run: number | 'latest'): string {
   const lines = text.split('\n')
