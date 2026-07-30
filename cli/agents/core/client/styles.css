@@ -229,25 +229,55 @@ body {
   border-radius: 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
-/* Owned scrollbars: no arrow buttons, transparent track, a floating thumb only when the surface
-   actually overflows. On the menu lists the channel is ALWAYS reserved (overflow-y: scroll on the
-   three lists); the diff doc joins them so its thumb track matches the overview ruler (.diff-ruler).
-   Native auto scrollbars made a row band's right inset depend on list length: a
+/* Menu-list scrollbars: the channel is ALWAYS reserved (overflow-y: scroll on all three lists) and
+   the scrollbar is owned — no arrow buttons, transparent track, a floating thumb only when the list
+   actually overflows. Native auto scrollbars made a row band's right inset depend on list length: a
    project with no bulbs of its own (one collapsed fold row) ran its band 15px nearer the popover
    edge than the filter box under it, and bare overflow:scroll parked a vestigial arrow-stub beside
    the short list. Width stays 15px, the native width .model-head's alignment padding hardcodes.
    Chromium pseudos on purpose: setting the standard scrollbar-color would disable them. */
-:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar { width: 15px; }
-:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-button { display: none; }
-:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-track { background: transparent; }
-:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-thumb {
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar { width: 15px; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-button { display: none; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-track { background: transparent; }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb {
   background-color: color-mix(in srgb, var(--fg) 28%, transparent);
   border-radius: 8px;
   /* Transparent border + padding-box clip floats a slim pill in the 15px channel. */
   border: 4px solid transparent;
   background-clip: padding-box;
 }
-:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 45%, transparent); }
+:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 45%, transparent); }
+
+/* The overview ruler (overviewRuler.ts): a scroll container's bar, replaced. .oruler-host is applied
+   by the widget at mount — never statically — so the native bar only disappears once its replacement
+   is painted. BOTH hiding routes: the standard property covers Gecko, the pseudo covers WebKit, and
+   Blink honours either, so no engine is left showing two scrollbars. Window and marks are % of a track
+   that spans the pane, so they share the container's content space. Marks are pointer-inert; the track
+   takes the press, the drag and the wheel. Colour and the track's inset are the host's (.diff-ruler).
+   Cursor stays the plain arrow — that's what a scrollbar shows, and `grab` would claim otherwise. */
+.oruler-host { scrollbar-width: none; }
+.oruler-host::-webkit-scrollbar { width: 0; height: 0; }
+.oruler { position: absolute; inset-block: 0; width: 6px; z-index: 5; cursor: default; touch-action: none; }
+.oruler-mark { position: absolute; left: 0; right: 0; min-height: 3px; border-radius: 1px; pointer-events: none; }
+/* Wider than the track and above the marks, so what's on screen reads as a thumb laid over the map. */
+.oruler-win {
+  position: absolute; left: -3px; right: -3px; z-index: 1; min-height: 6px; border-radius: 3px;
+  pointer-events: none; background: color-mix(in srgb, var(--fg) 28%, transparent);
+}
+/* The menu thumbs' own two steps (28/45) — same surface, same weights. Still a wash rather than a
+   solid fill: the marks it covers are the ones you're about to read. */
+.oruler:hover .oruler-win { background: color-mix(in srgb, var(--fg) 45%, transparent); }
+/* A finger needs a target a 6px track can't give; the map is worth more widened than dropped. */
+@media (pointer: coarse) {
+  .oruler { width: 14px; }
+  .oruler-win { left: -2px; right: -2px; }
+}
+/* Forced colours drop our tints — the window would vanish outright, and the marks' red/green IS the
+   information, so it keeps its own palette rather than collapsing to one system colour. */
+@media (forced-colors: active) {
+  .oruler-win { background: transparent; border: 1px solid Highlight; }
+  .oruler-mark { forced-color-adjust: none; }
+}
 /* Popover alignment — which edge of the pill the menu aligns to (floating-UI's start/center/end
    vocabulary; "end", right edges flush and growing left, is the unnamed default above). Tagged on
    the pill's WRAP, not each popover root: a menu with several drilled-in views (the model pill's
@@ -1082,11 +1112,17 @@ a.server-port:hover { text-decoration: underline; }
 .diff-doc { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none; }
 .diff-doc-body {
   flex: 1; min-height: 0; overflow: auto;
-  scrollbar-gutter: stable both-edges;
-  padding: .75rem 1.75rem 2.5rem;
+  /* No scrollbar-gutter: the native bar is hidden (.oruler-host), so the 15px it used to reserve on
+     each edge rides in the padding instead — same metrics, and the right one is the ruler's channel. */
+  padding: .75rem calc(1.75rem + 15px) 2.5rem;
   font: .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap; word-break: break-word;
 }
+/* The scroller is the focusable element (it owns the paging keys), but a ring round a full-bleed pane
+   is a box round the whole screen. Keyboard focus shows on the ruler's window instead — the thing the
+   paging keys actually move, and a real indicator rather than none at all. */
+.diff-doc-body:focus { outline: none; }
+.diff-doc-body:focus-visible ~ .diff-ruler .oruler-win { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 .diff-doc-empty, .diff-doc-trunc { color: var(--muted); padding: .4rem 0; }
 /* The wrong-cwd empty state (Root.#cwdHint): centered over the empty transcript. */
 .cwd-hint { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: .5rem; padding: 2rem; color: var(--muted); font-size: .9rem; max-width: 40rem; margin-inline: auto; }
@@ -1099,19 +1135,13 @@ a.server-port:hover { text-decoration: underline; }
    camouflage against red tint more than anything does against green. */
 .diff-doc-body .udiff-add { background: color-mix(in srgb, var(--diff-add) 15%, transparent); }
 .diff-doc-body .udiff-del { background: color-mix(in srgb, var(--err) 18%, transparent); }
-/* The overview ruler — VS Code's scrollbar change-marks, owned since the native scrollbar can't be
-   painted: a thin track beside the scrollbar (15px = the owned channel's width — plain px on a
-   desktop-only surface, the menus' own stance), red/green marks at each change run's fractional
-   position, min-height so a one-line change stays visible. It spans the pane edge to edge, which is
-   the thumb's track exactly once the arrow buttons are gone — that's why the doc's bar is owned.
-   What drift is left on a tall doc is Chromium clamping the thumb to a minimum height, shortening
-   its travel; a static ruler can't follow that. The wrapper keeps it overlaid rather than scrolling
-   with the body. Marks are pointer-inert so a click anywhere on the track jumps. */
+/* The ruler's diff clothing — red/green per change run; it rides in the channel the body's right
+   padding reserves, where the scrollbar it replaces used to be. Geometry, the window and the click
+   are the shared widget's. The wrapper keeps it overlaid rather than scrolling with the body. */
 .diff-doc-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.diff-ruler { position: absolute; inset-block: 0; right: 15px; width: 6px; cursor: pointer; z-index: 5; }
-.diff-ruler-mark { position: absolute; left: 0; right: 0; min-height: 3px; border-radius: 1px; pointer-events: none; }
-.diff-ruler-mark.add { background: var(--diff-add); opacity: .8; }
-.diff-ruler-mark.del { background: var(--err); opacity: .8; }
+.diff-ruler { right: 4px; }
+.diff-ruler .oruler-mark.add { background: var(--diff-add); opacity: .8; }
+.diff-ruler .oruler-mark.del { background: var(--err); opacity: .8; }
 /* messages */
 .messages {
   flex: 1;

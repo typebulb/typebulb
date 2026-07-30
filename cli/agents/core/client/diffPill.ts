@@ -2,6 +2,7 @@ import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
 import { searchFilter } from './ui.js'
+import { OverviewRuler, type RulerMark } from './overviewRuler.js'
 import { highlightToLines } from './markdown.js'
 
 // One changed file from gitChangedFiles; add/del ride from --numstat when known (absent ⇒ "new").
@@ -11,6 +12,9 @@ type DiffLine = { kind: DiffKind; text: string }
 
 // Above this, skip real highlighting (hljs on megabytes blocks the UI) — plaintext still escapes fast.
 const MAX_HIGHLIGHT_CHARS = 400_000
+// The scroll surface's id: the ruler, the jump and the measure all reach it by this, and it's the
+// aria-controls target, so it exists once rather than as a selector repeated at each site.
+const BODY_ID = 'diff-doc-body'
 
 // Full-context unified diff, parsed for display: headers dropped, hunk gaps kept as ⋯ rows (rare —
 // -U999999 usually yields one hunk), the ± re-drawn as the udiff gutter glyphs. "Binary file" covers
@@ -82,6 +86,12 @@ export class DiffPill extends ComboboxPill<never> {
   // One-shot: openDiff arms it, the next injection consumes it — jump to the first change on OPEN
   // only, never on a live-refresh re-inject (which would yank the reader mid-scroll).
   #jumpOnInject = false
+  #body = () => document.getElementById(BODY_ID) as HTMLDivElement | null
+  // The doc's scrollbar (see OverviewRuler — the native one is hidden) and the change marks it draws,
+  // measured off the injected DOM one frame after each injection.
+  #ruler = new OverviewRuler(this.#body)
+  #marks: RulerMark[] = []
+  #measuredVersion = -1
   protected keepOpenSelector = '.gitdiff-wrap'
   protected filterId = 'gitdiff-filter'
   protected listSelector = '.gitdiff-list'
@@ -122,6 +132,7 @@ export class DiffPill extends ComboboxPill<never> {
   // The one constructor of `viewing` (open and refresh alike): build the doc from an RPC result,
   // bump the injection key, repaint.
   #setDoc(path: string, status: string, r: { text: string; untracked?: boolean; truncated?: boolean }) {
+    if (this.viewing?.path !== path) this.#marks = []   // another file's marks would flash before the measure
     this.viewing = { path, status, text: r.text, truncated: !!r.truncated, ...buildDoc(r.text, !!r.untracked, path) }
     this.#docVersion++
     this.update()
@@ -149,6 +160,7 @@ export class DiffPill extends ComboboxPill<never> {
   }
 
   closeDoc() {
+    this.#ruler.release()        // the pane gets its native scrollbar back with the doc's teardown
     this.viewing = undefined
     this.update()
   }
@@ -241,64 +253,73 @@ export class DiffPill extends ComboboxPill<never> {
   // live in the statusbar pill (viewingPill). Esc returns to the conversation.
   docView() {
     const v = this.viewing!
-    return div({ class: 'diff-doc', tabIndex: 0,
-        onMounted: (el: Element) => (el as HTMLElement).focus(),
+    return div({ class: 'diff-doc',
         onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); this.closeDoc() } } },
       // A relative wrapper so the overview ruler overlays the pane instead of scrolling with it.
       div({ class: 'diff-doc-scroll' },
-        div({ class: 'diff-doc-body' },
+        // Focus rides on the SCROLLER, not the pane: key scrolling walks up from the focused element
+        // and never down, so PageUp/Down/Home/End reach nothing while focus sits on an ancestor. Esc
+        // still closes — keydown bubbles to the handler above.
+        div({ class: 'diff-doc-body', id: BODY_ID, tabIndex: 0,
+            onMounted: (el: Element) => (el as HTMLElement).focus(),
+            onScroll: () => this.#ruler.sync() },
           v.kinds.length === 0
             ? div({ class: 'diff-doc-empty' }, 'No changes.')
             // One innerHTML injection per content version (see #docVersion) — the highlighted lines
             // are hljs output + our own escaping, never raw transcript/file text.
             : div({ class: 'diff-doc-code', key: `diff-code-${this.#docVersion}`,
-                onMounted: (el: Element) => { el.innerHTML = v.bodyHtml; this.#jumpToFirstChange(el) } }, ''),
+                onMounted: (el: Element) => { el.innerHTML = v.bodyHtml; this.#jumpToFirstChange(el); this.#remeasure(el) } }, ''),
           v.truncated ? div({ class: 'diff-doc-trunc' }, 'Diff truncated — file too large to show in full.') : null,
         ),
-        v.kinds.length ? this.ruler(v.kinds) : null,
+        v.kinds.length
+          ? this.#ruler.view(this.#marks, {
+              class: 'diff-ruler', title: 'Jump to a change',
+              label: 'Diff scroll position', controls: BODY_ID,
+            })
+          : null,
       ),
     )
   }
 
   // Land the fresh doc on its first change (a third from the top — "start reading here"), the way
-  // VS Code opens a diff. Real offsetTop off the injected DOM, so wrapped lines can't skew it (unlike
-  // the ruler's line-index fractions); scrollTop clamps itself for a change near the file top.
+  // VS Code opens a diff. Real offsetTop off the injected DOM (the same read the ruler's marks take),
+  // so wrapped lines can't skew it; scrollTop clamps itself for a change near the file top.
   #jumpToFirstChange(el: Element) {
     if (!this.#jumpOnInject) return
     this.#jumpOnInject = false
     const mark = el.querySelector('.udiff-add, .udiff-del') as HTMLElement | null
-    const body = el.closest('.diff-doc-body')
+    const body = this.#body()
     if (mark && body) body.scrollTop = mark.offsetTop - body.clientHeight / 3
   }
 
-  // VS Code's overview ruler, minus the scrollbar dependency: a thin track hugging the pane's right
-  // edge, one mark per add/del run at its lines' fractional position — the "where are the changes"
-  // map that makes a long full-context diff scannable. Positions are line-index fractions (wrapped
-  // long lines skew them slightly — an approximation VS Code's ruler shares). Click jumps there.
-  ruler(kinds: DiffKind[]) {
-    const n = kinds.length
-    const runs: { kind: 'add' | 'del'; start: number; len: number }[] = []
-    kinds.forEach((k, i) => {
-      if (k !== 'add' && k !== 'del') return
-      const last = runs[runs.length - 1]
-      if (last && last.kind === k && last.start + last.len === i) last.len++
-      else runs.push({ kind: k, start: i, len: 1 })
-    })
-    return div({
-        class: 'diff-ruler',
-        title: 'Jump to a change',
-        onClick: (e: MouseEvent) => {
-          const body = document.querySelector('.diff-doc-body')
-          const track = e.currentTarget as HTMLElement
-          if (!body) return
-          const frac = (e.clientY - track.getBoundingClientRect().top) / track.clientHeight
-          body.scrollTop = frac * body.scrollHeight - body.clientHeight / 2
-        },
-      },
-      runs.map(r => div({
-        class: ['diff-ruler-mark', r.kind],
-        style: { top: `${(r.start / n) * 100}%`, height: `${(r.len / n) * 100}%` },
-      })),
-    )
+  // Marks can only be measured once the body is in the DOM, so the pass trails the injection by a
+  // frame. Once per doc version: the repaint it ends with is what renders the marks, and that repaint
+  // must not be able to loop back into another measure.
+  #remeasure(el: Element) {
+    if (this.#measuredVersion === this.#docVersion) return
+    this.#measuredVersion = this.#docVersion
+    requestAnimationFrame(() => { this.#measureMarks(el); this.update(); this.#ruler.sync() })
+  }
+
+  // The "where are the changes" map that makes a long full-context diff scannable: one mark per add/del
+  // run, in real pixels rather than line-index fractions — the body is pre-wrap, so every wrapped long
+  // line drags a fraction-placed mark further out of true. The injected children are 1:1 with `kinds`
+  // (one div per row), so a run costs two reads: its first row's top, its last row's bottom. offsetTop
+  // is relative to .diff-doc-scroll, whose origin is the body's — i.e. content space (#jumpToFirstChange
+  // leans on the same thing).
+  #measureMarks(el: Element) {
+    const v = this.viewing, body = this.#body()
+    if (!v || !body?.scrollHeight) return
+    const h = body.scrollHeight, marks: RulerMark[] = []
+    for (let i = 0; i < v.kinds.length; i++) {
+      const k = v.kinds[i]
+      if (k !== 'add' && k !== 'del') continue
+      let j = i
+      while (j + 1 < v.kinds.length && v.kinds[j + 1] === k) j++
+      const a = el.children[i] as HTMLElement | undefined, b = el.children[j] as HTMLElement | undefined
+      if (a && b) marks.push({ top: a.offsetTop / h, height: (b.offsetTop + b.offsetHeight - a.offsetTop) / h, class: k })
+      i = j
+    }
+    this.#marks = marks
   }
 }
