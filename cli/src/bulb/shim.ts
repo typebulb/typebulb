@@ -491,9 +491,20 @@ export const typebulbShim = `
     if (lines.length > MAX_LINES) { lines.length = MAX_LINES; lines.push('- … (truncated)'); }
     return { lines, targets };
   };
+  // The scrolling element's client box is the usable area minus scrollbars — the only basis on
+  // which "content ≤ viewport" is the same verdict the scrollbar's presence gives the user.
+  const pageGeometry = () => {
+    const de = document.scrollingElement || document.documentElement;
+    const over = [];
+    if (de.scrollHeight > de.clientHeight) over.push('vertically by ' + (de.scrollHeight - de.clientHeight) + 'px');
+    if (de.scrollWidth > de.clientWidth) over.push('horizontally by ' + (de.scrollWidth - de.clientWidth) + 'px');
+    return '- page: viewport ' + de.clientWidth + '×' + de.clientHeight
+      + ', content ' + de.scrollWidth + '×' + de.scrollHeight
+      + ' — ' + (over.length ? 'overflows ' + over.join(', ') : 'fits');
+  };
   const snapshot = () => {
     const { lines } = collectOutline();
-    return lines.length ? lines.join('\\n') : '(empty page)';
+    return pageGeometry() + '\\n' + (lines.length ? lines.join('\\n') : '(empty page)');
   };
 
   // tb:click / tb:set (TB-Interrogation-Actuation.md). A target is role + name exactly as the
@@ -565,6 +576,20 @@ export const typebulbShim = `
     }
     return postFrameSnapshot();
   };
+  // tb:rect — a read in the actuation grammar: the named control's viewport-relative rect plus the
+  // viewport itself, so the reply is self-interpreting. No scrollIntoView — a read disturbs nothing.
+  const readRect = (rest) => {
+    const t = parseActuation('tb:rect <role> "<name>"', rest);
+    if (t.rest) throw new Error('usage: tb:rect <role> "<name>"');
+    const el = resolveTarget(t.role, t.name);
+    const r = el.getBoundingClientRect();
+    const de = document.scrollingElement || document.documentElement;
+    return {
+      x: Math.round(r.x), y: Math.round(r.y),
+      width: Math.round(r.width), height: Math.round(r.height),
+      viewport: { width: de.clientWidth, height: de.clientHeight }
+    };
+  };
   const actSet = (rest) => {
     const t = parseActuation('tb:set <role> "<name>" = <value>', rest);
     const vm = /^=\\s*([\\s\\S]*)$/.exec(t.rest.trim());
@@ -621,7 +646,8 @@ ${reloadClientScript}
         if (p === 'tb:snapshot') return snapshot();
         if (p === 'tb:click' || p.indexOf('tb:click ') === 0) return actClick(p.slice(9));
         if (p === 'tb:set' || p.indexOf('tb:set ') === 0) return actSet(p.slice(7));
-        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:click, tb:set)');
+        if (p === 'tb:rect' || p.indexOf('tb:rect ') === 0) return readRect(p.slice(8));
+        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:rect, tb:click, tb:set)');
       };
       const value = parseMsg(env.payload);
       const calls = typeof env.payload === 'string' && env.payload.indexOf('tb:') === 0

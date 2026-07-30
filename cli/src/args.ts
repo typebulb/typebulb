@@ -376,11 +376,14 @@ Usage:
                                  With --wait, a handler's non-undefined return
                                  prints on stdout (JSON; a bare string raw).
                                  msg 'tb:snapshot' instead prints the page's
-                                 rendered outline (roles, names, visible text).
+                                 rendered outline (roles, names, visible text),
+                                 headed by a viewport/content fit line.
+                                 'tb:rect <role> "<name>"' prints that control's
+                                 rect ({x,y,width,height} + viewport).
                                  'tb:click <role> "<name>"' clicks the control
-                                 that outline names; 'tb:set … = <value>' fills
-                                 a form control. Both reply with a fresh
-                                 snapshot and need exactly one page open.
+                                 the outline names; 'tb:set … = <value>' fills
+                                 a form control. Both gestures reply with a
+                                 fresh snapshot and need exactly one page open.
   typebulb get <file> <kind>     Print one block's content to stdout (kind: code,
                                  css, html, data, infer, insight, config, notes).
                                  No content (absent or empty): exit 2;

@@ -190,6 +190,31 @@ describe('the outline names controls by their labels (live browser)', () => {
   })
 })
 
+describe('the snapshot geometry line (live browser)', () => {
+  it('heads the outline: viewport, content, and the overflow verdict', async () => {
+    const r = await sendCli(bulb, 'tb:snapshot')
+    expect(r.code).toBe(0)
+    // The fixture's 1600px spacer overflows any headless viewport.
+    expect(r.stdout.split('\n')[0]).toMatch(/^- page: viewport \d+×\d+, content \d+×\d+ — overflows vertically by \d+px/)
+  })
+
+  it('a page whose content fits says so', async () => {
+    const fitBulb = path.join(home, 'fit-probe.bulb.md')
+    fs.writeFileSync(fitBulb, wakeBulbSource)
+    const fitUrl = await launch(fitBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(fitUrl)
+      await page.waitForFunction(() => document.getElementById('app')?.textContent === 'hi')
+      const r = await sendCli(fitBulb, 'tb:snapshot')
+      expect(r.code).toBe(0)
+      expect(r.stdout.split('\n')[0]).toMatch(/^- page: viewport \d+×\d+, content \d+×\d+ — fits/)
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+})
+
 describe('tb:click (live browser)', () => {
   it('clicks the named button; the reply is the changed frame', async () => {
     const r = await sendCli(bulb, 'tb:click button "New Game"')
@@ -299,6 +324,27 @@ describe('tb:set (live browser)', () => {
     const r = await sendCli(bulb, 'tb:set textbox "nope" = 1')
     expect(r.code).not.toBe(0)
     expect(r.stderr).toContain('an aria-label would make them targetable')
+  })
+})
+
+describe('tb:rect (live browser)', () => {
+  it('replies with the control\'s rect and the viewport, and scrolls nothing', async () => {
+    const before = await tab.evaluate(() => window.scrollY)
+    const r = await sendCli(bulb, 'tb:rect button "Far Away"')
+    expect(r.code).toBe(0)
+    const rect = JSON.parse(r.stdout)
+    expect(rect.width).toBeGreaterThan(0)
+    expect(rect.height).toBeGreaterThan(0)
+    expect(rect.viewport.height).toBeGreaterThan(0)
+    expect(Number.isInteger(rect.x)).toBe(true)
+    expect(Number.isInteger(rect.y)).toBe(true)
+    expect(await tab.evaluate(() => window.scrollY)).toBe(before)
+  })
+
+  it('resolution speaks the actuation grammar', async () => {
+    const r = await sendCli(bulb, 'tb:rect button "Missing"')
+    expect(r.code).not.toBe(0)
+    expect(r.stderr).toContain('no button named "Missing"')
   })
 })
 
