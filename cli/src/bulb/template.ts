@@ -4,7 +4,7 @@
 
 import type { ImportMap } from 'typebulb/resolver'
 import { typebulbShim } from './shim.js'
-import { escapeHtml, escapeScript, baseResetStyle, themeHeadScript } from './pageChrome.js'
+import { escapeHtml, escapeScript, baseResetStyle, pageHeightStyle, themeHeadScript } from './pageChrome.js'
 
 export interface RenderOptions {
   name: string
@@ -47,7 +47,7 @@ export function renderHtml(options: RenderOptions): string {
   // height leaves dead space below in the bulb's own window. NOT for an embed: there
   // `body` must stay content-height so the auto-height protocol's `body.scrollHeight`
   // can shrink the frame to the content (a 100%-tall body would peg it to the frame).
-  const pageHeight = embedded ? '' : '\n    html, body { height: 100%; }'
+  const pageHeight = embedded ? '' : '\n' + pageHeightStyle
 
   // Route browser package fetches through the CLI's caching /proxy/ endpoint.
   // Relative URL means we don't need to know the port at template-render time.

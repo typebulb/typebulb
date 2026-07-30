@@ -19,28 +19,11 @@ export function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/** Base reset + the `data-theme` → `color-scheme` mapping every page emits. The
- *  theme engine sets `html[data-theme]`; this maps it to the UA color-scheme — the
- *  Theming invariant (Specs/Typebulb-CLI.md): `data-theme` and `color-scheme` must
- *  always travel together. Indented to sit inside a `<style>` block.
- *
- *  `body { display: flow-root }` makes body a block formatting context so a first/
- *  last child's vertical margin (author's, or a UA default like `<h1>`'s) can't
- *  collapse out through body — the embed auto-height reports `body.scrollHeight`
- *  (template.ts), and an escaped margin sizes the frame short → clipped content +
- *  premature scrollbar (TB-Agent-Mirror-Embed.md Invariant 3). Don't drop it.
- *
- *  `canvas { max-width: 100% }` keeps a canvas inside its container the way
- *  responsive `img` does: a canvas's backing store is `devicePixelRatio`-scaled, so
- *  code that sizes the buffer but not the CSS box (e.g. three's `setSize(w, h, false)`)
- *  otherwise lays the element out at buffer size — `dpr`× too wide — and overflows.
- *  Height already defaults to `auto`, so clamping width pulls height down the intrinsic
- *  ratio with it. Base-level, so a bulb that sets its own canvas size still wins. */
-export const baseResetStyle = `    *, *::before, *::after { box-sizing: border-box; }
-    canvas { max-width: 100%; }
-    body { margin: 0; display: flow-root; font-family: system-ui, -apple-system, sans-serif; }
-    html[data-theme="dark"]  { color-scheme: dark; }
-    html[data-theme="light"] { color-scheme: light; }`
+// The base reset + definite-height chain live in typebulb/format (pageShell.ts) — one
+// copy shared with typebulb.com's sandbox, so every tier ships the same shell and a
+// bulb can't render differently local vs published. Re-exported so the CLI's pages
+// keep importing their chrome from one place.
+export { baseResetStyle, pageHeightStyle } from 'typebulb/format'
 
 /**
  * The no-flash theme engine, injected into <head>. Sets `html[data-theme]` before
