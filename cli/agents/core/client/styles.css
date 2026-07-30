@@ -229,24 +229,25 @@ body {
   border-radius: 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
 }
-/* Menu-list scrollbars: the channel is ALWAYS reserved (overflow-y: scroll on all three lists) and
-   the scrollbar is owned — no arrow buttons, transparent track, a floating thumb only when the list
-   actually overflows. Native auto scrollbars made a row band's right inset depend on list length: a
+/* Owned scrollbars: no arrow buttons, transparent track, a floating thumb only when the surface
+   actually overflows. On the menu lists the channel is ALWAYS reserved (overflow-y: scroll on the
+   three lists); the diff doc joins them so its thumb track matches the overview ruler (.diff-ruler).
+   Native auto scrollbars made a row band's right inset depend on list length: a
    project with no bulbs of its own (one collapsed fold row) ran its band 15px nearer the popover
    edge than the filter box under it, and bare overflow:scroll parked a vestigial arrow-stub beside
    the short list. Width stays 15px, the native width .model-head's alignment padding hardcodes.
    Chromium pseudos on purpose: setting the standard scrollbar-color would disable them. */
-:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar { width: 15px; }
-:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-button { display: none; }
-:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-track { background: transparent; }
-:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb {
+:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar { width: 15px; }
+:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-button { display: none; }
+:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-track { background: transparent; }
+:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-thumb {
   background-color: color-mix(in srgb, var(--fg) 28%, transparent);
   border-radius: 8px;
   /* Transparent border + padding-box clip floats a slim pill in the 15px channel. */
   border: 4px solid transparent;
   background-clip: padding-box;
 }
-:is(.picker-list, .bulb-list, .gitdiff-list)::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 45%, transparent); }
+:is(.picker-list, .bulb-list, .gitdiff-list, .diff-doc-body)::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 45%, transparent); }
 /* Popover alignment — which edge of the pill the menu aligns to (floating-UI's start/center/end
    vocabulary; "end", right edges flush and growing left, is the unnamed default above). Tagged on
    the pill's WRAP, not each popover root: a menu with several drilled-in views (the model pill's
@@ -1099,12 +1100,15 @@ a.server-port:hover { text-decoration: underline; }
 .diff-doc-body .udiff-add { background: color-mix(in srgb, var(--diff-add) 15%, transparent); }
 .diff-doc-body .udiff-del { background: color-mix(in srgb, var(--err) 18%, transparent); }
 /* The overview ruler — VS Code's scrollbar change-marks, owned since the native scrollbar can't be
-   painted: a thin track beside the scrollbar (17px clears Windows Chromium's classic bar — plain px
-   on a desktop-only surface, the menus' own stance), red/green marks at each change run's fractional
-   position, min-height so a one-line change stays visible. The wrapper keeps it overlaid rather than
-   scrolling with the body. Marks are pointer-inert so a click anywhere on the track jumps. */
+   painted: a thin track beside the scrollbar (15px = the owned channel's width — plain px on a
+   desktop-only surface, the menus' own stance), red/green marks at each change run's fractional
+   position, min-height so a one-line change stays visible. It spans the pane edge to edge, which is
+   the thumb's track exactly once the arrow buttons are gone — that's why the doc's bar is owned.
+   What drift is left on a tall doc is Chromium clamping the thumb to a minimum height, shortening
+   its travel; a static ruler can't follow that. The wrapper keeps it overlaid rather than scrolling
+   with the body. Marks are pointer-inert so a click anywhere on the track jumps. */
 .diff-doc-scroll { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.diff-ruler { position: absolute; top: 2px; bottom: 2px; right: 17px; width: 6px; cursor: pointer; z-index: 5; }
+.diff-ruler { position: absolute; inset-block: 0; right: 15px; width: 6px; cursor: pointer; z-index: 5; }
 .diff-ruler-mark { position: absolute; left: 0; right: 0; min-height: 3px; border-radius: 1px; pointer-events: none; }
 .diff-ruler-mark.add { background: var(--diff-add); opacity: .8; }
 .diff-ruler-mark.del { background: var(--err); opacity: .8; }
