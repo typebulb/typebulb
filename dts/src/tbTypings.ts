@@ -55,6 +55,12 @@ type AiChunk =
   | { kind: "reasoning"; text: string };
 `
 
+/** What \`tb.aiAccess()\` answers. Named so bulbs can hold it in state without respelling the union. */
+const aiAccessType = `
+/** What backs \`tb.ai\`: the user's own keys, the quota-limited courtesy model, or nothing. */
+type AiAccess = "own" | "courtesy" | "none";
+`
+
 const ai = `
   /**
    * General-purpose AI call. \`tb.ai(opts)\` resolves with the full text; \`tb.ai.stream(opts)\`
@@ -100,12 +106,18 @@ const models = `
     default?: boolean;
   }>>;
   /**
-   * Whether the user's own AI keys back \`tb.ai\`. False means only the
-   * quota-limited courtesy model is available (or no AI at all) — a bulb
-   * making many AI calls should check this and show a "use your own keys"
-   * notice instead of running.
+   * What backs \`tb.ai\` right now:
+   *
+   * - \`'own'\` — the user's own API keys (or their own local model server)
+   * - \`'courtesy'\` — the quota-limited courtesy model, fine for a call or two
+   * - \`'none'\` — no AI at all (the CLI with no keys, an embedded bulb)
+   *
+   * A bulb making many AI calls should show a "use your own keys" notice
+   * instead of running unless this is \`'own'\`. Never derive it from
+   * \`tb.mode\` or the length of \`tb.models()\` — which hosts offer a courtesy
+   * model is the host's business and changes without your bulb changing.
    */
-  hasOwnKeys(): Promise<boolean>;`
+  aiAccess(): Promise<AiAccess>;`
 
 const theme = `
   /**
@@ -275,7 +287,7 @@ const clientServerProxy = `
   server: Record<string, (...args: any[]) => Promise<any> & AsyncIterable<any>>;`
 
 /** Typebulb globals available in browser-side code (code.tsx). */
-export const clientTbTypings = `${aiChunkType}
+export const clientTbTypings = `${aiChunkType}${aiAccessType}
 /**
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
@@ -295,7 +307,7 @@ const serverLog = `
  *  Only what carries a bulb-specific rule Node can't know — tb.ai, tb.fs, tb.dir (TB-FS.md);
  *  plus the tb.log uniformity exception (serverTb.ts). The browser-only helpers are intentionally
  *  absent. Must match serverTb.ts's runtime surface. */
-export const serverTbTypings = `${aiChunkType}
+export const serverTbTypings = `${aiChunkType}${aiAccessType}
 /**
  * Typebulb utilities namespace (server-side).
  * Type \`tb.\` to discover available helpers.

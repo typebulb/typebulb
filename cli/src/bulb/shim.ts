@@ -315,12 +315,13 @@ export const typebulbShim = `
       return resp.json();
     },
 
-    // Own-keys check - true when the user's own AI backs tb.ai (env keys, compat endpoint, or Ollama)
-    hasOwnKeys: async () => {
-      if (isEmbedded) return false;
-      const resp = await fetch('/__has-own-keys');
-      if (!resp.ok) return false;
-      return (await resp.json()) === true;
+    // AI-access check - 'own' when the user's own AI backs tb.ai (env keys, compat endpoint, or
+    // Ollama), else 'none': an embed has no host AI, and the CLI has no courtesy model
+    aiAccess: async () => {
+      if (isEmbedded) return 'none';
+      const resp = await fetch('/__ai-access');
+      if (!resp.ok) return 'none';
+      return await resp.json();
     },
 
     // Dump just logs to console in local mode

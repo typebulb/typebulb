@@ -18,7 +18,7 @@
 import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
 import { consumeStreamText, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
-import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
+import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { readFsBytes, writeFsFile } from './tbFs.js'
 
 interface TbAiOptions {
@@ -85,7 +85,7 @@ export function installServerTb(dir: string, containRoot = process.cwd()): void 
     // tb.fs already resolves relative paths against it. --batch scopes both (TB-Batch.md).
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
-    hasOwnKeys,
+    aiAccess,
     mode: 'local' as const,
   })
 }

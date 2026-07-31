@@ -5,7 +5,7 @@
  * fetch the same admin-curated catalog and keep only the models whose provider has an API key in
  * the environment, so an agent's terminal list and a bulb's runtime list never diverge.
  */
-import type { ProviderProtocol, TbModelDto } from 'typebulb/ai'
+import type { AiAccess, ProviderProtocol, TbModelDto } from 'typebulb/ai'
 
 /** Maps provider protocols to their env var key names. Partial: keyless providers (ollama,
  *  which runs locally) are absent, so they never appear in key-filtered catalog discovery. */
@@ -115,13 +115,14 @@ export function hasAnyProviderKey(): boolean {
   return Object.values(PROVIDER_ENV_KEYS).some(k => !!process.env[k])
 }
 
-/** Backs `tb.hasOwnKeys()` in the CLI: is tb.ai backed by the user's own AI? True on any provider
- *  key in the env, a configured openai-compat endpoint, or a reachable Ollama server — the keyless
- *  setups are still the user's own AI, which is what the flag asks. Only probes Ollama (cached)
- *  when nothing cheaper answers. */
-export async function hasOwnKeys(): Promise<boolean> {
-  if (hasAnyProviderKey() || !!process.env.TB_AI_BASE_URL) return true
-  return (await getOllamaModels()).length > 0
+/** Backs `tb.aiAccess()` in the CLI: what backs tb.ai here? `own` on any provider key in the env, a
+ *  configured openai-compat endpoint, or a reachable Ollama server — the keyless setups are still
+ *  the user's own AI, which is what the accessor asks. Otherwise `none`: the CLI has no courtesy
+ *  model, so keyless means no AI at all (TB-AI.md). Only probes Ollama (cached) when nothing
+ *  cheaper answers. */
+export async function aiAccess(): Promise<AiAccess> {
+  if (hasAnyProviderKey() || !!process.env.TB_AI_BASE_URL) return 'own'
+  return (await getOllamaModels()).length > 0 ? 'own' : 'none'
 }
 
 /** Render the filtered catalog as a terminal list: each model's exact id (what you pass as

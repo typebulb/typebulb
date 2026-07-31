@@ -14,7 +14,7 @@ import { parseConfig, splitIntoChunks, contentTypeFor, forbiddenAssetExt } from 
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { inferModalJs } from '../bulb/inferModalUi.js'
 import { recordDenial } from './serverRegistry.js'
-import { getFilteredModels, hasOwnKeys } from './modelCatalog.js'
+import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
@@ -526,12 +526,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   })
 
-  // Own-keys check — backs tb.hasOwnKeys(); false on failure, the safe gating answer
-  app.get('/__has-own-keys', async (c) => {
+  // AI-access check — backs tb.aiAccess(); 'none' on failure, the safe gating answer in the CLI
+  app.get('/__ai-access', async (c) => {
     try {
-      return c.json(await hasOwnKeys())
+      return c.json(await aiAccess())
     } catch {
-      return c.json(false, 200)
+      return c.json('none', 200)
     }
   })
 

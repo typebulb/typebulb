@@ -198,7 +198,7 @@ everywhere.
 | `tb.copy(text)` | Copy text to the clipboard | |
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
 | `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when embedded (no host AI) | |
-| `tb.hasOwnKeys()` | Whether the user's own AI keys back `tb.ai` — `false` means courtesy model only; always `false` embedded | |
+| `tb.aiAccess()` | What backs `tb.ai` — `'own' \| 'courtesy' \| 'none'` | |
 | `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
 | `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when embedded (no sender) | |
 | `tb.fs.read/readBytes/write` | Read and write local files | yes |
@@ -311,7 +311,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
 - **Native dropdowns.** Style `select, option { background: Canvas; color: CanvasText }` (system colors track the host's `color-scheme`) — a `transparent` `<select>` otherwise opens an unthemed popup, white-on-white in dark mode.
 - **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off. For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
-- **Gate AI-heavy bulbs on `tb.hasOwnKeys()`.** `false` means only the quota-limited courtesy model backs `tb.ai` (or, in the CLI, no keys at all) — fine for a call or two, but a bulb that makes many (an agent loop, a model-vs-model game) should render a "use your own keys" notice instead of the run controls.
+- **Gate AI-heavy bulbs on `tb.aiAccess()`** — `'own'` / `'courtesy'` / `'none'`, never re-derived from `tb.mode` or the model list (see [AI access](#ai-access)).
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
 - **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
@@ -373,7 +373,7 @@ Which must be declared in the dependencies section:
 
 Typebulb has a package resolver that will load and cache these packages from `esm.sh` when the bulb runs.
 
-## Custom AI Models
+## AI Models
 
 Three ways to use models from different providers in typebulb:
 
@@ -441,6 +441,21 @@ for await (const c of tb.ai.stream({ messages })) {
 ```
 
 Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-3` and a thinking-capable model**.
+
+### AI access
+
+`tb.aiAccess()` reports what backs `tb.ai`, typed as the ambient `AiAccess`.
+
+| Value | What it means | What a bulb does |
+|-------|---------------|------------------|
+| `'own'` | The user's own keys, or their own local model server | Run everything |
+| `'courtesy'` | typebulb.com's quota-limited courtesy model | Fine for a call or two; a bulb that makes many (an agent loop, a model-vs-model game) shows a "use your own keys" notice instead of the run controls |
+| `'none'` | No AI at all — the CLI with no keys, or an embedded bulb | Say so; don't leave dead controls on screen |
+
+```ts
+const [access, setAccess] = useState<AiAccess>("own");
+useEffect(() => { tb.aiAccess().then(setAccess); }, []);
+```
 
 ### Ollama & OpenAI-compatible endpoints
 

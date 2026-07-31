@@ -74,6 +74,11 @@ export type AiChunk =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
 
+/** What backs `tb.ai` for the current user: their own keys (`own`), the quota-limited courtesy
+ *  model (`courtesy`), or nothing at all (`none` — the CLI without keys, an embedded bulb). Which
+ *  hosts can answer which value is the host's business, not a bulb's; see runtime-specs/TB-AI.md. */
+export type AiAccess = 'own' | 'courtesy' | 'none'
+
 /** tb.models() response — model available to the current user */
 export interface TbModelDto {
   /** Provider protocol: "anthropic", "openai", "gemini", "openrouter" */
