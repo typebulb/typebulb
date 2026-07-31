@@ -16,6 +16,7 @@ import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 import { serversDir, isUnderProject, normalizeBulbPath } from './paths.js'
+import { VERSION } from '../version.js'
 
 export interface BulbServer {
   pid: number
@@ -48,6 +49,10 @@ export interface BulbServer {
    *  `findProjectViewer` matches on it, and the scoped list drops mirrors by it so a launcher never
    *  shows the mirror as a project bulb (TB-Agent-Mirror.md). Absent on ordinary bulbs. */
   agent?: string
+  /** The runtime version the server booted with, stamped by registerServer. Absence is the signal:
+   *  an entry with no version predates the stamp, so `logs` presumes it stale (TB-CLI.md, server
+   *  lifecycle & the reap). */
+  version?: string
 }
 
 /** Most-recent bytes of a server's console kept on disk (older output trimmed). */
@@ -232,7 +237,10 @@ export function isAlive(pid: number): boolean {
  */
 export async function registerServer(entry: BulbServer): Promise<void> {
   await mkdir(serversDir(), { recursive: true })
-  await writeFile(entryPath(entry.pid), JSON.stringify(entry))
+  // Stamp the registering process's own runtime version (an explicit entry.version wins — tests
+  // fabricate historical entries). The stamp happens HERE, not in each runner, so no launch path
+  // can register unversioned.
+  await writeFile(entryPath(entry.pid), JSON.stringify({ version: VERSION, ...entry }))
 }
 
 /**

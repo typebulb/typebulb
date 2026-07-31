@@ -1,7 +1,9 @@
 import * as path from 'path'
+import { valid as semverValid, lt as semverLt } from 'semver'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
 import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
+import { VERSION } from '../version.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
 // (the same one the launcher uses), so an agent can drive a bulb it launched detached: play it
@@ -43,10 +45,23 @@ export function findServer(servers: BulbServer[], arg: string, cwd?: string, cal
 /** A server's human name: its agent name for a mirror, the bulb filename otherwise. */
 const serverLabel = (s: BulbServer) => s.agent ?? path.basename(s.file)
 
+/** The staleness note for a server's runtime version (TB-CLI.md, server lifecycle & the reap): a
+ *  server older than this CLI serves capabilities the docs no longer describe, invisibly unless the
+ *  listing says so. No version ⇒ predates the stamp ⇒ presume stale. Current is silent. */
+function versionNote(v: string | undefined): string {
+  if (v === VERSION) return ''
+  if (!v) return '  STALE runtime (predates the version stamp — relaunch to update)'
+  const older = semverValid(v) && semverValid(VERSION) ? semverLt(v, VERSION) : true
+  return older
+    ? `  STALE runtime v${v} (this CLI is v${VERSION} — relaunch to update)`
+    : `  runtime v${v} (newer than this CLI's v${VERSION})`
+}
+
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
- *  each server's live tier and `--batch` scope so an agent sees both at a glance. */
+ *  each server's live tier, `--batch` scope, and any runtime-version skew so an agent sees all
+ *  three at a glance. */
 function printServerList(servers: BulbServer[], stream: (line: string) => void): void {
-  for (const s of servers) stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.batch ? `  --batch ${s.batch}` : ''}  ${s.file}`)
+  for (const s of servers) stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.batch ? `  --batch ${s.batch}` : ''}${versionNote(s.version)}  ${s.file}`)
 }
 
 /** No-arg form of `logs`/`stop`: list the running servers (or report none), then a per-command hint. */

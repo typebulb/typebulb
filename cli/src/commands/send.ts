@@ -1,6 +1,8 @@
 import * as path from 'path'
 import * as http from 'http'
+import { mkdir, writeFile } from 'fs/promises'
 import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
+import { canvasPngPath } from '../serve/paths.js'
 import { lastRunTimes } from '../serve/portBlocks.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
 
@@ -137,6 +139,23 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     process.exit(1)
   }
   if (results.length === 1) {
+    // tb:png's bytes ride the envelope; the file is the transport's business (TB-Interrogation-
+    // Pixels.md): decode to the bulb's one stable path, print that path — never megabytes of
+    // base64 on stdout.
+    if (message !== undefined && /^tb:png( |$)/.test(message)) {
+      let reply: { png?: unknown; width?: number; height?: number } = {}
+      try { reply = JSON.parse(results[0]) as typeof reply } catch { /* shape-checked below */ }
+      if (typeof reply.png !== 'string') {
+        console.error('tb:png replied with an unexpected shape — an older runtime? (`typebulb logs` lists server versions)')
+        process.exit(1)
+      }
+      const out = canvasPngPath(abs)
+      await mkdir(path.dirname(out), { recursive: true })
+      await writeFile(out, Buffer.from(reply.png, 'base64'))
+      console.error(`canvas ${reply.width}×${reply.height} → PNG`)
+      console.log(out)
+      return
+    }
     // A bare-string reply prints raw (a tb:snapshot outline stays readable); everything else as JSON.
     let decoded: unknown
     try { decoded = JSON.parse(results[0]) } catch { decoded = undefined }

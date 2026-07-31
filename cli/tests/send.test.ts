@@ -3,12 +3,13 @@ import { EventEmitter } from 'events'
 import * as net from 'net'
 import * as http from 'http'
 import * as path from 'path'
-import { mkdtemp } from 'fs/promises'
+import { mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
 import { parseArgs } from '../src/args.js'
 import { runSend } from '../src/commands/send.js'
 import { registerServer, unregisterServer } from '../src/serve/serverRegistry.js'
+import { canvasPngPath } from '../src/serve/paths.js'
 
 /**
  * `typebulb send` → `/__send` (TB-CLI.md). The endpoint re-emits the posted body on the
@@ -253,6 +254,34 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
     } finally { restore(); off(); await unregisterServer(process.ppid) }
     expect(out).toEqual([])
     expect(errs.join('\n')).toContain('no reply within')
+  })
+
+  // tb:png's bytes ride the envelope; the CLI owns the file (TB-Interrogation-Pixels.md): decoded
+  // to the bulb's ONE stable path under the typebulb home, the path — never base64 — on stdout.
+  it('tb:png decodes the reply to the bulb\'s stable path and prints that path', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    const off = page(() => ({ results: [JSON.stringify({ png: bytes.toString('base64'), width: 2, height: 1 })] }))
+    const { out, errs, restore } = capture()
+    try {
+      await runSend(file, 'tb:png')   // tb:* implies --wait
+    } finally { restore(); off(); await unregisterServer(process.ppid) }
+    const expected = canvasPngPath(file)
+    expect(out).toEqual([expected])
+    expect(Buffer.from(await readFile(expected))).toEqual(bytes)
+    expect(errs.join('\n')).toContain('canvas 2×1')
+  })
+
+  it('a tb:png reply without bytes is an error naming version skew, never a fallback print', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const off = page(() => ({ results: [JSON.stringify('oops')] }))
+    const { out, errs, restore } = capture()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
+    try {
+      await expect(runSend(file, 'tb:png')).rejects.toThrow('exit 1')
+    } finally { exit.mockRestore(); restore(); off(); await unregisterServer(process.ppid) }
+    expect(out).toEqual([])
+    expect(errs.join('\n')).toContain('unexpected shape')
   })
 })
 

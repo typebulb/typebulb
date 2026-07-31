@@ -5,6 +5,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, runMarker, sliceRunLog, type BulbServer } from '../src/serve/serverRegistry.js'
 import { resolvePort, assignedPortFor, findAvailablePort, lastRunTimes } from '../src/serve/portBlocks.js'
+import { VERSION } from '../src/version.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
 // reports ESRCH (dead) on every platform.
@@ -32,6 +33,16 @@ describe('serverRegistry', () => {
 
     // The dead entry's file is gone from disk (pruned), the live one remains.
     expect(await readdir(dir)).toEqual([`${process.pid}.json`])
+  })
+
+  // The stamp lives in registerServer so NO launch path can register unversioned; an explicit
+  // version survives, which is how a test fabricates a pre-stamp orphan (TB-CLI.md, lifecycle).
+  it('stamps the registering runtime version; an explicit version wins', async () => {
+    await registerServer({ pid: process.pid, port: 3000, url: 'u', file: '/a.bulb.md', startedAt: 1 })
+    await registerServer({ pid: process.ppid, port: 3001, url: 'u', file: '/b.bulb.md', startedAt: 2, version: '0.44.0' })
+    const live = await listBulbServers()
+    expect(live.find(s => s.pid === process.pid)?.version).toBe(VERSION)
+    expect(live.find(s => s.pid === process.ppid)?.version).toBe('0.44.0')
   })
 
   it('sorts live servers oldest-first', async () => {

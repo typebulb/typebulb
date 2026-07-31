@@ -45,6 +45,7 @@ const speed = $("speed") as HTMLInputElement
 let inputs = 0
 speed.addEventListener("input", () => { inputs++ })
 speed.addEventListener("change", () => { $("count").textContent = "speed:" + speed.value + ":" + inputs })
+$("rescan").addEventListener("click", () => { $("count").textContent = "rescan" })
 // React's value-tracker pattern, verbatim: an instance descriptor shadows the prototype's, so a
 // plain assignment records itself and the following input event reads as no-change. Only a write
 // through the NATIVE prototype setter leaves the tracker stale and the event observable.
@@ -85,6 +86,12 @@ tracked.addEventListener("input", () => {
 <label>mute <input id="mute" type="checkbox"></label>
 <input id="anon">
 <input id="ro" readonly aria-label="frozen" value="x">
+<header>
+  <button id="rescan" aria-label="Rescan">↻</button>
+  <span>AI badge</span>
+</header>
+<ul><li>Apple</li><li>Banana</li></ul>
+<p>Read the <a href="#">docs</a> now</p>
 <div style="height:9.6px"></div>
 <button id="frac" style="display:block;height:22.7px">Fractional</button>
 <div style="height:1600px"></div>
@@ -99,7 +106,6 @@ html { scroll-behavior: smooth }
 `
 
 // >400 outline lines, target beyond the cap: the cap bounds what's printed, not what's resolvable.
-// Rows are buttons, not list items — a list whose name equals its text collapses to one line.
 const deepBulbSource = `---
 format: typebulb/v1
 name: Deep Outline Probe
@@ -138,6 +144,27 @@ name: Wake Probe
 
 \`\`\`tsx
 document.getElementById("app")!.textContent = "hi"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<div id="app"></div>
+\`\`\`
+`
+
+/** A bulb whose code.tsx cannot be parsed. The server still serves a page — with broken code, so it
+ *  renders nothing — which is why the reserved reads must name the cause themselves. */
+const brokenBulbSource = `---
+format: typebulb/v1
+name: Broken Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const unclosed = (
+document.getElementById("app")!.textContent = "never runs"
 \`\`\`
 
 **index.html**
@@ -211,6 +238,28 @@ describe('the snapshot geometry line (live browser)', () => {
       const r = await sendCli(fitBulb, 'tb:snapshot')
       expect(r.code).toBe(0)
       expect(r.stdout.split('\n')[0]).toMatch(/^- page: viewport \d+×\d+, content \d+×\d+ — fits/)
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+})
+
+describe('a failed compile is stated, not implied (live browser)', () => {
+  it('every reserved read names it instead of describing the empty page', async () => {
+    const brokenBulb = path.join(home, 'broken-probe.bulb.md')
+    fs.writeFileSync(brokenBulb, brokenBulbSource)
+    const brokenUrl = await launch(brokenBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(brokenUrl)
+      await page.waitForFunction(() => (window as any).__TB_COMPILE_ERROR__ !== undefined)
+      // Without this the page answers truthfully and uselessly — '(empty page)', 'no canvas in the
+      // page' — which reads identically to a bulb that simply draws nothing.
+      for (const verb of ['tb:snapshot', 'tb:png']) {
+        const r = await sendCli(brokenBulb, verb)
+        expect(r.code).not.toBe(0)
+        expect(r.stderr + r.stdout).toContain('did not compile')
+      }
     } finally {
       await page.close()
     }
@@ -364,6 +413,40 @@ describe('tb:rect (live browser)', () => {
   })
 })
 
+describe('semantic containers descend — the collapse fix (live browser)', () => {
+  // The fixture's <header>/<ul>/<p> are the field case (TB-Interrogation-Actuation.md, found
+  // defect): every one has an implicit role and a content-derived name, so before the fix each
+  // swallowed its subtree as one line and nothing inside was targetable.
+  it('a header goes bare and its aria-labelled control is outlined', async () => {
+    const r = await sendCli(bulb, 'tb:snapshot')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toMatch(/^\s*- banner$/m)              // bare: its subtree speaks for itself
+    expect(r.stdout).toMatch(/^\s*- button "Rescan"$/m)
+    expect(r.stdout).toMatch(/^\s*- text: AI badge$/m)      // interleaved text survives the descent
+  })
+
+  it('a leaf container keeps the readable one-line form; its parent list goes bare', async () => {
+    const r = await sendCli(bulb, 'tb:snapshot')
+    expect(r.stdout).toMatch(/^\s*- listitem "Apple"$/m)
+    expect(r.stdout).not.toContain('- text: Apple')          // collapsed, not doubled as a text line
+    expect(r.stdout).toMatch(/^\s*- list$/m)
+  })
+
+  it('a paragraph with a link keeps its prose around the link line', async () => {
+    const r = await sendCli(bulb, 'tb:snapshot')
+    expect(r.stdout).toMatch(/^\s*- paragraph$/m)
+    expect(r.stdout).toMatch(/^\s*- link "docs"$/m)
+    expect(r.stdout).toMatch(/^\s*- text: Read the$/m)
+    expect(r.stdout).toMatch(/^\s*- text: now$/m)
+  })
+
+  it('a control inside a semantic container is clickable', async () => {
+    const r = await sendCli(bulb, 'tb:click button "Rescan"')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('- heading "rescan" [level=1]')
+  })
+})
+
 describe('the solo precondition (live browser)', () => {
   it('two connected pages refuse the gesture BEFORE it fires anywhere', async () => {
     const before = await tab.evaluate(() => document.getElementById('count')?.textContent)
@@ -380,6 +463,175 @@ describe('the solo precondition (live browser)', () => {
     // Pre-dispatch means neither page acted: the first tab's state is untouched.
     expect(await tab.evaluate(() => document.getElementById('count')?.textContent)).toBe(before)
   })
+})
+
+describe('tb:png (live browser)', () => {
+  // Sole visible canvas — the hidden scratch sibling must not force the naming form
+  // (TB-Interrogation-Pixels.md: resolution counts exactly what the walk sees).
+  const canvasBulbSource = `---
+format: typebulb/v1
+name: Canvas Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const c = document.getElementById("art") as HTMLCanvasElement
+c.width = 2; c.height = 2
+const g = c.getContext("2d")!
+g.fillStyle = "#ff0000"
+g.fillRect(0, 0, 2, 2)
+document.getElementById("s")!.textContent = "drawn"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<canvas id="art"></canvas>
+<canvas id="scratch" hidden></canvas>
+\`\`\`
+`
+
+  const twoCanvasBulbSource = `---
+format: typebulb/v1
+name: Layers Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const paint = (id: string, color: string) => {
+  const c = document.getElementById(id) as HTMLCanvasElement
+  c.width = 1; c.height = 1
+  const g = c.getContext("2d")!
+  g.fillStyle = color
+  g.fillRect(0, 0, 1, 1)
+}
+paint("base", "#ff0000")
+paint("overlay", "#0000ff")
+document.getElementById("s")!.textContent = "drawn"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<canvas id="base" aria-label="base"></canvas>
+<canvas id="overlay" aria-label="overlay"></canvas>
+\`\`\`
+`
+
+  // Same server, different host: localhost's page drawing 127.0.0.1's image taints the canvas
+  // without any network dependency — the cheapest real cross-origin draw a test can make.
+  const taintBulbSource = `---
+format: typebulb/v1
+name: Taint Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const img = new Image()
+img.onload = () => {
+  const c = document.getElementById("t") as HTMLCanvasElement
+  c.width = 1; c.height = 1
+  c.getContext("2d")!.drawImage(img, 0, 0)
+  document.getElementById("s")!.textContent = "tainted"
+}
+img.src = location.origin.replace("localhost", "127.0.0.1") + "/assets/dot.png"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<canvas id="t"></canvas>
+\`\`\`
+`
+
+  /** Decode a written PNG back through the browser and return its (0,0) RGBA. */
+  const pixelAt = (page: Page, pngPath: string) => {
+    const b64 = fs.readFileSync(pngPath).toString('base64')
+    return page.evaluate(async (data: string) => {
+      const img = new Image()
+      img.src = 'data:image/png;base64,' + data
+      await img.decode()
+      const c = document.createElement('canvas')
+      c.width = img.width; c.height = img.height
+      const g = c.getContext('2d')!
+      g.drawImage(img, 0, 0)
+      return Array.from(g.getImageData(0, 0, 1, 1).data)
+    }, b64)
+  }
+
+  it('reads the sole visible canvas back — known pixels, no name, no probe handler', async () => {
+    const canvasBulb = path.join(home, 'canvas-probe.bulb.md')
+    fs.writeFileSync(canvasBulb, canvasBulbSource)
+    const canvasUrl = await launch(canvasBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(canvasUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      const r = await sendCli(canvasBulb, 'tb:png')
+      expect(r.code).toBe(0)
+      const out = r.stdout.trim()
+      expect(out.endsWith('.png')).toBe(true)
+      expect(await pixelAt(page, out)).toEqual([255, 0, 0, 255])
+      expect(r.stderr).toContain('canvas 2×2')
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  it('no canvas in the page is an error saying so', async () => {
+    const r = await sendCli(bulb, 'tb:png')
+    expect(r.code).not.toBe(0)
+    expect(r.stderr).toContain('no canvas in the page')
+  })
+
+  it('two canvases are an ambiguity error listing names; a name resolves', async () => {
+    const layersBulb = path.join(home, 'layers-probe.bulb.md')
+    fs.writeFileSync(layersBulb, twoCanvasBulbSource)
+    const layersUrl = await launch(layersBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(layersUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      const bare = await sendCli(layersBulb, 'tb:png')
+      expect(bare.code).not.toBe(0)
+      expect(bare.stderr).toContain('2 canvases here')
+      expect(bare.stderr).toContain('"base"')
+      expect(bare.stderr).toContain('"overlay"')
+      const named = await sendCli(layersBulb, 'tb:png "overlay"')
+      expect(named.code).toBe(0)
+      expect(await pixelAt(page, named.stdout.trim())).toEqual([0, 0, 255, 255])
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  it('a tainted canvas is a finding naming the cause, never empty output', async () => {
+    const taintBulb = path.join(home, 'taint-probe.bulb.md')
+    fs.writeFileSync(taintBulb, taintBulbSource)
+    // A real 1×1 PNG in the bulb's assets/, fetched via 127.0.0.1 so the draw is cross-origin.
+    const assetsDir = path.join(home, 'taint-probe', 'assets')
+    fs.mkdirSync(assetsDir, { recursive: true })
+    fs.writeFileSync(path.join(assetsDir, 'dot.png'),
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+    const taintUrl = await launch(taintBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(taintUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'tainted')
+      const r = await sendCli(taintBulb, 'tb:png')
+      expect(r.code).not.toBe(0)
+      expect(r.stderr).toContain('tainted by a cross-origin draw')
+      expect(r.stdout.trim()).toBe('')
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
 })
 
 describe('the page-connect wake (live browser)', () => {

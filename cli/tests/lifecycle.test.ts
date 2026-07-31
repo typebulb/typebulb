@@ -4,7 +4,8 @@ import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
 import { registerServer, type BulbServer } from '../src/serve/serverRegistry.js'
-import { runStopScope } from '../src/commands/lifecycle.js'
+import { runLogs, runStopScope } from '../src/commands/lifecycle.js'
+import { VERSION } from '../src/version.js'
 
 // `runStopScope` really SIGTERMs each matched pid, so the test registers pids that are safe to kill —
 // never `process.pid` (that would kill the runner). We spawn idle node children for real pids, then
@@ -134,5 +135,46 @@ describe('runStopScope — the batch reaps', () => {
     await runStopScope('global')
     expect(log).toHaveBeenCalledWith('No running bulb servers.')
     log.mockRestore()
+  })
+})
+
+describe('the server listing marks a stale runtime (TB-CLI.md, server lifecycle & the reap)', () => {
+  let dir: string
+  const here = process.cwd()
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'tb-stale-'))
+    process.env.TYPEBULB_SERVERS_DIR = dir
+  })
+
+  afterEach(async () => {
+    delete process.env.TYPEBULB_SERVERS_DIR
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  /** The no-arg `logs` listing, captured. Live pids only (the list prunes), so pid/ppid. */
+  const listing = async (): Promise<string> => {
+    const out: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)) })
+    await runLogs(undefined, { follow: false })
+    log.mockRestore()
+    return out.join('\n')
+  }
+
+  it('an unstamped entry presumes stale; a current one is silent', async () => {
+    // `version: undefined` defeats the register-time stamp — the fabricated pre-stamp orphan.
+    await registerServer({ pid: process.pid, port: 3000, url: 'u', file: path.join(here, 'current.bulb.md'), startedAt: 1 })
+    await registerServer({ pid: process.ppid, port: 3001, url: 'u', file: path.join(here, 'old.bulb.md'), startedAt: 2, version: undefined })
+    const text = await listing()
+    const lineOf = (stem: string) => text.split('\n').find(l => l.includes(`${stem}.bulb.md`)) ?? ''
+    expect(lineOf('old')).toContain('STALE runtime (predates the version stamp')
+    expect(lineOf('current')).not.toContain('STALE')
+  })
+
+  it('an older stamped version is marked with both versions', async () => {
+    await registerServer({ pid: process.pid, port: 3000, url: 'u', file: path.join(here, 'aged.bulb.md'), startedAt: 1, version: '0.0.0-alpha' })
+    const text = await listing()
+    expect(text).toContain('STALE runtime v0.0.0-alpha')
+    expect(text).toContain(`this CLI is v${VERSION}`)
   })
 })

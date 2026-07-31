@@ -42,12 +42,7 @@ import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
 import { runConsole } from './run/console.js'
 import { runCall } from './run/call.js'
-
-// Replaced at build time by esbuild's `define`. The `tsc --build` step (used
-// for typechecking only — esbuild owns the bundle) needs a fallback string,
-// so we declare and assign it; esbuild will overwrite the literal during bundling.
-declare const __TYPEBULB_VERSION__: string
-const VERSION: string = typeof __TYPEBULB_VERSION__ !== 'undefined' ? __TYPEBULB_VERSION__ : '0.0.0-dev'
+import { VERSION } from './version.js'
 
 // A reader that walked away is not a reason to stop serving: `typebulb x.bulb.md | head` killed
 // the server with an unhandled EPIPE the moment head exited — and only agents hit it, because only

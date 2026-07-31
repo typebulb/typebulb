@@ -5,6 +5,7 @@
  */
 
 import { realpathSync } from 'fs'
+import { createHash } from 'crypto'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 
@@ -22,6 +23,16 @@ export function typebulbHome(): string {
 /** The running-server registry dir (`~/.typebulb/servers`), overridable via `TYPEBULB_SERVERS_DIR`. */
 export function serversDir(): string {
   return process.env.TYPEBULB_SERVERS_DIR || join(typebulbHome(), 'servers')
+}
+
+/** Where `tb:png` lands a decoded canvas frame: ONE stable path per bulb under the CLI's own home,
+ *  overwritten on each read, so a probe leaves no growing residue and a before/after compare is the
+ *  caller copying the path it was just given (TB-Interrogation-Pixels.md). */
+export function canvasPngPath(file: string): string {
+  const key = normalizeBulbPath(file)
+  const hash = createHash('sha1').update(key).digest('hex').slice(0, 8)
+  const stem = key.slice(key.lastIndexOf('/') + 1).replace(/\.bulb\.md$/, '')
+  return join(typebulbHome(), 'canvas', `${stem}-${hash}.png`)
 }
 
 /**

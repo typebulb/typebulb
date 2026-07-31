@@ -401,7 +401,10 @@ export const typebulbShim = `
   // small implicit-role map; names come from aria-label, label association, placeholder, then
   // visible text — a form control's value is a stated facet ([value=…]), never its name, because a
   // value-derived name is a self-invalidating selector.
-  const IMPLICIT_ROLES = { BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', OPTION: 'option', IMG: 'img', NAV: 'navigation', MAIN: 'main', HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog', TABLE: 'table', TR: 'row', TH: 'columnheader', TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem', LABEL: 'label', P: 'paragraph', PROGRESS: 'progressbar', SUMMARY: 'button', FIGURE: 'figure', BLOCKQUOTE: 'blockquote', HR: 'separator' };
+  // CANVAS's 'img' is an invention, not an ARIA reading (canvas has no implicit role): it puts a
+  // canvas in the outline so tb:png's multi-canvas form resolves by the ordinary vocabulary
+  // (TB-Interrogation-Pixels.md). It collides with real <img> by design — ambiguity is reported.
+  const IMPLICIT_ROLES = { BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', OPTION: 'option', IMG: 'img', CANVAS: 'img', NAV: 'navigation', MAIN: 'main', HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog', TABLE: 'table', TR: 'row', TH: 'columnheader', TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem', LABEL: 'label', P: 'paragraph', PROGRESS: 'progressbar', SUMMARY: 'button', FIGURE: 'figure', BLOCKQUOTE: 'blockquote', HR: 'separator' };
   const INPUT_ROLES = { checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', button: 'button', submit: 'button', reset: 'button', hidden: '' };
   const FORM_TAGS = { INPUT: 1, TEXTAREA: 1, SELECT: 1 };
   const squash = (s) => (s || '').replace(/\\s+/g, ' ').trim();
@@ -460,13 +463,13 @@ export const typebulbShim = `
         const attr = (n) => squash(ch.getAttribute(n) || '');
         const text = squash(ch.textContent);
         const formControl = FORM_TAGS[tag] && role !== 'button';
-        let name;
+        let name, fromContent = false;
         const aria = attr('aria-label');
         if (aria) name = aria;
         else if (tag === 'IMG') name = attr('alt') || text;
         else if (formControl) name = labelName(ch) || attr('placeholder') || attr('title');
         else if (tag === 'INPUT') name = squash(ch.value) || text;   // a button-role input: value is its caption
-        else name = text;
+        else { name = text; fromContent = true; }
         const facets = [];
         if (role === 'heading') {
           const lv = attr('aria-level') || (/^H[1-6]$/.test(tag) ? tag.charAt(1) : '');
@@ -480,11 +483,22 @@ export const typebulbShim = `
         }
         if ((role === 'checkbox' || role === 'radio') && ch.checked) facets.push('checked');
         if (ch.disabled === true || attr('aria-disabled') === 'true') facets.push('disabled');
-        let line = role + (name ? ' "' + clip(name) + '"' : '');
-        for (const f of facets) line += ' [' + f + ']';
-        lines.push('  '.repeat(depth) + '- ' + line);
+        const facetStr = facets.map((f) => ' [' + f + ']').join('');
+        lines.push('  '.repeat(depth) + '- ' + role + (name ? ' "' + clip(name) + '"' : '') + facetStr);
         targets.push({ el: ch, role, name: name || '' });
-        if (!(name && name === text)) walk(ch, depth + 1, false);   // subtree ≡ name ⇒ the one line says it all
+        if (fromContent && name) {
+          // A content-derived name IS the subtree's text, so the form is decided AFTER descending
+          // (TB-Interrogation-Actuation.md, container fix): a subtree with no lines of its own
+          // collapses into the named line ('listitem "Apple"'); one with lines keeps them all, and
+          // the name — their duplicate — goes bare. An aria-label is never content-derived.
+          const lineMark = lines.length, targetMark = targets.length;
+          walk(ch, depth + 1, false);
+          if (targets.length === targetMark) lines.length = lineMark;
+          else {
+            lines[lineMark - 1] = '  '.repeat(depth) + '- ' + role + facetStr;
+            targets[targetMark - 1].name = '';
+          }
+        } else walk(ch, depth + 1, false);
       }
     };
     walk(document.body, 0, false);
@@ -621,6 +635,52 @@ export const typebulbShim = `
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return postFrameSnapshot();
   };
+  // tb:png (TB-Interrogation-Pixels.md): the page's canvas as PNG — bytes base64 in the reply
+  // envelope. The shim knows nothing about files; the CLI decodes, writes one under its own home,
+  // and prints the path. Resolution is a SUBSET of the outline's vocabulary: the sole visible
+  // canvas needs no name (an edit is the state loss the verb avoids); several resolve as the
+  // ordinary img role by name, rejecting a match that isn't a canvas.
+  const readPng = (rest) => {
+    const m = /^\\s*(?:"([^"]*)"|(\\S+))?\\s*$/.exec(rest);
+    if (!m) throw new Error('usage: tb:png ["<name>"]');
+    const name = m[1] !== undefined ? m[1] : m[2];
+    let el;
+    if (name === undefined) {
+      const canvases = collectOutline().targets.filter((t) => t.el.tagName === 'CANVAS');
+      if (!canvases.length) throw new Error('no canvas in the page (tb:png reads a canvas element back as PNG)');
+      if (canvases.length > 1) {
+        const named = canvases.filter((t) => t.name);
+        throw new Error(canvases.length + ' canvases here — name one: tb:png "<name>"'
+          + (named.length ? '; canvas names: ' + named.map((t) => '"' + t.name + '"').join(', ') : '')
+          + (named.length < canvases.length ? ' (' + (canvases.length - named.length) + ' unnamed — an aria-label would make them targetable)' : ''));
+      }
+      el = canvases[0].el;
+    } else {
+      el = resolveTarget('img', name);
+      if (el.tagName !== 'CANVAS') throw new Error('img "' + name + '" is <' + el.tagName.toLowerCase() + '>, not a canvas');
+    }
+    // toBlob throws from outside for a canvas that can't be read; name the cause — a tainted or
+    // transferred canvas must exit non-zero, never read as an empty success.
+    return new Promise((resolve, reject) => {
+      try {
+        el.toBlob((blob) => {
+          if (!blob) return reject(new Error('the canvas produced no pixels — is it 0×0?'));
+          const fr = new FileReader();
+          fr.onerror = () => reject(new Error('failed to read the encoded PNG'));
+          fr.onload = () => {
+            const s = String(fr.result);
+            resolve({ png: s.slice(s.indexOf(',') + 1), width: el.width, height: el.height });
+          };
+          fr.readAsDataURL(blob);
+        }, 'image/png');
+      } catch (err) {
+        const why = err && err.name === 'SecurityError' ? 'it is tainted by a cross-origin draw'
+          : err && err.name === 'InvalidStateError' ? 'its control was transferred to an OffscreenCanvas'
+          : String((err && err.message) || err);
+        reject(new Error('the canvas cannot be read: ' + why));
+      }
+    });
+  };
 
   // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
   // 'message' delivers \`typebulb send\` pushes to tb.onMessage. Connect for a CLI-served page (http
@@ -646,11 +706,17 @@ ${reloadClientScript}
       };
       const reservedCall = async () => {
         const p = env.payload;
+        // A failed compile still serves a page — with broken code, so it renders nothing. Every
+        // read below would then describe an empty room ('(empty page)', 'no canvas in the page'):
+        // true, useless, and indistinguishable from a bulb that simply draws nothing. The server
+        // knew the cause at compile time, so the page carries it and every reserved read states it.
+        if (window.__TB_COMPILE_ERROR__) throw new Error('the bulb did not compile, so the page is empty: ' + window.__TB_COMPILE_ERROR__);
         if (p === 'tb:snapshot') return snapshot();
         if (p === 'tb:click' || p.indexOf('tb:click ') === 0) return actClick(p.slice(9));
         if (p === 'tb:set' || p.indexOf('tb:set ') === 0) return actSet(p.slice(7));
         if (p === 'tb:rect' || p.indexOf('tb:rect ') === 0) return readRect(p.slice(8));
-        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:rect, tb:click, tb:set)');
+        if (p === 'tb:png' || p.indexOf('tb:png ') === 0) return readPng(p.slice(7));
+        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:rect, tb:png, tb:click, tb:set)');
       };
       const value = parseMsg(env.payload);
       const calls = typeof env.payload === 'string' && env.payload.indexOf('tb:') === 0

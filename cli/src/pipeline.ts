@@ -164,6 +164,9 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     watch,
     // The served script speaks this file's coordinates (TB-CLI.md, One coordinate space).
     source: { file: path.basename(bulbPath), codeLine: starts.get('code.tsx') ?? 1 },
+    // A failed compile still serves a page, so the page must carry the reason: it renders
+    // nothing, and every `tb:` read would otherwise report an empty room (TB-Interrogation.md).
+    compileError: compileResult.error ? String(compileResult.error) : undefined,
   })
 
   // Env is already loaded into process.env by the caller (index.ts runWeb/runConsole) from the

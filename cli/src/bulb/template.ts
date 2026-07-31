@@ -32,11 +32,15 @@ export interface RenderOptions {
    * first content line in that file. Local runs only: an embed has no file to point at.
    */
   source?: { file: string; codeLine: number }
+  /** The transpile error, when the last compile failed. A failed compile still serves a page —
+   *  with broken code, so it renders nothing — and the shim reports it on any `tb:` read, which
+   *  otherwise describes an empty room without naming what emptied it (TB-Interrogation.md). */
+  compileError?: string
 }
 
 /** Render a bulb to a complete HTML page */
 export function renderHtml(options: RenderOptions): string {
-  const { name, code, css, html, data, insight, importMap, theme, embedded, dir, source } = options
+  const { name, code, css, html, data, insight, importMap, theme, embedded, dir, source, compileError } = options
 
   // Default HTML if none provided
   const userHtml = html.trim() || '<div id="app"></div>'
@@ -76,6 +80,7 @@ ${userHtml}
 ${data.length > 0 ? `<script>window.__TB_DATA__ = ${escapeScript(JSON.stringify(data))};</script>` : ''}
 ${insight ? `<script>window.__TB_INSIGHT__ = ${escapeScript(JSON.stringify(insight))};</script>` : ''}
 ${dir ? `<script>window.__TB_DIR__ = ${escapeScript(JSON.stringify(dir))};</script>` : ''}
+${compileError ? `<script>window.__TB_COMPILE_ERROR__ = ${escapeScript(JSON.stringify(compileError))};</script>` : ''}
 
 <script>
 ${typebulbShim}
