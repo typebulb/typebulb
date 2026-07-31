@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { applyDeclaredRange, isInstalled } from '../src/serve/serverDeps.js'
+import { applyDeclaredRange, extractServerImports, isInstalled } from '../src/serve/serverDeps.js'
 
 /**
  * Guards the server-side install version logic. The bug it exists to catch: a
@@ -69,5 +69,26 @@ describe('isInstalled (version-aware)', () => {
   it('accepts any installed version for a bare spec', () => {
     install('lodash', '1.0.0')
     expect(isInstalled('lodash', cacheDir)).toBe(true)
+  })
+})
+
+/**
+ * Node builtins must never reach npm (TB-CLI.md): `fs` and `path` are squatted packages, so the
+ * bare spelling used to install stubs and print `Installing: fs, path` above the real error.
+ */
+describe('extractServerImports (builtins never install)', () => {
+  it('drops node builtins in both spellings, including a subpath', () => {
+    const code = [
+      `import * as fs from 'fs'`,
+      `import { join } from 'node:path'`,
+      `import { readFile } from 'fs/promises'`,
+      `import { z } from 'zod'`,
+    ].join('\n')
+    expect(extractServerImports(code)).toEqual(['zod'])
+  })
+
+  it('still collects a scoped package and reduces a subpath to its root', () => {
+    const code = `import { x } from '@scope/pkg/sub'\nimport 'three/examples/jsm/controls'`
+    expect(extractServerImports(code).sort()).toEqual(['@scope/pkg', 'three'])
   })
 })

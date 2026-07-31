@@ -75,6 +75,18 @@ export function referencedEnvKeys(serverSource: string): string[] {
 }
 
 /**
+ * Where the cascade resolved from, in one clause — the single statement of the cwd-only root rule
+ * (TB-Env.md "Roots: cwd only") for any message outside this module that has to explain a value
+ * that didn't load. `tb.ai`'s provider keys are the case that needs it: a bulb never names them in
+ * its own source, so `referencedEnvKeys` can't warn and the refusal itself has to carry the root.
+ * Owned here so a future root (the `--env-file` escape hatch TB-Env.md contemplates) changes this
+ * sentence rather than every caller that restated it.
+ */
+export function envRootClause(): string {
+  return `.env loads from ${process.cwd()} (the directory you ran from, not the bulb's)`
+}
+
+/**
  * Print the env provenance line and the three predictable warnings to stdout, keys only,
  * never values (TB-Env.md "Legibility"). This is the runtime half of the
  * design: it lets the docs stay one sentence by saying at launch what loaded, what a typo'd

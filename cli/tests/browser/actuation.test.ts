@@ -550,6 +550,103 @@ img.src = location.origin.replace("localhost", "127.0.0.1") + "/assets/dot.png"
 \`\`\`
 `
 
+  // An untouched transparent canvas over a known page background: the whole frame must come back
+  // as that background, not as transparent-reading-white (TB-Interrogation-Pixels.md, backdrop).
+  const backdropBulbSource = `---
+format: typebulb/v1
+name: Backdrop Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const c = document.getElementById("art") as HTMLCanvasElement
+c.width = 2; c.height = 2
+c.getContext("2d")!
+document.getElementById("s")!.textContent = "drawn"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<canvas id="art"></canvas>
+\`\`\`
+
+**styles.css**
+
+\`\`\`css
+body { background: #00ff00; }
+\`\`\`
+`
+
+  // The chart-library shape: the author owns the wrapper, the library owns the canvas. A second
+  // canvas forces the naming form, so the wrapper is the only way in.
+  const wrapperBulbSource = `---
+format: typebulb/v1
+name: Wrapper Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+const paint = (id: string, color: string) => {
+  const c = document.getElementById(id) as HTMLCanvasElement
+  c.width = 1; c.height = 1
+  const g = c.getContext("2d")!
+  g.fillStyle = color
+  g.fillRect(0, 0, 1, 1)
+}
+paint("inner", "#0000ff")
+paint("other", "#ff0000")
+document.getElementById("s")!.textContent = "drawn"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<div role="img" aria-label="chart"><canvas id="inner"></canvas><canvas id="scratch" hidden></canvas></div>
+<canvas id="other" aria-label="other"></canvas>
+<div aria-label="legend">no role, so no line</div>
+\`\`\`
+`
+
+  // The two layers the walk must get right: a canvas's OWN background (it paints behind the bitmap,
+  // so it is the nearest layer under the pixels), and a translucent ancestor (stopping there would
+  // paint a half-transparent backdrop and hand back a PNG that still composites on white).
+  const layerBulbSource = `---
+format: typebulb/v1
+name: Layer Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+for (const id of ["own", "veiled"]) {
+  const c = document.getElementById(id) as HTMLCanvasElement
+  c.width = 2; c.height = 2
+  c.getContext("2d")!
+}
+document.getElementById("s")!.textContent = "drawn"
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<h1 id="s">idle</h1>
+<canvas id="own" aria-label="own"></canvas>
+<div class="veil" role="img" aria-label="veiled"><canvas id="veiled"></canvas></div>
+\`\`\`
+
+**styles.css**
+
+\`\`\`css
+#own { background: #0000ff; }
+.veil { background: rgba(0, 255, 0, 0.5); }
+\`\`\`
+`
+
   /** Decode a written PNG back through the browser and return its (0,0) RGBA. */
   const pixelAt = (page: Page, pngPath: string) => {
     const b64 = fs.readFileSync(pngPath).toString('base64')
@@ -628,6 +725,83 @@ img.src = location.origin.replace("localhost", "127.0.0.1") + "/assets/dot.png"
       expect(r.code).not.toBe(0)
       expect(r.stderr).toContain('tainted by a cross-origin draw')
       expect(r.stdout.trim()).toBe('')
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  it('composites the page backdrop, so a transparent canvas is not a white frame', async () => {
+    const backdropBulb = path.join(home, 'backdrop-probe.bulb.md')
+    fs.writeFileSync(backdropBulb, backdropBulbSource)
+    const backdropUrl = await launch(backdropBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(backdropUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      const r = await sendCli(backdropBulb, 'tb:png')
+      expect(r.code).toBe(0)
+      expect(await pixelAt(page, r.stdout.trim())).toEqual([0, 255, 0, 255])
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  it('a named container resolves to the single canvas inside it', async () => {
+    const wrapperBulb = path.join(home, 'wrapper-probe.bulb.md')
+    fs.writeFileSync(wrapperBulb, wrapperBulbSource)
+    const wrapperUrl = await launch(wrapperBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(wrapperUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      const r = await sendCli(wrapperBulb, 'tb:png "chart"')
+      expect(r.code).toBe(0)
+      expect(await pixelAt(page, r.stdout.trim())).toEqual([0, 0, 255, 255])
+      // The descent is stated, not silent — and a hidden scratch sibling inside the wrapper must
+      // not force an ambiguity the sole-canvas form wouldn't (the counting rule follows the walk).
+      expect(r.stderr).toContain('inside "chart"')
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  // A label the author DID write, on an element with no role: the outline has no line for it, and
+  // the error must name that cause rather than list the names they didn't write.
+  it('names why a labelled element is untargetable instead of reporting an absence', async () => {
+    const wrapperBulb = path.join(home, 'wrapper-probe.bulb.md')
+    const wrapperUrl = await launch(wrapperBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(wrapperUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      const r = await sendCli(wrapperBulb, 'tb:png "legend"')
+      expect(r.code).not.toBe(0)
+      expect(r.stderr).toContain('has no role')
+      expect(r.stderr).toContain('role="img"')
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
+  it('composites the canvas own background, and never stops at a translucent layer', async () => {
+    const layerBulb = path.join(home, 'layer-probe.bulb.md')
+    fs.writeFileSync(layerBulb, layerBulbSource)
+    const layerUrl = await launch(layerBulb)
+    const page = await browser.newPage()
+    try {
+      await page.goto(layerUrl)
+      await page.waitForFunction(() => document.getElementById('s')?.textContent === 'drawn')
+      // `canvas { background }` paints behind the bitmap — the nearest layer, so the walk starts at
+      // the canvas itself, not its parent.
+      const own = await sendCli(layerBulb, 'tb:png "own"')
+      expect(own.code).toBe(0)
+      expect(await pixelAt(page, own.stdout.trim())).toEqual([0, 0, 255, 255])
+      // A half-transparent ancestor is a layer, not the bottom: whatever the composite ends up
+      // looking like, the ONE thing it must guarantee is a frame with no alpha left in it.
+      const veiled = await sendCli(layerBulb, 'tb:png "veiled"')
+      expect(veiled.code).toBe(0)
+      expect((await pixelAt(page, veiled.stdout.trim()))[3]).toBe(255)
+      expect(veiled.stderr).toContain('rgba(0, 255, 0, 0.5)')
     } finally {
       await page.close()
     }

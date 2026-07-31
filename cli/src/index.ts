@@ -163,7 +163,10 @@ async function main(): Promise<void> {
       console.error(`To open the ${args.file} agent mirror, run: npx typebulb agent:${args.file}`)
       process.exit(1)
     }
-    console.error(`File not found: ${bulbPath}`)
+    // A relative arg was composed against cwd, so say so: the composed path alone reads as a
+    // missing file when the actual mistake is the directory the command ran from.
+    console.error(`File not found: ${bulbPath}`
+      + (path.isAbsolute(args.file) ? '' : ` (resolved from cwd ${process.cwd()})`))
     process.exit(1)
   }
 

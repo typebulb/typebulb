@@ -272,6 +272,19 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
     expect(errs.join('\n')).toContain('canvas 2×1')
   })
 
+  // The frame can't show what the read assumed (TB-Interrogation-Pixels.md): the composited
+  // backdrop and a container descent are stated on the delivery line, and only when they happened.
+  it('states the backdrop it composited and the container it resolved through', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
+    const off = page(() => ({ results: [JSON.stringify({ png, width: 2, height: 1, backdrop: 'rgb(20, 20, 20)', via: 'chart' })] }))
+    const { errs, restore } = capture()
+    try {
+      await runSend(file, 'tb:png "chart"')
+    } finally { restore(); off(); await unregisterServer(process.ppid) }
+    expect(errs.join('\n')).toContain('canvas 2×1 → PNG (inside "chart"; backdrop rgb(20, 20, 20))')
+  })
+
   it('a tb:png reply without bytes is an error naming version skew, never a fallback print', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
     const off = page(() => ({ results: [JSON.stringify('oops')] }))

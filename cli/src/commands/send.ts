@@ -143,7 +143,7 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     // Pixels.md): decode to the bulb's one stable path, print that path — never megabytes of
     // base64 on stdout.
     if (message !== undefined && /^tb:png( |$)/.test(message)) {
-      let reply: { png?: unknown; width?: number; height?: number } = {}
+      let reply: { png?: unknown; width?: number; height?: number; backdrop?: string; via?: string } = {}
       try { reply = JSON.parse(results[0]) as typeof reply } catch { /* shape-checked below */ }
       if (typeof reply.png !== 'string') {
         console.error('tb:png replied with an unexpected shape — an older runtime? (`typebulb logs` lists server versions)')
@@ -152,7 +152,14 @@ export async function runSend(file: string, message: string | undefined, waitMs 
       const out = canvasPngPath(abs)
       await mkdir(path.dirname(out), { recursive: true })
       await writeFile(out, Buffer.from(reply.png, 'base64'))
-      console.error(`canvas ${reply.width}×${reply.height} → PNG`)
+      // The frame can't show what the read assumed, so the line does (TB-Interrogation-Pixels.md):
+      // the flat backdrop composited under a transparent canvas, and the container it resolved
+      // through. Both are stated only when they happened — silence means neither did.
+      const notes = [
+        reply.via ? `inside "${reply.via}"` : '',
+        reply.backdrop ? `backdrop ${reply.backdrop}` : '',
+      ].filter(Boolean)
+      console.error(`canvas ${reply.width}×${reply.height} → PNG${notes.length ? ` (${notes.join('; ')})` : ''}`)
       console.log(out)
       return
     }

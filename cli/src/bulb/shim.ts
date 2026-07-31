@@ -527,9 +527,35 @@ export const typebulbShim = `
   // several is a reported error, never a guess. Errors throw — the reply leg carries them to
   // stderr and a non-zero exit.
   const describeEl = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className ? '.' + el.className.split(/\\s+/)[0] : '');
+  // Why a name the author DID write isn't in the outline. Both causes are silent by construction:
+  // an element with no role is descended through transparently, and an unrendered one is skipped —
+  // so the label is on the page while the target is not, with nothing said. Same posture as the
+  // dead-control finding: name the cause rather than report an absence. Advisory only; it never
+  // decides resolution, so a wrong guess costs a clause, never a target.
+  // The recourse differs by family: naming a container for a READ is a role away, but telling an
+  // author to put role="button" on a <div> would coach the very onClick-div the actuation invariant
+  // keeps untargetable (TB-Interrogation-Actuation.md) — so an actuable role asks for a real control.
+  const ACTUABLE_ROLES = { button: 1, checkbox: 1, radio: 1, combobox: 1, textbox: 1, slider: 1, spinbutton: 1, searchbox: 1, option: 1 };
+  const labelledButUntargetable = (name, role) => {
+    const q = String(name).toLowerCase();
+    for (const el of document.querySelectorAll('[aria-label]')) {
+      const label = squash(el.getAttribute('aria-label'));
+      if (!label || label.toLowerCase().indexOf(q) === -1) continue;
+      const shown = '<' + el.tagName.toLowerCase() + ' aria-label="' + label + '">';
+      const actual = roleOf(el);
+      if (!actual) return ' — ' + shown + ' has no role, so the walk descends through it without a line; '
+        + (ACTUABLE_ROLES[role]
+          ? 'a ' + role + ' has to be a real control (<button>, <input>, <select>), never a labelled <div>'
+          : 'add role="' + role + '" to name it');
+      if (hiddenEl(el) || !el.getClientRects().length) return ' — ' + shown + ' is not rendered, so the walk skips it';
+      if (actual !== role) return ' — ' + shown + ' is a ' + actual + ', not a ' + role;
+    }
+    return '';
+  };
   const resolveTarget = (role, name) => {
     const ofRole = collectOutline().targets.filter((t) => t.role === role);
-    if (!ofRole.length) throw new Error('no ' + role + ' in the outline — run tb:snapshot for the vocabulary');
+    if (!ofRole.length) throw new Error('no ' + role + ' in the outline'
+      + (labelledButUntargetable(name, role) || ' — run tb:snapshot for the vocabulary'));
     const named = ofRole.filter((t) => t.name);
     const exact = named.filter((t) => t.name === name);
     const q = name.toLowerCase();
@@ -539,7 +565,8 @@ export const typebulbShim = `
       const unnamed = ofRole.length - named.length;
       throw new Error('no ' + role + ' named "' + name + '"'
         + (named.length ? ' — ' + role + ' names here: ' + named.slice(0, 8).map((t) => '"' + t.name + '"').join(', ') : '')
-        + (unnamed ? ' (' + unnamed + ' unnamed — an aria-label would make them targetable)' : ''));
+        + (unnamed ? ' (' + unnamed + ' unnamed — an aria-label would make them targetable)' : '')
+        + labelledButUntargetable(name, role));
     }
     throw new Error(hits.length + ' ' + role + 's match "' + name + '" (' + hits.map((t) => '"' + t.name + '"').join(', ') + ') — name one exactly');
   };
@@ -636,16 +663,74 @@ export const typebulbShim = `
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return postFrameSnapshot();
   };
+  // getComputedStyle serializes an ordinary color as rgb()/rgba(), so the 4th comma-part is the
+  // alpha. Anything else — oklch(… / .5), color(srgb …) — is VISIBLE BUT NOT KNOWN OPAQUE (-1), the
+  // safe direction: the walk keeps going and an opaque base still lands underneath, because the one
+  // thing the composite must guarantee is a PNG with no alpha left in it to composite on white.
+  const colorAlpha = (c) => {
+    if (!c || c.indexOf('(') === -1) return 0;
+    const parts = c.slice(c.indexOf('(') + 1, c.lastIndexOf(')')).split(',');
+    if (parts.length === 3) return 1;
+    if (parts.length !== 4) return -1;
+    const a = parseFloat(parts[3]);
+    return a === a ? a : -1;
+  };
+  // The UA's own page color, read from a Canvas system-color probe rather than hardcoded per
+  // theme: html/body compute to rgba(0,0,0,0) in exactly the dark case that matters, so only the
+  // system color knows what the user is actually looking at.
+  const uaPageColor = () => {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;background-color:Canvas';
+    document.body.appendChild(probe);
+    try { return getComputedStyle(probe).backgroundColor; }
+    finally { probe.parentNode.removeChild(probe); }
+  };
+  // The fills behind a canvas, bottom-up. Starts at the canvas ITSELF — a canvas's own background
+  // paints behind its bitmap and is the nearest layer under the pixels — and stops at the first
+  // opaque one, since nothing behind that shows. Translucent layers in between are collected rather
+  // than treated as the bottom: stopping at a half-transparent panel would paint a half-transparent
+  // backdrop and hand back a PNG that still composites on white, which is the bug this exists to
+  // close. Only when no layer is known-opaque does the UA page color go underneath — so a page that
+  // styles its own background never pays for the probe.
+  const backdropOf = (el) => {
+    const stack = [];
+    for (let n = el; n; n = n.parentElement) {
+      const c = getComputedStyle(n).backgroundColor;
+      const a = colorAlpha(c);
+      if (a === 0) continue;            // fully transparent: not a layer at all
+      stack.unshift(c);                 // farther layers paint first
+      if (a >= 1) return stack;
+    }
+    const page = uaPageColor();
+    if (colorAlpha(page) >= 1) stack.unshift(page);
+    return stack;
+  };
+  // The canvas as the user sees it: its backdrop painted first, then its own pixels. A chart
+  // library's canvas is transparent, and a bare backing store opens as a WHITE frame in any
+  // viewer — so the dark-theme render that most needs checking is the one that reads as blank
+  // (TB-Interrogation-Pixels.md). A 0-size source would throw from drawImage, so callers guard it.
+  // The fills are returned, never only applied: they APPROXIMATE the page (flat colors, no gradient
+  // or image), so the reply has to be able to state what it assumed.
+  const compositeOnBackdrop = (el) => {
+    const shot = document.createElement('canvas');
+    shot.width = el.width; shot.height = el.height;
+    const g = shot.getContext('2d');
+    const fills = backdropOf(el);
+    for (const fill of fills) { g.fillStyle = fill; g.fillRect(0, 0, shot.width, shot.height); }
+    g.drawImage(el, 0, 0);
+    return { shot: shot, backdrop: fills.join(' + ') };
+  };
   // tb:png (TB-Interrogation-Pixels.md): the page's canvas as PNG — bytes base64 in the reply
   // envelope. The shim knows nothing about files; the CLI decodes, writes one under its own home,
   // and prints the path. Resolution is a SUBSET of the outline's vocabulary: the sole visible
   // canvas needs no name (an edit is the state loss the verb avoids); several resolve as the
-  // ordinary img role by name, rejecting a match that isn't a canvas.
+  // ordinary img role by name, descending from a named container to the one canvas it holds.
   const readPng = (rest) => {
     const m = /^\\s*(?:"([^"]*)"|(\\S+))?\\s*$/.exec(rest);
     if (!m) throw new Error('usage: tb:png ["<name>"]');
     const name = m[1] !== undefined ? m[1] : m[2];
     let el;
+    let via = '';
     if (name === undefined) {
       const canvases = collectOutline().targets.filter((t) => t.el.tagName === 'CANVAS');
       if (!canvases.length) throw new Error('no canvas in the page (tb:png reads a canvas element back as PNG)');
@@ -658,19 +743,36 @@ export const typebulbShim = `
       el = canvases[0].el;
     } else {
       el = resolveTarget('img', name);
-      if (el.tagName !== 'CANVAS') throw new Error('img "' + name + '" is <' + el.tagName.toLowerCase() + '>, not a canvas');
+      if (el.tagName !== 'CANVAS') {
+        // A charting library creates its own canvas, so the wrapper is the only element an author
+        // can name at authoring time: descend from a named container to its single canvas. Counted
+        // over the WALK, never querySelectorAll — a hidden scratch canvas must not force an
+        // ambiguity the sole-canvas form wouldn't (TB-Interrogation-Pixels.md: the counting rule
+        // and the outline must agree, or the verb contradicts itself).
+        const inner = collectOutline().targets.filter((t) => t.el.tagName === 'CANVAS' && el.contains(t.el));
+        if (inner.length !== 1) throw new Error(inner.length
+          ? '"' + name + '" holds ' + inner.length + ' visible canvases — name one of them directly'
+          : 'img "' + name + '" is <' + el.tagName.toLowerCase() + '>, not a canvas');
+        via = name;
+        el = inner[0].el;
+      }
     }
     // toBlob throws from outside for a canvas that can't be read; name the cause — a tainted or
-    // transferred canvas must exit non-zero, never read as an empty success.
+    // transferred canvas must exit non-zero, never read as an empty success. (A tainted source
+    // taints the composite instead of throwing at drawImage, so the same throw still lands here.)
     return new Promise((resolve, reject) => {
       try {
-        el.toBlob((blob) => {
-          if (!blob) return reject(new Error('the canvas produced no pixels — is it 0×0?'));
+        if (!el.width || !el.height) return reject(new Error('the canvas produced no pixels — is it 0×0?'));
+        const composite = compositeOnBackdrop(el);
+        composite.shot.toBlob((blob) => {
+          if (!blob) return reject(new Error('the canvas did not encode to a PNG'));
           const fr = new FileReader();
           fr.onerror = () => reject(new Error('failed to read the encoded PNG'));
           fr.onload = () => {
             const s = String(fr.result);
-            resolve({ png: s.slice(s.indexOf(',') + 1), width: el.width, height: el.height });
+            // backdrop/via ride the reply so the CLI's delivery line can state what the read
+            // assumed and what it resolved through — an assumption the frame itself can't show.
+            resolve({ png: s.slice(s.indexOf(',') + 1), width: el.width, height: el.height, backdrop: composite.backdrop, via: via });
           };
           fr.readAsDataURL(blob);
         }, 'image/png');

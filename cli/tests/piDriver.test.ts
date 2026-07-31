@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises'
-import { realpathSync, unwatchFile } from 'fs'
+import { readFileSync, realpathSync, unwatchFile } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, dirname } from 'path'
 import type { ChildProcess } from 'child_process'
@@ -776,10 +776,19 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     expect(src).toContain('process.env.TYPEBULB_MIRROR !== "1"')
     expect(src).toContain('before_agent_start')
     // The hard-won wording (commands/agent.ts) — drift here means the two blocks paraphrased apart.
-    expect(src).toContain('Reusable app/tool → write a .bulb.md')
-    expect(src).toContain('Show something inline → embed a bulb')
-    expect(src).toContain('typebulb wait agent --match "[embed <name>"')
-    expect(src).toContain('Read the authoring skill before writing a bulb:')
+    // Asserted against agent.ts's own SOURCE, not a third copy living in this test: a literal here
+    // would keep passing while agent.ts moved out from under both, which is the drift it guards.
+    const agentSrc = readFileSync(new URL('../src/commands/agent.ts', import.meta.url), 'utf-8')
+    for (const wording of [
+      'Reusable app/tool → write a ',            // trailed by lit('.bulb.md') in agent.ts
+      'Show something inline → embed a bulb',
+      'arm a wait for its render verdict — run it plainly:',
+      'typebulb wait agent --match "[embed <name>"',
+      'Read the authoring skill before writing a bulb:',
+    ]) {
+      expect(agentSrc, `agent.ts no longer says: ${wording}`).toContain(wording)
+      expect(src, `the pi block no longer says: ${wording}`).toContain(wording)
+    }
   })
 
   it('suppresses the wake on a clean embed-ok verdict — silence is the ok; errors still wake', () => {

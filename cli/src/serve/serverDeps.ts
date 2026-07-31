@@ -17,10 +17,14 @@ import * as path from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { builtinModules } from 'node:module'
 import { satisfies } from 'semver'
 import { PackageRef } from 'typebulb/resolver'
 
 const execFileAsync = promisify(execFile)
+
+/** Node's builtins. Membership is tested against a specifier's ROOT, so `fs/promises` matches `fs`. */
+const NODE_BUILTINS = new Set(builtinModules)
 
 /**
  * Ensure each spec is installed under `<bulbCacheDir>/node_modules/`.
@@ -103,9 +107,11 @@ export function isInstalled(spec: string, bulbCacheDir: string): boolean {
 /**
  * Extract bare package names from ESM import statements in server source.
  * Used by both run mode (to npm-install before importing) and check mode
- * (to install before tsc resolves modules). Built-ins (`node:fs`, `node:crypto`)
- * are skipped; bare node built-ins (`fs`, `crypto`) fall through but ensureBulbServerPackages
- * is idempotent and Node's resolver prefers the built-in.
+ * (to install before tsc resolves modules). Node builtins are skipped in BOTH spellings —
+ * `node:fs` by the scheme test below, bare `fs` by the builtin set (TB-CLI.md): `fs` and `path`
+ * are squatted npm packages, so letting the bare form through installed stubs and printed
+ * `Installing: fs, path` above the error the caller was actually reading. Dropping them can't
+ * lose a real dependency — Node resolves a builtin ahead of any same-named package.
  */
 export function extractServerImports(code: string): string[] {
   const packages = new Set<string>()
@@ -117,7 +123,8 @@ export function extractServerImports(code: string): string[] {
     // specifiers (e.g. a --replace override rewritten to a local file:// path). An npm
     // package name never contains ':', so this can't drop a real dependency.
     if (specifier.includes(':')) continue
-    packages.add(PackageRef.rootOf(specifier))
+    const root = PackageRef.rootOf(specifier)
+    if (!NODE_BUILTINS.has(root)) packages.add(root)
   }
   return [...packages]
 }

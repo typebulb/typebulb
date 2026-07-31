@@ -8,6 +8,7 @@
 
 import type { ChatMessageDto, EffortLevel, ProviderProtocol, ResolvedAIProvider } from 'typebulb/ai'
 import { sendAIRequest, getProvider } from 'typebulb/ai'
+import { envRootClause } from '../env.js'
 import { PROVIDER_ENV_KEYS, normalizeOllamaHost } from './modelCatalog.js'
 
 /**
@@ -48,7 +49,12 @@ export function resolveLocalProvider(reqProvider?: string, reqModel?: string): R
   const envKey = PROVIDER_ENV_KEYS[protocol]
   if (!envKey) return `Unknown provider '${protocol}'.`
   const apiKey = process.env[envKey]
-  if (!apiKey) return `No API key for '${protocol}'. Set ${envKey} in your .env file.`
+  // Name the directory, not just the key: a bulb calling tb.ai never references the key in its own
+  // source, so reportEnv's missing-key warning can't fire and this message is the ONLY place the
+  // run-from-the-wrong-directory case surfaces. "Set ANTHROPIC_API_KEY in your .env" reads as "you
+  // have no key" when the truth is usually "your key is in a .env one level up". The root rule
+  // itself is env.ts's to state (TB-Env.md), never restated here.
+  if (!apiKey) return `No API key for '${protocol}'. Set ${envKey} — ${envRootClause()}.`
 
   return { apiKey, baseUrl: spec.defaultBaseUrl, protocol, model, isFreeModel: false }
 }

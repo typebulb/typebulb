@@ -96,7 +96,7 @@ async function launchAndReport(version: string, name: string): Promise<void> {
           : `      background a wait for its render verdict:`,
         `      • ${lit('typebulb wait agent --match "[embed <name>"')}`,
         ...skill,
-        `    End your reply with the mirror link above`,
+        `    End this reply with the mirror link above`,
         `      • easy to miss the link mid-message`,
       ]
     : [
