@@ -3,6 +3,7 @@ import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { pathKey, basename, bulbBasename, parseBulbUrlText, relTime } from './util.js'
+import { sortByKeys } from '../order.js'
 import type { RunningServer, BulbFile, BulbRow, BulbHit, RemoteBulb } from './types.js'
 
 // Launch/stop icons through icons.ts (material play/stop, filled): svgs centre reliably where
@@ -215,7 +216,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   }
 
   // Display order is newest-at-bottom, so just-edited and just-launched both sit adjacent to the
-  // filter input at the anchored edge. The default filter matches name + path; full-text mode keeps
+  // filter input at the anchored edge. Ordered on two keys: a live server outranks recency outright,
+  // so the rows you can stop or open never drift up out of reach behind a burst of edits.
+  // The default filter matches name + path; full-text mode keeps
   // only the rows the server search hit, decorated with hit count + snippet — unlike the session
   // picker's results-only list, a search row here stays an ordinary row (launch/stop/trust intact),
   // just fewer of them. With no query, the catalog folds into one group row at the far end
@@ -261,7 +264,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         })
       }
     }
-    return rows.sort((a, b) => a.recent - b.recent)
+    return sortByKeys(rows, { key: r => !!r.running }, { key: r => r.recent })
   }
 
   show() {

@@ -7,6 +7,7 @@ import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
+import { orderByDescending } from '../order.js'
 import type { ComposerPoll, Event, SessionFile, TokenCounts } from '../events.js'
 
 // The mirror's harness-NEUTRAL core (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails an on-disk JSONL
@@ -42,7 +43,8 @@ const SEARCH_MAX_SESSIONS = 50
 // The mirror never creates sessions — it only tails what the terminal writes. Attachment: fresh boot
 // (nothing attached yet → auto-attach the newest unclaimed session) / attached (file present,
 // heartbeating) / lost (the file vanished → stay put, never hop to a different live session).
-// Invariant: file and sessionId are always both set or both empty.
+// Invariant: a file always carries a sessionId. The converse does NOT hold — a conversation the
+// mirror owns whose file pi hasn't written yet is named by its driver's id alone (C7).
 interface State<E> {
   cwd: string
   file?: string
@@ -86,13 +88,20 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // ── the composer's drivers (TB-Agent-Composer.md — v2, concurrent conversations) ──
   // One driver PER CONVERSATION (Invariant C2), each pinned at spawn to the session it drives — a
   // driver never follows the mirror's attachment. Ownership is identity, never inference (C5): a
-  // bound rec is found by its session file, and the one unresolved newborn a blank view can hold is
-  // reached only through the `blank` pointer, held from spawn until attach or abandonment to the
-  // background. Lives beside `state`, not in it: attachTo resets per-session tail state, but a
+  // bound rec is found by its session file, an unresolved newborn through the `blank` view pointer.
+  // `blank` is ONLY the view's pointer: from its first send a newborn is a conversation in its own
+  // right — listed and attachable by `rec.id` (C7) — so re-pointing the view can no longer strand
+  // it. Lives beside `state`, not in it: attachTo resets per-session tail state, but a
   // streaming driver deliberately survives an attach-away as a background conversation (C6).
-  interface DriverRec { d: AgentDriver; file: string | undefined }
+  // `id` is the rec's own opaque identity — what the picker and attach() name a conversation by
+  // before it has a file (C5: identity, never inference — deliberately not derived from the path,
+  // which is the adapter's id scheme, not the engine's). `startedAt` is the pending row's stable
+  // mtime (a moving one re-limes the unread cue and thrashes the peek/search caches); `prompt` is
+  // the first message sent, which both marks the rec a conversation and previews it.
+  interface DriverRec { d: AgentDriver; file: string | undefined; id: string; startedAt: number; prompt?: string }
   const drivers = new Set<DriverRec>()
   let blank: DriverRec | undefined
+  let recSeq = 0
 
   // The VIEWED conversation's driver: by file for an attached view, the newborn — by identity —
   // for the blank one. Never a shape rule: under concurrency several drivers hold resolved files
@@ -108,11 +117,31 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // Spawn a driver rec against `file` (undefined ⇒ a sessionless newborn). A rec minted while the
   // view is blank becomes the blank's own pointer — the C5 identity the attach path keys off.
   function mintRec(file: string | undefined): DriverRec {
-    const rec: DriverRec = { d: adapter.createDriver!(state.cwd, file), file }
+    const rec: DriverRec = { d: adapter.createDriver!(state.cwd, file), file, id: `new:${++recSeq}`, startedAt: Date.now() }
     drivers.add(rec)
     if (!state.file) blank = rec
     return rec
   }
+
+  // Every bound driver paired with the id of the conversation it drives: the adapter's sessionId
+  // once it lists the file, the rec's own until then — a conversation pi hasn't written yet (C7:
+  // it creates a session's .jsonl only when its first message ends, measured, so a long thinking
+  // turn lands nothing). `pending` is defined as the adapter not listing it, never a stat of our
+  // own — the adapter owns what counts as a session, and that's the predicate resolveBindings
+  // attaches on. One listing answers all three consumers: the picker union, `busy`, and attach.
+  function recConversations(): { rec: DriverRec; sessionId: string; pending: boolean }[] {
+    const bound = [...drivers].filter(r => r.file)
+    if (!bound.length) return []                   // the common case pays no listing
+    const listed = new Map(adapter.listSessionFiles(state.cwd).map(f => [f.file, f.sessionId]))
+    return bound.map(rec => {
+      const id = listed.get(rec.file!)
+      return { rec, sessionId: id ?? rec.id, pending: id === undefined }
+    })
+  }
+
+  // The pending conversations the picker lists. `prompt` is the gate: an unsent driver
+  // (composerNew's newborn, the boot pre-warm) is a warm process, not yet a conversation.
+  const pendingRecs = () => recConversations().filter(c => c.pending && c.rec.prompt !== undefined)
 
   async function disposeRec(rec: DriverRec) {
     drivers.delete(rec)
@@ -128,8 +157,12 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // process, and its error must surface when its conversation is next viewed (C4).
   function sweepIdle() {
     const viewed = viewedRec()
+    const pending = new Set(pendingRecs().map(c => c.rec))
     for (const rec of [...drivers]) {
       if (rec === viewed) continue
+      // Reaping EOFs pi's stdin, and its first flush lands within the same tick as agent_end — so a
+      // rec whose file hasn't appeared yet could be killed before it ever persists its turn.
+      if (pending.has(rec)) continue
       if (rec.d.streaming || rec.d.queue || rec.d.error) continue
       void disposeRec(rec)
     }
@@ -148,6 +181,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (blank && !state.file && blank.file) {
       const sf = adapter.listSessionFiles(state.cwd).find(f => f.file === blank!.file)
       if (sf) attachTo(sf)                 // clears the blank pointer; the rec stays, now file-keyed
+    }
+    // Still no file: a blank view whose newborn has been sent to adopts that rec's identity, so the
+    // conversation is named — and reachable from the picker — from the send rather than from the
+    // flush (C7). everAttached rides along: the view is committed to a conversation now, so the
+    // fresh-boot auto-attach can't steal it away to a session a terminal happens to write.
+    if (blank && !state.file && blank.prompt !== undefined && state.sessionId !== blank.id) {
+      resetTail(undefined, blank.id)
+      state.everAttached = true
     }
   }
 
@@ -302,10 +343,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     watchFile(found.file, { interval: 200 }, () => drainFile())
   }
 
-  // The composer's "new conversation" (TB-Agent-Composer.md): back to the blank state — attached to
-  // nothing, view cleared. The next send spawns a sessionless driver, whose freshly-created file
-  // resolveBindings attaches once its first entry lands. everAttached stays true, so the
-  // fresh-boot auto-attach can't steal the blank view back to the newest old session.
+  // Back to the blank state — naming nothing, view cleared. The next send spawns a sessionless
+  // driver, whose file resolveBindings attaches once its first entry lands. everAttached stays true,
+  // so the fresh-boot auto-attach can't steal the blank view back to the newest old session.
   function detachToBlank() {
     resetTail(undefined, '')
   }
@@ -557,12 +597,10 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // (TB-Agent-Composer-Toolkit.md Piece 3) — so tick the background drivers' too; the viewed
     // one's clock is its read in the slice below.
     for (const r of drivers) if (r !== rec) void r.d.dialog
-    // The one cross-conversation signal (C4): which sessions have a turn streaming, so the picker
-    // can badge background work. Nothing else about a background driver leaves its conversation.
-    const streamingFiles = new Set([...drivers].filter(r => r.d.streaming && r.file).map(r => r.file!))
-    const busy = streamingFiles.size
-      ? adapter.listSessionFiles(s.cwd).filter(f => streamingFiles.has(f.file)).map(f => f.sessionId)
-      : []
+    // The one cross-conversation signal (C4): which conversations have a turn streaming, so the
+    // picker can badge background work — a pending one under its own id, since the adapter has no
+    // row to key it by. Nothing else about a background driver leaves its conversation.
+    const busy = recConversations().filter(c => c.rec.d.streaming).map(c => c.sessionId)
     const composer: ComposerPoll | undefined = adapter.createDriver
       ? {
           streaming: !!rec?.d.streaming,
@@ -598,7 +636,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // foreign terminal process owns the viewed session's in-flight turn.
   // Shared by composerSend and the spawn-permitted composerRpc path, so a recipe's fork/compact
   // gets exactly the guards a message send does.
-  async function ensureDriver(): Promise<{ ok: true; d: AgentDriver } | { ok: false; error: string }> {
+  // Hands back the driver plus a `markSent` closed over its rec — the rec type itself stays private
+  // to this closure, and the caller never has to re-derive which conversation it just drove.
+  async function ensureDriver(): Promise<{ ok: true; d: AgentDriver; markSent: (text: string) => void } | { ok: false; error: string }> {
     refreshActive()
     resolveBindings()
     let rec = viewedRec()
@@ -611,7 +651,8 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       }
       rec = mintRec(state.file)
     }
-    return { ok: true, d: rec.d }
+    const owner = rec
+    return { ok: true, d: owner.d, markSent: (text: string) => { if (owner.prompt === undefined) owner.prompt = text } }
   }
 
   // Route a typed message to the driver. The ONE door for conversation (Toolkit T2) — composerRpc
@@ -622,7 +663,11 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!t) return { ok: false, error: 'empty message' }
     const r = await ensureDriver()
     if (!r.ok) return r
-    return r.d.send(t, opts)
+    const sent = await r.d.send(t, opts)
+    // The first accepted message is what turns a warm process into a conversation (C7) — and its
+    // preview until the transcript can supply one.
+    if (sent.ok) r.markSent(t)
+    return sent
   }
 
   // Answer a pending extension dialog (TB-Agent-Composer-Toolkit.md Piece 3). Dialogs ship only for
@@ -667,10 +712,13 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   async function composerNew() {
     if (!adapter.createDriver) return { ok: false, error: 'not supported' }
     resolveBindings()
-    if (!state.file && blank && !blank.d.streaming && !blank.d.error) return { ok: true }
+    // Reuse an untouched newborn; one that has been sent to is a conversation of its own and must be
+    // left running in the background instead — the whole point of C6, and re-pointing `blank` at a
+    // fresh rec is what used to strand it (unlisted, because pi hadn't written its file yet).
+    if (!state.file && blank && blank.prompt === undefined && !blank.d.streaming && !blank.d.error) return { ok: true }
     if (blank?.d.error) await disposeRec(blank)   // dead newborn: replace, don't reuse
     blank = undefined                             // a streaming one drops to background
-    if (state.file) detachToBlank()
+    detachToBlank()                               // clears a file attachment or a pending identity alike
     mintRec(undefined)
     sweepIdle()                          // the flip-away reap of the old view's idle driver
     return { ok: true }
@@ -710,9 +758,12 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // ── session picker ──
 
   async function listSessions() {
-    return adapter.listSessionFiles(state.cwd)
-      .sort((a, b) => b.mtime - a.mtime)
+    const onDisk = adapter.listSessionFiles(state.cwd)
       .map(({ sessionId, file, mtime }) => ({ sessionId, mtime, preview: adapter.readPreview(file) }))
+    // Union, not just the adapter's listing: an owned conversation is pickable from its first send,
+    // so a turn started here and left to run is never unreachable while pi holds its file back (C7).
+    const pending = pendingRecs().map(c => ({ sessionId: c.sessionId, mtime: c.rec.startedAt, preview: c.rec.prompt ?? '', pending: true }))
+    return orderByDescending([...onDisk, ...pending], s => s.mtime)
   }
 
   // ── full-text session search ──
@@ -786,7 +837,20 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   async function attach(sessionId: string) {
     const s = state
     const sf = adapter.listSessionFiles(s.cwd).find(f => f.sessionId === sessionId)
-    if (!sf) return { ok: false, error: 'session not found' }
+    if (!sf) {
+      // One of ours that pi hasn't written yet: the view names it by the rec's own identity (C5)
+      // until resolveBindings promotes it to a real attach on the flush. Flipping back to a pending
+      // conversation is exactly what the picker union exists to make possible.
+      const rec = pendingRecs().find(c => c.sessionId === sessionId)?.rec
+      if (!rec) return { ok: false, error: 'session not found' }
+      if (blank !== rec || s.sessionId !== rec.id) {
+        blank = rec
+        resetTail(undefined, rec.id)
+        s.everAttached = true
+        sweepIdle()
+      }
+      return { ok: true }
+    }
     if (sf.file === s.file) return { ok: true }
     attachTo(sf)
     // Rebind before the sweep: a driver that just moved itself (fork/clone) must be keyed by its

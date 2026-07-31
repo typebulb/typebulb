@@ -160,7 +160,14 @@ export class Root extends Component implements IRoot {
         this.tokens = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
         this.cost = 0
         break
-      case 'session': this.sessionId = e.sessionId; this.updateTitle(); break
+      case 'session':
+        this.sessionId = e.sessionId
+        // A conversation can be named before the picker has a row for it (the composer's own
+        // sessions are listed from their first send, ahead of the agent writing the file), so pull
+        // the list when the id is one we don't hold — the pill would otherwise read 'current'.
+        if (e.sessionId && !this.sessionPicker.currentRow()) this.refreshSessions()
+        else this.updateTitle()
+        break
       case 'user': this.messageList.applyUser(e); break
       case 'assistant': this.messageList.applyAssistant(e); break
       case 'tool_result': this.messageList.applyToolResult(e); break

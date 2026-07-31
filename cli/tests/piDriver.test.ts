@@ -710,6 +710,46 @@ describe('mirror driver lifecycle (per-conversation drivers, view-scoped slices)
     expect(first.disposed).toBe(false)
   })
 
+  it('a sent newborn stays reachable before its file is written — listed, badged, and attachable (C7)', async () => {
+    const adapter = new FakeMirrorAdapter()
+    const m = createMirror(adapter)                            // no sessions: boots blank
+    expect((await m.composerNew()).ok).toBe(true)
+    const first = adapter.driver!
+    expect((await m.composerSend('count the birds')).ok).toBe(true)
+    // pi reports its file at spawn but writes it only when the first message ends, so the adapter
+    // still lists nothing. Before C7 this conversation existed ONLY as the blank pointer.
+    first.sessionFile = NEW.file
+    first.streaming = true
+    first.draft = { text: 'one robin', thinking: '' }
+    let p = await m.poll(0)
+    const pendingId = p.busy[0]!
+    expect(pendingId).toBeTruthy()                             // badged under its own identity
+    const listed = await m.listSessions()
+    expect(listed).toMatchObject([{ sessionId: pendingId, preview: 'count the birds', pending: true }])
+    // + backgrounds it instead of stranding it: still running, still listed, view now blank.
+    expect((await m.composerNew()).ok).toBe(true)
+    expect(first.disposed).toBe(false)
+    p = await m.poll(0)
+    expect(p.composer).toMatchObject({ streaming: false, draft: null })   // the blank shows none of it
+    expect(p.busy).toEqual([pendingId])
+    expect((await m.listSessions()).map(s => s.sessionId)).toContain(pendingId)
+    // …and the picker can flip back to it, which is the whole point: its draft renders again.
+    expect((await m.attach(pendingId)).ok).toBe(true)
+    p = await m.poll(0)
+    expect(p.composer).toMatchObject({ streaming: true, draft: { text: 'one robin' } })
+    const lastSession = p.events.filter(e => e.type === 'session').pop() as { sessionId: string }
+    expect(lastSession.sessionId).toBe(pendingId)
+    // The idle sweep must not reap a conversation pi hasn't persisted yet — that kills the transcript.
+    first.streaming = false
+    await m.poll(0)
+    expect(first.disposed).toBe(false)
+    // Once the adapter lists it, the view promotes to a real attach and the pending row retires.
+    adapter.sessions = [NEW]
+    p = await m.poll(0)
+    expect((await m.listSessions()).map(s => s.sessionId)).toEqual([NEW.sessionId])
+    expect((p.events.filter(e => e.type === 'session').pop() as { sessionId: string }).sessionId).toBe(NEW.sessionId)
+  })
+
   it('shutdownComposer reaps every driver, streaming or not', async () => {
     const adapter = new FakeMirrorAdapter()
     adapter.sessions = [A, B]

@@ -4,13 +4,15 @@ import { hitsBadge, snippetLine } from './ui.js'
 import { relTime, truncate } from './util.js'
 import { mdPlain } from './markdown.js'
 
-type SessionRow = { sessionId: string; mtime: number; preview: string; hitCount?: number; snippet?: string }
+// `pending` marks a conversation this mirror owns whose file the agent hasn't written yet — listed
+// so a turn left running is still reachable, but it has no transcript to peek, search or name.
+type SessionRow = { sessionId: string; mtime: number; preview: string; pending?: boolean; hitCount?: number; snippet?: string }
 
 // Sessions chip + dropdown. Owns the session list; reaches up to Root for sessionId/cwd and
 // updateTitle/stickToBottomNextRender. Opens on the attached session so the highlight starts where
 // you are; the `.active` row is the keyboard cursor.
 export class SessionPicker extends ComboboxPill<SessionRow> {
-  sessions: { sessionId: string; mtime: number; preview: string }[] = []
+  sessions: { sessionId: string; mtime: number; preview: string; pending?: boolean }[] = []
   protected keepOpenSelector = '.sid-wrap'
   protected filterId = 'session-filter'
   protected listSelector = '#session-list'
@@ -80,10 +82,12 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     this.loadSessions().then(() => this.update()).catch(() => {})
   }
 
+  // The attached session's row, once the list holds it — the pill reads both its preview (which
+  // drives the tab title) and whether it's still pending.
+  currentRow() { return this.sessions.find(s => s.sessionId === this.parent.sessionId) }
+
   // Preview for the attached session (drives the tab title); empty until loaded.
-  currentPreview(): string {
-    return this.sessions.find(s => s.sessionId === this.parent.sessionId)?.preview?.trim() ?? ''
-  }
+  currentPreview(): string { return this.currentRow()?.preview?.trim() ?? '' }
 
   async show() {
     this.beginOpen()
@@ -119,7 +123,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     const blank = p.sessionId === ''
     const raw = blank ? 'new conversation' : this.currentPreview() || 'current'
     const label = truncate(raw, 25)
-    const tip = `${p.cwd}\n${blank ? 'New conversation — not saved yet' : `Session: ${p.sessionId}`}`   // cwd on hover, not in the bar
+    const tip = `${p.cwd}\n${blank || this.currentRow()?.pending ? 'New conversation — not saved yet' : `Session: ${p.sessionId}`}`   // cwd on hover, not in the bar
     return div({ class: 'sid-wrap' },
       button({
         class: 'pill',

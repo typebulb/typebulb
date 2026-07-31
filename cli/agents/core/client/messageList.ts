@@ -384,8 +384,28 @@ export class MessageList extends Component {
     const tailTurn = echo ? turn + 1 : Math.max(0, turn)
     if (echo) out.push(this.#echoBubble(echo, tailTurn))
     if (draft) out.push(this.#draftBubble(draft, tailTurn))
-    else { this.#draftScroll.clear(); this.#draftThinkingOpen = false }
+    else {
+      this.#draftScroll.clear(); this.#draftThinkingOpen = false
+      // A live turn with nothing streaming into a draft — between two messages, or any turn the
+      // mirror only watches (a terminal session has no driver to stream from). The draft's own wait
+      // line covers it, so the shimmer tracks the TURN rather than the draft's shorter lifetime.
+      if (this.parent.working) out.push(this.#draftBubble({ text: '', thinking: '', tool: this.#activeVerb() }, tailTurn))
+    }
     return out
+  }
+
+  // The verb a live turn is mid-way through, read from the transcript itself: the newest assistant
+  // message's tool call with no result yet. Harness-neutral by construction — both adapters emit
+  // tool calls and match results by id — so a watched Claude turn names its verb exactly like a
+  // driven pi one, with nothing harness-specific to wire. Undefined ⇒ the bubble says 'working…'
+  // (the model is composing, not calling).
+  #activeVerb(): string | undefined {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]!
+      if (m.role !== 'assistant') continue
+      return m.tools.find(t => t.result === undefined)?.name
+    }
+    return undefined
   }
 
   // Top-of-transcript wordmark + tagline. Both logos render; CSS shows the one matching the host
