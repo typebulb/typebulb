@@ -90,7 +90,8 @@ export class FsPackageCache implements PackageCache {
 
   async invalidateVersionsCache(name: string): Promise<unknown> {
     this.indexMem.delete(name)
-    await fs.rm(path.join(indexesDir, encodeName(name) + '.json'), { force: true })
+    // Best-effort: an undeletable stale entry (unwritable home) just costs a redundant re-fetch.
+    await fs.rm(path.join(indexesDir, encodeName(name) + '.json'), { force: true }).catch(() => {})
     return undefined
   }
 

@@ -15,7 +15,7 @@ import { readdir, readFile, writeFile, unlink, mkdir } from 'fs/promises'
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { serversDir, isUnderProject, normalizeBulbPath } from './paths.js'
+import { serversDir, isUnderProject, normalizeBulbPath, warnStateDirOnce } from './paths.js'
 import { VERSION } from '../version.js'
 
 export interface BulbServer {
@@ -236,11 +236,15 @@ export function isAlive(pid: number): boolean {
  * invalidate.
  */
 export async function registerServer(entry: BulbServer): Promise<void> {
-  await mkdir(serversDir(), { recursive: true })
   // Stamp the registering process's own runtime version (an explicit entry.version wins — tests
   // fabricate historical entries). The stamp happens HERE, not in each runner, so no launch path
   // can register unversioned.
-  await writeFile(entryPath(entry.pid), JSON.stringify({ version: VERSION, ...entry }))
+  try {
+    await mkdir(serversDir(), { recursive: true })
+    await writeFile(entryPath(entry.pid), JSON.stringify({ version: VERSION, ...entry }))
+  } catch {
+    warnStateDirOnce()   // unregistered: logs/wait/send/stop can't resolve it, but it serves anyway
+  }
 }
 
 /**

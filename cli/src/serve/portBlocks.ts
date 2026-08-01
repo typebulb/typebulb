@@ -12,7 +12,7 @@ import * as net from 'net'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { typebulbHome, normalizeBulbPath } from './paths.js'
+import { typebulbHome, normalizeBulbPath, warnStateDirOnce } from './paths.js'
 import { listBulbServers } from './serverRegistry.js'
 
 /**
@@ -105,15 +105,23 @@ async function readBlock(base: number): Promise<BlockFile | undefined> {
   }
 }
 
-async function writeBlock(base: number, block: BlockFile): Promise<void> {
-  await writeFile(blockPath(base), JSON.stringify(block, null, 2))
+/** Best-effort: an unwritable home (sandboxed shell) degrades per call site — a claim that can't
+ *  persist is still usable this run; `canBind` arbitrates any cross-run drift. */
+async function writeBlock(base: number, block: BlockFile): Promise<boolean> {
+  try {
+    await writeFile(blockPath(base), JSON.stringify(block, null, 2))
+    return true
+  } catch {
+    warnStateDirOnce()
+    return false
+  }
 }
 
 /**
  * The block base for `cwd`, claiming one if this project has none. A block whose project directory
  * is gone is reclaimed on sight (prune-on-read, like `listBulbServers`); when every base is claimed
  * by a live project the least-recently-used one is taken over. Returns undefined only if the
- * blocks dir itself is unusable — the caller then spills.
+ * blocks dir is unusable or a claim can't be persisted — the caller then spills.
  */
 async function blockBaseFor(cwd: string): Promise<number | undefined> {
   const key = normalizeBulbPath(cwd)
@@ -139,16 +147,17 @@ async function blockBaseFor(cwd: string): Promise<number | undefined> {
       try {
         await writeFile(blockPath(base), JSON.stringify(fresh, null, 2), { flag: 'wx' })
         return base
-      } catch {
+      } catch (e) {
         // Lost the race to another launch — re-read; if it took the base for THIS project, it's ours.
+        // Any failure other than the race's EEXIST is the home refusing writes.
         const now = await readBlock(base)
         if (now?.cwd === key) return base
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') warnStateDirOnce()
         continue
       }
     }
     if (!existsSync(block.cwd)) {
-      await writeBlock(base, fresh)
-      return base
+      return (await writeBlock(base, fresh)) ? base : undefined
     }
   }
 
@@ -157,8 +166,7 @@ async function blockBaseFor(cwd: string): Promise<number | undefined> {
     .filter((e): e is { base: number; block: BlockFile } => !!e.block)
     .sort((a, a2) => newestUse(a.block) - newestUse(a2.block))[0]
   if (!lru) return undefined
-  await writeBlock(lru.base, fresh)
-  return lru.base
+  return (await writeBlock(lru.base, fresh)) ? lru.base : undefined
 }
 
 function newestUse(block: BlockFile): number {

@@ -74,9 +74,11 @@ export interface CliArgs {
    *  embed wake match the `[embed <name>` tag prefix and a turn-based bulb wait on its `[chess]` event
    *  tag; a regex `[chess]` would be a character class, and the unpaired `[embed` an error. */
   match?: string
-  /** `wait --timeout <sec>`: a manual override of the housekeeping give-up cap (exit 2). Mostly
-   *  vestigial — `wait` is a subscription, so an agent never sets it (lifecycle.ts runWait): a shim-
-   *  backgrounded wait ignores it (no give-up clock at all); everything else defaults to 1800. */
+  /** `wait --timeout <sec>`: a manual override of the housekeeping give-up cap (exit 2). Near-
+   *  vestigial — `wait` is a subscription, so a caller sets it only when the wait must run in the
+   *  FOREGROUND of a turn, which is Codex alone (no background wake at all) — the one exception to
+   *  "the caller sets no timeout" (TB-Wait.md § Timeout). A shim-backgrounded wait ignores it (no
+   *  give-up clock at all); everything else defaults to 1800. */
   timeoutSec?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
@@ -347,7 +349,7 @@ Usage:
                                  harness, brings up the agent mirror without opening a
                                  browser, prints its URL and the authoring-skill path.
                                  Always exits 0 (a status report).
-  typebulb agent:{claude|pi}     Open a named harness's mirror in the foreground (a browser
+  typebulb agent:{claude|codex|pi}  Open a named harness's mirror in the foreground (a browser
                                  view of your coding agent's sessions) — explicit / override.
   typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints
                                  its return as JSON to stdout, logs/errors to

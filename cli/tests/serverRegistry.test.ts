@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, readdir, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, rm, readdir, writeFile, chmod } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
@@ -66,6 +66,15 @@ describe('serverRegistry', () => {
     expect(await listBulbServers()).toEqual([])
   })
 
+  // Bookkeeping is best-effort (TB-CLI.md, Port allocation): an unwritable home must not kill a
+  // server that is already listening — it serves unregistered (logs/wait/send/stop won't see it).
+  it('registerServer tolerates an unwritable home instead of throwing', async () => {
+    const blocker = path.join(dir, 'blocker')
+    await writeFile(blocker, '')                                     // a FILE where the home should be
+    process.env.TYPEBULB_SERVERS_DIR = path.join(blocker, 'servers')
+    await expect(registerServer({ pid: process.pid, port: 3000, url: 'u', file: '/a.bulb.md', startedAt: 1 })).resolves.toBeUndefined()
+  })
+
   // Port allocation (TB-CLI.md) shares this per-user home. The property that matters is stickiness:
   // a bulb answers on the same port every run, which is what keeps an open tab pointed at a live
   // server across a relaunch. Distinct projects must not overlap, or one project's bulb would
@@ -130,6 +139,26 @@ describe('serverRegistry', () => {
       const t0 = Date.now()
       await assignedPortFor({ kind: 'bulb', file: bulb }, proj)   // a run's bookkeeping
       expect((await lastRunTimes(proj))(bulb)).toBeGreaterThanOrEqual(t0)
+    })
+
+    // The Codex-sandbox shape: the home READS fine but refuses writes. A held slot still answers
+    // (its write is only the LRU refresh) and a new bulb still gets an offset — degraded stickiness,
+    // never a crash; canBind arbitrates any cross-run drift (TB-CLI.md, Port allocation).
+    it('keeps answering when the block file is read-only (sandboxed home)', async () => {
+      const proj = path.join(dir, 'sandboxed')
+      await mkdir(proj, { recursive: true })
+      const bulb = path.join(proj, 'one.bulb.md')
+      const held = (await assignedPortFor({ kind: 'bulb', file: bulb }, proj))!
+      // typebulbHome() is the PARENT of TYPEBULB_SERVERS_DIR, so blocks/ sits beside the temp dir.
+      const blockFile = path.join(dir, '..', 'blocks', `${held - (held % 100)}.json`)
+      await chmod(blockFile, 0o444)
+      try {
+        expect(await assignedPortFor({ kind: 'bulb', file: bulb }, proj)).toBe(held)
+        const fresh = (await assignedPortFor({ kind: 'bulb', file: path.join(proj, 'two.bulb.md') }, proj))!
+        expect(fresh).toBe(held + 1)   // computed though unpersisted
+      } finally {
+        await chmod(blockFile, 0o666)
+      }
     })
   })
 

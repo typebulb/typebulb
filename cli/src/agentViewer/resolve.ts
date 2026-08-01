@@ -41,7 +41,7 @@ export function detectCallerHarness(): string | undefined {
 }
 
 /** Launch/reuse the `{ name }` mirror, or `{ ambiguous }`: more than one harness is installed and the
- *  caller is a human, so the user must pick (`agent:claude` / `agent:pi`). The order is the picker's
+ *  caller is a human, so the user must pick (`agent:claude` / `agent:codex` / `agent:pi`). The order is the picker's
  *  order — this cwd's active harness first (the Enter default). */
 export type AgentChoice = { name: string } | { ambiguous: string[] }
 

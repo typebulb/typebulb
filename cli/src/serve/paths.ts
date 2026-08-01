@@ -20,6 +20,16 @@ export function typebulbHome(): string {
   return reg ? join(reg, '..') : join(homedir(), '.typebulb')
 }
 
+/** One line, once per process, when a `~/.typebulb` bookkeeping write fails (read-only home,
+ *  sandboxed agent shell): the run continues stateless (TB-CLI.md, Port allocation). User-requested
+ *  persistence (`typebulb trust`) fails loudly instead — see trustStore. */
+let stateDirWarned = false
+export function warnStateDirOnce(): void {
+  if (stateDirWarned) return
+  stateDirWarned = true
+  console.error(`${typebulbHome()} not writable — continuing stateless: ports won't stick, caches stay cold, and typebulb logs/wait/send/stop may not see this run`)
+}
+
 /** The running-server registry dir (`~/.typebulb/servers`), overridable via `TYPEBULB_SERVERS_DIR`. */
 export function serversDir(): string {
   return process.env.TYPEBULB_SERVERS_DIR || join(typebulbHome(), 'servers')

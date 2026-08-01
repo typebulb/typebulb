@@ -15,9 +15,12 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { sha1, readJson } from './cacheUtils.js'
+import { warnStateDirOnce } from '../../serve/paths.js'
 
 const CACHE_SCHEMA_VERSION = 1
 
+// Deliberately NOT serve/paths' typebulbHome(): its TYPEBULB_SERVERS_DIR override redirects the
+// registry + trust store for tests, which must keep sharing the real warm cache (TB-Tests.md).
 export const cacheRoot = path.join(os.homedir(), '.typebulb', 'cache')
 export const packagesCacheDir = path.join(cacheRoot, 'packages')
 export const proxyCacheDir = path.join(cacheRoot, 'proxy')
@@ -32,7 +35,9 @@ let initPromise: Promise<void> | undefined
  * If the on-disk schema version differs, wipes and recreates the cache.
  */
 export function ensureCacheRoot(): Promise<void> {
-  if (!initPromise) initPromise = doInit()
+  // A failed init (unwritable home) resolves rather than poisoning every later cache call: reads
+  // still probe the disk (tolerant of absence) and writes drop via atomicWriteFile's own guard.
+  if (!initPromise) initPromise = doInit().catch(() => warnStateDirOnce())
   return initPromise
 }
 

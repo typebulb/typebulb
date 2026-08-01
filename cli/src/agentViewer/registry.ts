@@ -20,6 +20,7 @@
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
 import { ClaudeAdapter } from '../../agents/claude/server/adapter.js'
 import { PiAdapter } from '../../agents/pi/server/adapter.js'
+import { CodexAdapter } from '../../agents/codex/server/adapter.js'
 
 interface AgentRegistration {
   adapter: () => AgentAdapter
@@ -29,6 +30,7 @@ interface AgentRegistration {
 const AGENTS: Record<string, AgentRegistration> = {
   claude: { adapter: () => new ClaudeAdapter(), server: () => import('../../agents/claude/server.js') },
   pi: { adapter: () => new PiAdapter(), server: () => import('../../agents/pi/server.js') },
+  codex: { adapter: () => new CodexAdapter(), server: () => import('../../agents/codex/server.js') },
 }
 
 /** Is `name` a reserved agent the CLI can launch (`agent:<name>`)? */

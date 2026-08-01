@@ -23,8 +23,11 @@ function palette(tty: boolean) {
  * (the one decision agents most often get wrong — a weak model that under-reads the skill plans a
  * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted embed (a *backgrounded* `wait` — the
  * render lands only on turn-end, so a foreground or pre-emit wait would deadlock; backgrounding fixes
- * both halves), and a directive to read the authoring skill before writing a bulb (delivery in `skill`
- * below). Every line is ≤57 chars — agents often run in narrow panes, where a longer line garbles. It launches
+ * both halves. Codex inverts both facts — items stream to the rollout mid-turn and no background wake
+ * exists — so its branch is a bounded FOREGROUND wait: TB-Agent-Codex.md § Wait under Codex), and a
+ * directive to read the authoring skill before writing a bulb (delivery in `skill`
+ * below). Every line is ≤57 chars — agents often run in narrow panes, where a longer line garbles —
+ * except codex's wait command (65): a copyable command can't split. It launches
  * rather than instructs because the user's kickoff sentence pre-approves exactly one command: stdout
  * answering "now run `agent:claude --no-open`" would send the agent back through the permission layer with a
  * command that approval never covered. It always exits 0: this is a status report, and even a launch
@@ -91,10 +94,19 @@ async function launchAndReport(version: string, name: string): Promise<void> {
         `    Reusable app/tool → write a ${lit('.bulb.md')}`,
         `    Show something inline → embed a bulb`,
         // "background" told pi agents to shell-'&' the wait, decoupling the wake (TB-Wait.md).
-        name === 'pi'
-          ? `      arm a wait for its render verdict — run it plainly:`
-          : `      background a wait for its render verdict:`,
-        `      • ${lit('typebulb wait agent --match "[embed <name>"')}`,
+        // Codex has no background wake at all — its wait runs FOREGROUND in the emitting turn
+        // (items stream to the rollout mid-turn), bounded because it occupies that turn
+        // (TB-Agent-Codex.md § Wait under Codex). The outer shell deadline is named too: a mirror
+        // wait lingers 10s AFTER its match, so Codex's own default kills even a clean `ok`.
+        ...(name === 'codex'
+          ? [`      verify it this turn — foreground-wait, bounded:`,
+             `      • ${lit('typebulb wait agent --match "[embed <name>" --timeout 120')}`,
+             `        raise the shell tool's timeout_ms to 130000`,
+             `        (its 10s default kills even a clean ok)`]
+          : [name === 'pi'
+              ? `      arm a wait for its render verdict — run it plainly:`
+              : `      background a wait for its render verdict:`,
+             `      • ${lit('typebulb wait agent --match "[embed <name>"')}`]),
         ...skill,
         `    End this reply with the mirror link above`,
         `      • easy to miss the link mid-message`,

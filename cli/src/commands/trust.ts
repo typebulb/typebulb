@@ -18,7 +18,7 @@ export async function runTrust(file: string | undefined, trust: boolean): Promis
   }
   const abs = path.resolve(file)
   if (!abs.endsWith('.bulb.md')) { console.error('File must have .bulb.md extension'); process.exit(1) }
-  setBulbTrusted(abs, trust)
+  try { setBulbTrusted(abs, trust) } catch (e) { console.error((e as Error).message); process.exit(1) }
   console.log(trust
     ? `Trusted ${path.basename(abs)} — runs with fs / AI / server.ts (no --trust needed).`
     : `Untrusted ${path.basename(abs)} — runs Restricted.`)

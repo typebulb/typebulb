@@ -63,3 +63,20 @@ describe('trust keys are case-canonical on case-insensitive volumes', () => {
     expect(a).toBe(b)
   })
 })
+
+// The one loud write: `typebulb trust` exists to persist a decision, so an unwritable home is an
+// error there — unlike the registry/port bookkeeping, which degrades stateless (TB-CLI.md).
+describe('trust store on an unwritable home', () => {
+  it('setBulbTrusted fails loudly instead of silently remembering nothing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tb-ro-'))
+    try {
+      const blocker = join(dir, 'blocker')
+      writeFileSync(blocker, '')                       // a FILE where the home should be
+      process.env.TYPEBULB_SERVERS_DIR = join(blocker, 'servers')
+      expect(() => setBulbTrusted(join(dir, 'x.bulb.md'), true)).toThrow(/trust not remembered/)
+    } finally {
+      delete process.env.TYPEBULB_SERVERS_DIR
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

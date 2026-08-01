@@ -68,7 +68,7 @@ await build({
 // (`agents/client/`), copied next to each agent's bundle so runAgentViewer reads them from `dist/` at
 // runtime and they ship via `files: ["dist"]`. The server halves (`agents/<name>/server.ts`) need no
 // copy: they're bundled into `dist/index.js` transitively (serve.ts's static import map).
-const MIRROR_AGENTS = ['claude', 'pi']
+const MIRROR_AGENTS = ['claude', 'pi', 'codex']
 for (const agent of MIRROR_AGENTS) {
   await build({
     entryPoints: [`cli/agents/${agent}/client/index.ts`],

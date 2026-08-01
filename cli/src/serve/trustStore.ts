@@ -34,8 +34,14 @@ function readSet(): Set<string> {
 }
 
 function writeSet(set: Set<string>): void {
-  mkdirSync(typebulbHome(), { recursive: true })
-  writeFileSync(trustPath(), JSON.stringify([...set]))
+  // Loud, unlike the home's bookkeeping writes (TB-CLI.md): this store's entire job is to persist
+  // a user decision, so an unwritable home is an error here, never a silent degradation.
+  try {
+    mkdirSync(typebulbHome(), { recursive: true })
+    writeFileSync(trustPath(), JSON.stringify([...set]))
+  } catch (e) {
+    throw new Error(`can't write ${trustPath()} — trust not remembered (unwritable home; sandboxed shell?): ${(e as Error).message}`)
+  }
 }
 
 /** Is this bulb remembered as Trusted? */
