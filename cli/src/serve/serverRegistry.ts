@@ -1,7 +1,7 @@
 /**
  * Cross-project registry of running `typebulb` dev servers, plus the cross-platform
  * launch/stop boilerplate every host that breaks bulbs out would otherwise rewrite.
- * The capability half of breakout — see TB-Agent-Mirror-Embed.md "Breakout".
+ * The capability half of breakout — see TB-Agent-Mirror-Inline.md "Breakout".
  *
  * One file per server (`<pid>.json`) under ~/.typebulb/servers/. Like claude.bulb's
  * lock dir, a per-PID file sidesteps concurrent-write races on a shared index. The
@@ -320,7 +320,7 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
  * Find the agent mirror serving THIS project, optionally narrowed to a specific agent (`agent:<name>`).
  *
  * Scope to the cwd, not the machine: a mirror reflects the cwd it was launched in (it tails that
- * project's CC sessions), so only a mirror for this cwd will render this agent's embeds — one open for
+ * project's CC sessions), so only a mirror for this cwd will render this agent's inline bulbs — one open for
  * a *different* project is a false "up". Match on the registered launch cwd plus the entry's `agent`
  * field — a mirror has no project path to match on (TB-Agent-Mirror.md).
  * A pre-cwd entry (no `s.cwd`) can't be claimed, so it's skipped. With `agent`, match that mirror;

@@ -10,7 +10,7 @@ const adapter = new CodexAdapter()
 export const displayName = adapter.displayName
 // composerPasteRead (read-only, paste-dir-scoped) rides along composer-less: any mirror renders a
 // paste-mention thumbnail it encounters in a transcript.
-export const { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
+export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'

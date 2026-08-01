@@ -197,13 +197,13 @@ describe('serverRegistry', () => {
   // Per-`--match` keying (TB-Wait.md): each pattern is its own consumer group,
   // so one waiter's exit can't move another pattern's offset. The empty key is the bare-wait baseline.
   it('wait cursors are keyed per --match and isolated from each other', async () => {
-    writeWaitCursor(process.pid, 100, '[embed A')
-    writeWaitCursor(process.pid, 200, '[embed B')
+    writeWaitCursor(process.pid, 100, '[inline A')
+    writeWaitCursor(process.pid, 200, '[inline B')
     writeWaitCursor(process.pid, 50)                          // bare baseline (empty key)
-    expect(readWaitCursor(process.pid, '[embed A')).toBe(100)
-    expect(readWaitCursor(process.pid, '[embed B')).toBe(200) // writing A left B untouched
+    expect(readWaitCursor(process.pid, '[inline A')).toBe(100)
+    expect(readWaitCursor(process.pid, '[inline B')).toBe(200) // writing A left B untouched
     expect(readWaitCursor(process.pid)).toBe(50)
-    expect(readWaitCursor(process.pid, '[embed C')).toBeUndefined()  // unseen pattern ⇒ caller falls back
+    expect(readWaitCursor(process.pid, '[inline C')).toBeUndefined()  // unseen pattern ⇒ caller falls back
   })
 
   // Regression: the prune once parsed `<pid>.wait.json` as a registry entry (a bare `.json` suffix

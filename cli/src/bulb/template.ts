@@ -15,21 +15,21 @@ export interface RenderOptions {
   insight: string
   importMap: ImportMap
   watch: boolean
-  /** Force the initial theme instead of detecting the OS. An embedding host
+  /** Force the initial theme instead of detecting the OS. A host page
    *  (a bulb rendering a bulb) passes its own effective theme so the nested
    *  document matches it — a sandboxed iframe can't read the host's localStorage. */
   theme?: 'light' | 'dark'
-  /** True when this page is an embed srcdoc (renderBulb), false/omitted for the
+  /** True when this page is an inline-bulb srcdoc (renderBulb), false/omitted for the
    *  standalone top-level page (the CLI server). Only the standalone page gets a
    *  `html, body { height: 100% }` chain — see the `pageHeight` note in renderHtml. */
-  embedded?: boolean
+  inline?: boolean
   /** The bulb's folder, absolute (TB-FS.md) — injected as window.__TB_DIR__ for tb.dir.
-   *  Omitted for embeds (no filesystem) and hosts without a bulb file. */
+   *  Omitted for inline bulbs (no filesystem) and hosts without a bulb file. */
   dir?: string
   /**
    * Names the `.bulb.md` this page was compiled from, so the served script speaks the file's
    * coordinates (TB-CLI.md, One coordinate space). `codeLine` is the 1-based line of `code.tsx`'s
-   * first content line in that file. Local runs only: an embed has no file to point at.
+   * first content line in that file. Local runs only: an inline bulb has no file to point at.
    */
   source?: { file: string; codeLine: number }
   /** The transpile error, when the last compile failed. A failed compile still serves a page —
@@ -40,7 +40,7 @@ export interface RenderOptions {
 
 /** Render a bulb to a complete HTML page */
 export function renderHtml(options: RenderOptions): string {
-  const { name, code, css, html, data, insight, importMap, theme, embedded, dir, source, compileError } = options
+  const { name, code, css, html, data, insight, importMap, theme, inline, dir, source, compileError } = options
 
   // Default HTML if none provided
   const userHtml = html.trim() || '<div id="app"></div>'
@@ -48,10 +48,10 @@ export function renderHtml(options: RenderOptions): string {
   // Standalone only: give the top-level page a definite height chain so a fill bulb
   // (a canvas/animation whose root is `height: 100%`) resolves against the window
   // instead of collapsing to zero — without it only `100dvh` fills, and a fixed px
-  // height leaves dead space below in the bulb's own window. NOT for an embed: there
+  // height leaves dead space below in the bulb's own window. NOT for an inline bulb: there
   // `body` must stay content-height so the auto-height protocol's `body.scrollHeight`
   // can shrink the frame to the content (a 100%-tall body would peg it to the frame).
-  const pageHeight = embedded ? '' : '\n' + pageHeightStyle
+  const pageHeight = inline ? '' : '\n' + pageHeightStyle
 
   // Route browser package fetches through the CLI's caching /proxy/ endpoint.
   // Relative URL means we don't need to know the port at template-render time.
@@ -142,17 +142,17 @@ function sourceAnnotations(source: RenderOptions['source'], script: string): str
     + `//# sourceMappingURL=data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(map))}`
 }
 
-// Host↔embed protocol (bulb-in-a-bulb) + uncaught-error forwarding. When framed it posts
+// Host↔inline bulb protocol (bulb-in-a-bulb) + uncaught-error forwarding. When framed it posts
 // its content height (the host can't size the iframe otherwise), keeps overflow in sync
-// with fit, and forwards runtime errors to the embedding host (createBulbFrame's
+// with fit, and forwards runtime errors to the host page (createBulbFrame's
 // listener). A standalone top-level page skips the height machinery but still forwards
 // uncaught errors — to its own ungated /__log, so the one failure a local bulb can't
 // report itself (the error that killed it) lands in the log `typebulb logs`/`wait` read
 // (TB-Wait.md, "The local tier"). Never /__log from a
-// frame: an embed's relative URL would resolve against the HOST page's origin — the
+// frame: an inline bulb's relative URL would resolve against the HOST page's origin — the
 // mirror's log, untagged, bypassing its dedup. Registered as a classic script BEFORE the
 // deferred module so its error listeners catch errors from first eval. Sends content
-// height only; the host owns width and any height cap — an embed can't tell a
+// height only; the host owns width and any height cap — an inline bulb can't tell a
 // deliberately-narrow widget from a responsive one, so those are the host's call (see
 // claude.bulb's toggle).
 const embedProtocol = `<script>
@@ -168,7 +168,7 @@ const embedProtocol = `<script>
     errorPosted = true;
     if (framed) post({ __typebulbEmbed: true, kind: 'error', message: message });
     /* Standalone only: the script is line-aligned to the .bulb.md and named by sourceURL, so the
-       position is the user's own file — worth carrying into the log an agent reads. An embed has no
+       position is the user's own file — worth carrying into the log an agent reads. An inline bulb has no
        such file (its frames name the srcdoc), so the host branch stays message-only. */
     else { try { fetch('/__log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ args: ['[runtime error] ' + message + (where ? ' (' + where + ')' : '')] }) }).catch(function () {}); } catch (e) {} }
   };
@@ -218,7 +218,7 @@ const embedProtocol = `<script>
   // short delay instead of flipping immediately: if the frame caught up the overflow is
   // gone (no bar), and only an overflow that SURVIVES — a genuine host cap — gets auto.
   // The host can't tell the iframe its cap (no host→iframe channel), so this round-trip
-  // is how the embed distinguishes "frame about to grow" from "frame capped". X has no
+  // is how the inline bulb distinguishes "frame about to grow" from "frame capped". X has no
   // async resize (the host never grows width on content), so it flips inline.
   //
   // Coalesce to one rAF and only write an overflow value that actually changed: setting

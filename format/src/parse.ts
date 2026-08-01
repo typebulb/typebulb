@@ -36,7 +36,7 @@ export interface ParsedBulb {
    * closing fence — i.e. where the bulb's body ends. NOT end-of-content: trailing lines that set no block
    * (prose, a stray `---`) sit beyond it. Equals the line after the frontmatter when no block was captured.
    * Lets a caller slice a bulb out of surrounding prose without swallowing what follows it (see
-   * `findEmbeddedBulbs`).
+   * `findUnfencedBulbs`).
    */
   bodyEndLine: number
 }
@@ -176,14 +176,14 @@ export function validateBulbStructure(content: string): string[] {
 /** A bulb found sitting "naked" in prose — frontmatter and blocks dumped straight into the text with no
  * enclosing ````bulb```` fence. `start`/`end` are the half-open `[start, end)` line range (0-based, into
  * `content.split('\n')`); `source` is that slice, ready to feed back to `parseBulb` or a renderer. */
-export interface EmbeddedBulb {
+export interface UnfencedBulb {
   start: number
   end: number
   source: string
 }
 
 /**
- * Find bulbs embedded unfenced in arbitrary prose. The normal path wraps a bulb in a ````bulb```` fence
+ * Find bulbs inline unfenced in arbitrary prose. The normal path wraps a bulb in a ````bulb```` fence
  * (and the mislabel-tolerant host promotes a fence whose body parses); but some non-SOTA models — Kimi
  * notably — skip the fence entirely and dump the raw frontmatter + blocks into the message, using `---`
  * thematic breaks as ad-hoc delimiters, so no fence token ever wraps the bulb. This scans for that.
@@ -192,12 +192,12 @@ export interface EmbeddedBulb {
  * mislabel tolerance leans on, so we anchor on a `---` line, run `parseBulb` from there, and accept it
  * only if it yields at least one real block. The extent is `parseBulb`'s own `bodyEndLine` (just past the
  * last captured block) — NOT end-of-text — so trailing prose after the bulb (Kimi's closing `---`, a
- * follow-up paragraph) stays prose instead of being swallowed into the embed. Returned spans are
+ * follow-up paragraph) stays prose instead of being swallowed into the inline bulb. Returned spans are
  * non-overlapping and in document order; the caller slices the surrounding prose around them.
  */
-export function findEmbeddedBulbs(content: string): EmbeddedBulb[] {
+export function findUnfencedBulbs(content: string): UnfencedBulb[] {
   const lines = content.split('\n')
-  const found: EmbeddedBulb[] = []
+  const found: UnfencedBulb[] = []
   let i = 0
   while (i < lines.length) {
     if (lines[i]?.trim() !== '---') { i++; continue }

@@ -8,8 +8,8 @@ import { startServer, type ServerInstance } from '../../src/serve/server.js'
 import { freePort } from './harness/servers.js'
 
 /**
- * Tier B — live attack on the embed↔host boundary (TB-Agent-Mirror-Embed.md, the
- * `createBulbFrame` sandbox). A ````bulb```` embed is attacker-influenced content
+ * Tier B — live attack on the inline bulb↔host boundary (TB-Agent-Mirror-Inline.md, the
+ * `createBulbFrame` sandbox). A ````bulb```` inline bulb is attacker-influenced content
  * (assistant transcript), compiled into a `sandbox="allow-scripts"` srcdoc iframe and
  * mounted inside the *privileged* mirror page. The whole isolation rests on the iframe's
  * opaque origin: it must not be able to (a) drive the host's privileged `/__fs`, nor
@@ -18,14 +18,14 @@ import { freePort } from './harness/servers.js'
  * from a `trusted: true` server (the privileged-mirror analog), so a successful write
  * would be node-grade.
  *
- * The embed signals `embedRan` so a missing pwned file means "blocked", never "never fired".
+ * The inline bulb signals `embedRan` so a missing pwned file means "blocked", never "never fired".
  *
- * Scope: this proves the *property* — an `allow-scripts`-only opaque-origin embed cannot reach
+ * Scope: this proves the *property* — an `allow-scripts`-only opaque-origin inline bulb cannot reach
  * the privileged host. It replicates the sandbox attribute rather than importing `createBulbFrame`,
  * so it does NOT guard that `createBulbFrame` still *emits* `allow-scripts` (no `allow-same-origin`);
  * that one-line invariant lives at [render.ts](../../src/render.ts) (`setAttribute('sandbox', …)`,
  * marked SECURITY INVARIANT). Verified red→green: switching the iframe below to
- * `allow-scripts allow-same-origin` makes the embed same-origin, the CSRF guard passes, and the
+ * `allow-scripts allow-same-origin` makes the inline bulb same-origin, the CSRF guard passes, and the
  * privileged write lands — so this test detects exactly that regression in the attribute it asserts.
  */
 
@@ -41,28 +41,28 @@ async function pollExists(file: string, ms: number): Promise<boolean> {
   return false
 }
 
-// The hostile embed's body (runs inside the allow-scripts srcdoc, opaque origin). It tries
+// The hostile inline bulb's body (runs inside the allow-scripts srcdoc, opaque origin). It tries
 // the two escalations, then reports it ran. `\/` keeps the closing tag out of this template.
 const EVIL_EMBED = `<!doctype html><meta charset=utf-8><body>evil<script>
 (async () => {
   let domRead = 'blocked';
   try { domRead = String(top.document.body.innerHTML).slice(0, 40); } catch (e) { domRead = 'threw:' + e.name; }
   // The money attack: drive the privileged host endpoint from the sandbox.
-  try { await fetch('/__fs/write?path=embed-pwned.txt', { method: 'POST', body: 'owned-by-embed' }); } catch (e) {}
+  try { await fetch('/__fs/write?path=inline bulb-pwned.txt', { method: 'POST', body: 'owned-by-inline bulb' }); } catch (e) {}
   parent.postMessage({ embedRan: true, domRead }, '*');
 })();
 <\/script></body>`
 
-// The privileged host page: mounts the hostile embed exactly as createBulbFrame does
-// (sandbox="allow-scripts", srcdoc), and records what the embed reports.
+// The privileged host page: mounts the hostile inline bulb exactly as createBulbFrame does
+// (sandbox="allow-scripts", srcdoc), and records what the inline bulb reports.
 function hostHtml(): string {
   return `<!doctype html><meta charset=utf-8><body>privileged host
 <iframe id="f" sandbox="allow-scripts" style="width:100%;height:320px;border:0"></iframe>
 <script>
-  window.__embedRan = false;
+  window.__inlineRan = false;
   window.__domRead = '';
   window.addEventListener('message', e => {
-    if (e && e.data && e.data.embedRan) { window.__embedRan = true; window.__domRead = e.data.domRead; }
+    if (e && e.data && e.data.embedRan) { window.__inlineRan = true; window.__domRead = e.data.domRead; }
   });
   document.getElementById('f').srcdoc = ${JSON.stringify(EVIL_EMBED).replace(/<\//g, '<\\/')};
 <\/script></body>`
@@ -75,7 +75,7 @@ let hostDir: string
 beforeAll(async () => {
   browser = await chromium.launch()
   hostDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-embedhost-'))
-  // trusted: true — the privileged origin. If the sandbox leaked, the embed's write to
+  // trusted: true — the privileged origin. If the sandbox leaked, the inline bulb's write to
   // /__fs would actually land here.
   host = await startServer({ getHtml: hostHtml, basePath: hostDir, port: await freePort(), trusted: true })
 }, 60_000)
@@ -86,17 +86,17 @@ afterAll(async () => {
   if (hostDir) fs.rmSync(hostDir, { recursive: true, force: true })
 })
 
-describe('a malicious allow-scripts embed cannot escape into the privileged host', () => {
+describe('a malicious allow-scripts inline bulb cannot escape into the privileged host', () => {
   it('cannot drive the host\'s privileged /__fs, nor read its DOM', async () => {
     const page = await browser.newPage()
     await page.goto(`http://localhost:${host.port}`)
-    // Wait until the embed has actually executed (so a missing file = blocked, not unfired).
-    await page.waitForFunction('window.__embedRan === true', undefined, { timeout: 10_000 })
+    // Wait until the inline bulb has actually executed (so a missing file = blocked, not unfired).
+    await page.waitForFunction('window.__inlineRan === true', undefined, { timeout: 10_000 })
     const domRead = await page.evaluate('window.__domRead') as string
 
-    // The privileged write must NOT land: the opaque-origin embed is cross-site to the host,
+    // The privileged write must NOT land: the opaque-origin inline bulb is cross-site to the host,
     // so the CSRF guard refuses it (and there is no allow-same-origin to make it same-origin).
-    const landed = await pollExists(path.join(hostDir, 'embed-pwned.txt'), 4_000)
+    const landed = await pollExists(path.join(hostDir, 'inline bulb-pwned.txt'), 4_000)
     await page.close()
 
     expect(landed).toBe(false)                 // sandbox + CSRF held

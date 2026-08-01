@@ -29,9 +29,9 @@ export { baseResetStyle, pageHeightStyle } from 'typebulb/format'
  * The no-flash theme engine, injected into <head>. Sets `html[data-theme]` before
  * stylesheets paint (no flash) and exposes the `tb.theme` accessor via
  * `window.__tbTheme`. The override is persisted per-page in localStorage keyed by
- * `name`; its absence means follow the OS. A host-forced `theme` (a bulb embedded in
+ * `name`; its absence means follow the OS. A host-forced `theme` (a bulb inline in
  * a bulb, whose sandboxed iframe can't read the host's localStorage) outranks the OS
- * but not an explicit in-iframe override, so the user can still toggle an embed
+ * but not an explicit in-iframe override, so the user can still toggle an inline bulb
  * independently. Ctrl/Cmd+Shift+L toggles the effective theme. See Specs/Theme.md.
  */
 export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string {

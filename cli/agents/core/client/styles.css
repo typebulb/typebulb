@@ -1340,7 +1340,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .md summary:hover { color: var(--accent); }
 
 /* The full-lane breakout geometry, defined ONCE and shared by the two breakouts (the mermaid
-   embed and a spread bulb). `100%` in --lane-ml resolves against each user's own containing block
+   inline bulb and a spread bulb). `100%` in --lane-ml resolves against each user's own containing block
    (prose width) at point of use, so both centre on the column axis — which is the viewport centre,
    since the gutters are symmetric. One home so the geometry can't drift between the two (the bug
    that let an off-centre nudge survive in one rule after being removed from the other). */
@@ -1356,7 +1356,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .md .mermaid {
   width: var(--lane-w);
   /* Vertical gap must be >= the box-shadow spread (1rem below): a smaller gap lets the bg ring
-     paint over the half-line of prose above/below — the trap the opaque bulb embed dodges by
+     paint over the half-line of prose above/below — the trap the opaque bulb inline bulb dodges by
      having no shadow, which the transparent mermaid can't. */
   margin: 1rem 0;
   margin-left: var(--lane-ml);
@@ -1369,9 +1369,9 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 /* Diagram specifics: scroll when wider than the lane; `safe center` centres one that fits and
    left-aligns one that overflows, so a wide flowchart scrolls from its start node. The SVG is
    transparent, so the turn stripe the breakout crosses shows through it — a bg box-shadow backs
-   the diagram to occlude it (and clears the h-scrollbar edge). The bulb embed is opaque (its
+   the diagram to occlude it (and clears the h-scrollbar edge). The bulb inline bulb is opaque (its
    iframe fills the box), so it occludes the stripe itself and gets NO shadow — a shadow there
-   would paint its 1rem ring over the half-line of prose just above the embed (the gap is .6rem). */
+   would paint its 1rem ring over the half-line of prose just above the inline bulb (the gap is .6rem). */
 .md .mermaid {
   overflow-x: auto;
   display: flex;
@@ -1425,14 +1425,14 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   margin-right: auto;
 }
 
-/* ````bulb```` embeds: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
+/* ````bulb```` inline bulbs: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
    borderless). No frame of our own — like the mermaid/svg embeds, it sits in the flow rather
    than in a box, so it reads as part of the transcript; the rounded clip just tidies the corners
    of a bulb that paints its own background. `fit` (default) keeps it in the prose column and
    caps its height (below); `spread` adds full-lane breakout + spacing from the shared rule above.
    position:relative anchors the controls overlay in BOTH modes (spread re-declares it for the
    z-index lift). .err is the compile-failure fallback; .bulb-err-strip is a runtime-error strip
-   under a live embed (both monospace, muted red). */
+   under a live inline bulb (both monospace, muted red). */
 /* The stripe-chop, shared by every opaque in-column visual artifact (the fit bulb and a raw
    `svg` — each opts in by carrying `.embed`). An opaque bg over position:relative + z-index:0
    paints above .bubble::before; a -1rem left extension reaches the stripe in the gutter without a
@@ -1442,7 +1442,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    stub in a transparent gap), symmetric above/below to separate the artifact from surrounding text.
    margin top/bottom are zeroed — and the abutting prose margins too (below) — so the gap butts the
    text. Mermaid is NOT on this path: it's transparent and breaks out, occluding via box-shadow.
-   Per-artifact layout (flex direction, centring) lives on .bulb-embed / .svg-embed. */
+   Per-artifact layout (flex direction, centring) lives on .bulb-inline / .svg-embed. */
 .md .embed {
   display: flex;
   position: relative;
@@ -1453,45 +1453,45 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 }
 /* A bulb stacks its controls/frame/code vertically; in spread mode the inner iframe's own
    breakout covers the stripe too (the wrapper still chops in column). */
-.md .bulb-embed { flex-direction: column; }
-/* Inline (default): cap the embed's height so a tall bulb doesn't run away down the transcript.
-   Past the cap the embed scrolls internally (its own overflow, set by the host↔embed protocol —
+.md .bulb-inline { flex-direction: column; }
+/* Inline (default): cap the inline bulb's height so a tall bulb doesn't run away down the transcript.
+   Past the cap the inline bulb scrolls internally (its own overflow, set by the host↔inline bulb protocol —
    the iframe element can't scroll its srcdoc from out here). spread removes the cap. */
-.md .bulb-embed.fit iframe { max-height: 80dvh; }
+.md .bulb-inline.fit iframe { max-height: 80dvh; }
 /* The frame host is a layout-less wrapper (domeleon owns the node; we parent the live iframe into
-   it once) — display:contents lifts the iframe to be a flex child of .bulb-embed, so the sizing and
+   it once) — display:contents lifts the iframe to be a flex child of .bulb-inline, so the sizing and
    spread-breakout rules target it directly, exactly as when it was appended as a direct child. The
    code toggle hides it via .code-open rather than unmounting, so the bulb keeps its state. */
 .bulb-frame { display: contents; }
-.md .bulb-embed.code-open .bulb-frame { display: none; }
+.md .bulb-inline.code-open .bulb-frame { display: none; }
 /* Spread: the inner surface (live iframe, or the code view behind the toggle) breaks out to the
    lane while the wrapper stays in the prose column, so the controls hold at prose-right. Shares the
    --lane-* geometry; centred on the column axis so toggling spread doesn't shift a column-fitting
    bulb sideways. `width !important` beats createBulbFrame's inline width:100% on the iframe
    (harmless on the code view, which has none); both opaque, so position/z-index:0 lift them over
    the turn stripe they now cross. */
-.md .bulb-embed.spread iframe,
-.md .bulb-embed.spread > .bulb-code {
+.md .bulb-inline.spread iframe,
+.md .bulb-inline.spread > .bulb-code {
   width: var(--lane-w) !important;
   margin-left: var(--lane-ml);
   margin-right: auto;
   position: relative;
   z-index: 0;
 }
-/* Kill the transparent margin between an embed and the prose it abuts (top and bottom):
-   the embed's own opaque padding is the gap, and a leftover prose margin would let the
+/* Kill the transparent margin between an inline bulb and the prose it abuts (top and bottom):
+   the inline bulb's own opaque padding is the gap, and a leftover prose margin would let the
    turn stripe show through it as a stub past the last/next line of text. */
 .md :has(+ .embed) { margin-bottom: 0; }
 .md .embed + * { margin-top: 0; }
-/* The rounded clip lives on the inner surfaces, not the embed (whose padding is now the
+/* The rounded clip lives on the inner surfaces, not the inline bulb (whose padding is now the
    gap), so the bulb's own card — the iframe, or the code view behind the toggle — is
    what carries the corners. */
-.md .bulb-embed iframe,
-.md .bulb-embed > .bulb-code {
+.md .bulb-inline iframe,
+.md .bulb-inline > .bulb-code {
   border-radius: 8px;
 }
 /* Overlay pill: a small hover-revealed control floated at a container's
-   bottom-right, shared by the embed breakout button and the message copy button.
+   bottom-right, shared by the inline bulb breakout button and the message copy button.
    Muted at rest, accent on hover (instant, matching the status pills). The
    container supplies the reveal; per-button bits layer on top. Box shape, colors
    and vertical centering come from the shared word-pill rule (.pill, .token,
@@ -1529,7 +1529,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 /* Controls (code ⇄ run, then copy, then breakout) — a centered overlay straddling the
    bulb's top edge: clear of the running bulb below, free to overlap the prose above.
    Absolute, so toggling run↔code (which resizes the bulb below) never moves it, and so
-   the bulb's vertical gap stays small. Revealed on embed-hover or focus; inside the row
+   the bulb's vertical gap stays small. Revealed on inline bulb-hover or focus; inside the row
    the shared .overlay-pill drops its own corner-anchoring. */
 .md .bulb-controls {
   position: absolute;
@@ -1541,7 +1541,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   transform: translateY(-50%);
 }
 .md .bulb-controls .overlay-pill { position: static; }
-.md .bulb-embed:hover .bulb-controls .overlay-pill,
+.md .bulb-inline:hover .bulb-controls .overlay-pill,
 .md .bulb-controls .overlay-pill:focus-visible { opacity: 1; }
 .md .bulb-breakout:disabled { cursor: default; opacity: 1; }
 /* Breakout in flight: shimmers through the ~2s write+spawn wait so the click reads as "working"
@@ -1549,7 +1549,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    :disabled already keeps it visible if the pointer leaves. */
 .md .bulb-breakout.launching { color: var(--accent); border-color: var(--accent); }
 /* Copy pill "copied" flash — mirrors the message .copy.done accent cue, scoped to the
-   embed control so it doesn't pick up the bubble-hover reveal. */
+   inline bulb control so it doesn't pick up the bubble-hover reveal. */
 .md .bulb-copy.done { color: var(--accent); border-color: var(--accent); }
 /* Source view behind the toggle — the bulb's .bulb.md rendered as markdown (file
    labels + fenced code panels via the shared .md rules). Just a scroll container
@@ -1584,7 +1584,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 }
 .md .bulb-code p:first-child { border-top: none; }
 .md .bulb-code p strong { font-weight: 600; color: var(--fg); }
-/* Code flush on the embed bg — drop the inherited .md pre box (border/bg/radius). */
+/* Code flush on the inline bulb bg — drop the inherited .md pre box (border/bg/radius). */
 .md .bulb-code pre {
   margin: 0;
   padding: .5rem .85rem .85rem;
@@ -1613,7 +1613,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 }
 .bulb-code .hljs-symbol, .diff-doc-body .hljs-symbol, .bulb-code .hljs-bullet, .diff-doc-body .hljs-bullet, .bulb-code .hljs-punctuation, .diff-doc-body .hljs-punctuation { color: var(--muted); }
 /* Draft-streaming bulb card (#draftBulbCard): the code view wearing a progress header — never a
-   live mount; the durable row's BulbEmbed takes this slot when the entry lands. Cap tighter than
+   live mount; the durable row's InlineBulb takes this slot when the entry lands. Cap tighter than
    .bulb-code's resting 480px: ambient progress, not reading material. */
 .md .bulb-streaming { flex-direction: column; }
 .md .bulb-streaming > .bulb-code { max-height: 220px; border-radius: 0 0 8px 8px; }
@@ -1629,7 +1629,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   color: var(--muted);
 }
 .bulb-streaming-count { margin-left: auto; font-variant-numeric: tabular-nums; }
-.md .bulb-embed.err {
+.md .bulb-inline.err {
   padding: .6rem .8rem;
   font-family: ui-monospace, monospace;
   font-size: .85em;
@@ -1712,12 +1712,12 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   --turn-color: transparent;
 }
 
-/* A superseded embed (an earlier same-name version) folds to this "💡 <Name> — Version N" stub — it
+/* A superseded inline bulb (an earlier same-name version) folds to this "💡 <Name> — Version N" stub — it
    reclaims the bulb's full height. Marker-green text (--fold-marker: lime in dark, deep green in light)
    on a neutral gray fill (--panel) that hugs the text (width:max-content), no border: text-hugging and
    borderless keeps it distinct from the page's full-width bordered panels and clear of the live bulb's
    hover pills, and the colored title rides a gray pill rather than a green block. Its look never depends
-   on outcome: errors show only inside the embed when expanded, so the title never changes. Click to
+   on outcome: errors show only inside the inline bulb when expanded, so the title never changes. Click to
    expand the older bulb (rerun fresh) back in. */
 .bulb-fold {
   display: flex;

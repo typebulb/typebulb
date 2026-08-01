@@ -3,7 +3,7 @@ import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
 import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
 import { CopyButton } from './copyButton.js'
-import { BulbEmbed } from './bulbEmbed.js'
+import { InlineBulb } from './inlineBulb.js'
 import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
 import { asStr, turnClassFor, displayPath } from './util.js'
@@ -123,7 +123,7 @@ function summarizeSteps(msgs: Msg[]): string {
   return `${n} step${n === 1 ? '' : 's'}${tally ? ` · ${tally}` : ''}`
 }
 
-// Flip membership of a key in an expand/open Set. The mirror's collapsibles (tools, turns, embeds,
+// Flip membership of a key in an expand/open Set. The mirror's collapsibles (tools, turns, inline bulbs,
 // forks) all toggle this way; callers add their own follow-up (update / recomputeChains).
 function toggleInSet<T>(set: Set<T>, key: T): void {
   if (set.has(key)) set.delete(key); else set.add(key)
@@ -137,14 +137,14 @@ export class MessageList extends Component {
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedTurns = new Set<number>()                // turn indices the user expanded past the collapsed summary
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
-  expandedEmbeds = new Set<string>()               // embed keys whose folded (superseded) version the user re-expanded
+  expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
-  bulbEmbeds: BulbEmbed[] = []                      // ditto — one per ````bulb```` embed across the transcript
+  inlineBulbs: InlineBulb[] = []                      // ditto — one per ````bulb```` inline bulb across the transcript
   scrollEl?: HTMLElement
 
   #idSeq = 0
-  #embedSeq = 0
-  #superseded = new Set<BulbEmbed>()               // recomputed per chain pass; drives fold-vs-live in #renderBody
+  #inlineSeq = 0
+  #superseded = new Set<InlineBulb>()               // recomputed per chain pass; drives fold-vs-live in #renderBody
   #stuckToBottom = true
   #draftScroll = new Map<number, { top: number; stuck: boolean }>()  // per-card scroll state across draft remounts (see #draftBulbCard; the thinking pre parks under -1)
   #draftLen = 0                                    // shrink detector: a new in-flight message resets the card scroll state
@@ -158,15 +158,15 @@ export class MessageList extends Component {
   // ===== Public mutators called by Root =====
 
   clear() {
-    for (const e of this.bulbEmbeds) e.dispose()
+    for (const e of this.inlineBulbs) e.dispose()
     this.messages = []
     this.expandedTurns.clear()
     this.expandedForks.clear()
-    this.expandedEmbeds.clear()
+    this.expandedInlineBulbs.clear()
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
     this.copyButtons = []
-    this.bulbEmbeds = []
+    this.inlineBulbs = []
   }
 
   // A copy button registered in copyButtons so domeleon discovers/manages it.
@@ -238,7 +238,7 @@ export class MessageList extends Component {
     const prev = this.messages[this.messages.length - 2]
     msg.turnCopy = (prev?.role === 'assistant' && prev.turnCopy) || this.#makeCopy('')
     msg.turnCopy.setText(this.#turnProseText())
-    this.#attachEmbeds(msg, e.text)
+    this.#attachInlineBulbs(msg, e.text)
     this.#recomputeChains()
     // Auto-expand live edits; leave historical (replayed) ones collapsed.
     if (e.live) {
@@ -248,40 +248,40 @@ export class MessageList extends Component {
     }
   }
 
-  // Live ````bulb```` embeds: split the text into markdown chunks + bulb sources, turning each
-  // source into a BulbEmbed registered in bulbEmbeds (so domeleon manages it) and stored on
+  // Live ````bulb```` inline bulbs: split the text into markdown chunks + bulb sources, turning each
+  // source into a InlineBulb registered in inlineBulbs (so domeleon manages it) and stored on
   // msg.body for #renderBody. Only messages with a bulb fence get a body; the rest stay plain.
-  #attachEmbeds(msg: Msg, text: string) {
+  #attachInlineBulbs(msg: Msg, text: string) {
     const segs = splitBulbSegments(text)
     if (!segs.some(s => s.kind === 'bulb')) return
     msg.body = segs.map(s => {
       if (s.kind === 'md') return s.text
-      const embed = new BulbEmbed(s.source, `embed-${this.#embedSeq++}`)
-      this.bulbEmbeds.push(embed)
-      return embed
+      const bulb = new InlineBulb(s.source, `inline-${this.#inlineSeq++}`)
+      this.inlineBulbs.push(bulb)
+      return bulb
     })
   }
 
-  // Recompute same-name chain state (TB-Agent-Mirror-Embed.md, Iteration): mark superseded
-  // embeds and set each embed's mount state — only a run's live tail (or one the user re-expanded) stays
-  // mounted; the rest unmount so they stop taking height and processing. Runs when embeds are added or an
+  // Recompute same-name chain state (TB-Agent-Mirror-Inline.md, Iteration): mark superseded
+  // inline bulbs and set each inline bulb's mount state — only a run's live tail (or one the user re-expanded) stays
+  // mounted; the rest unmount so they stop taking height and processing. Runs when inline bulbs are added or an
   // expansion toggles, never during render (setMounted has side effects).
   #recomputeChains() {
-    const names = this.bulbEmbeds.map(e => e.name)
+    const names = this.inlineBulbs.map(e => e.name)
     const flags = supersededFlags(names)
     const pos = chainPositions(names)
-    this.#superseded = new Set(this.bulbEmbeds.filter((_, i) => flags[i]))
-    // Position before mount: the status forward tags lines `v<N>`, so an embed must know its position
+    this.#superseded = new Set(this.inlineBulbs.filter((_, i) => flags[i]))
+    // Position before mount: the status forward tags lines `v<N>`, so an inline bulb must know its position
     // before anything it logs (setMounted can kick off the compile). Mount the live tail, plus any
     // folded version the user has expanded (so its render/error shows).
-    this.bulbEmbeds.forEach((e, i) => {
+    this.inlineBulbs.forEach((e, i) => {
       e.setChainPosition(pos[i]!)
-      e.setMounted(!flags[i] || this.expandedEmbeds.has(e.key))
+      e.setMounted(!flags[i] || this.expandedInlineBulbs.has(e.key))
     })
   }
 
-  #toggleEmbed(key: string) {
-    toggleInSet(this.expandedEmbeds, key)
+  #toggleInline(key: string) {
+    toggleInSet(this.expandedInlineBulbs, key)
     this.#recomputeChains()
     this.update()
   }
@@ -294,14 +294,14 @@ export class MessageList extends Component {
   // An abandoned branch the server surfaced at this point in the stream (TB-LostMessage.md). It rides in
   // as a `fork`-role pseudo-message whose position in `messages` IS the fork parent's slot (the event
   // arrives right after the parent's own events). Its orphan content is pre-built into `sub` Msgs now,
-  // rendered read-only only when the stub is expanded — no live embeds, no copy pills.
+  // rendered read-only only when the stub is expanded — no live inline bulbs, no copy pills.
   applyFork(e: Extract<ServerEvent, { type: 'fork' }>) {
     const sub = this.#buildSubMessages(e.events)
     this.#addMessage({ id: ++this.#idSeq, role: 'fork', text: '', thinking: '', tools: [], fork: { count: e.count, sub } })
   }
 
   // Turn an orphan branch's server events into renderable Msgs — a trimmed twin of applyUser/
-  // applyAssistant/applyToolResult (no embeds, no copy buttons, no chain bookkeeping): orphan content
+  // applyAssistant/applyToolResult (no inline bulbs, no copy buttons, no chain bookkeeping): orphan content
   // is historical and read-only, so it needs only text, thinking, and tool rows.
   #buildSubMessages(events: ServerEvent[]): Msg[] {
     const out: Msg[] = []
@@ -414,7 +414,7 @@ export class MessageList extends Component {
     return div({ class: 'masthead', key: 'masthead' },
       img({ class: 'masthead-logo light', src: LOGO_LIGHT, alt: 'typebulb' }),
       img({ class: 'masthead-logo dark', src: LOGO_DARK, alt: 'typebulb' }),
-      div({ class: 'masthead-tagline' }, 'a live mirror of your agent’s session, with embedded bulbs, latex, svg, mermaid and more'),
+      div({ class: 'masthead-tagline' }, 'a live mirror of your agent’s session, with inline bulbs, latex, svg, mermaid and more'),
     )
   }
 
@@ -459,8 +459,8 @@ export class MessageList extends Component {
 
   // Draft text with a bulb in it renders the bulb as a capped code card, not prose — an unclosed
   // trailing fence parses as a fence-to-end-of-input, so splitBulbSegments catches a bulb
-  // mid-stream for free. The ephemeral draft never mounts a live embed; the durable row's
-  // BulbEmbed takes the same slot when the entry lands (the card "flips from code to run").
+  // mid-stream for free. The ephemeral draft never mounts a live inline bulb; the durable row's
+  // InlineBulb takes the same slot when the entry lands (the card "flips from code to run").
   #draftBody(key: string, text: string) {
     const segs = splitBulbSegments(text)
     if (!segs.some(s => s.kind === 'bulb')) return this.#mdDiv(key, renderMarkdown(text))
@@ -625,34 +625,34 @@ export class MessageList extends Component {
     return undefined
   }
 
-  // The message body. With live ````bulb```` embeds it's an ordered run of markdown chunks and
-  // BulbEmbed components (msg.body); otherwise the single markdown div — user prompts through
+  // The message body. With live ````bulb```` inline bulbs it's an ordered run of markdown chunks and
+  // InlineBulb components (msg.body); otherwise the single markdown div — user prompts through
   // userMarkdown (clickable @mentions, merged sends), assistant text through renderMarkdown.
   #renderBody(msg: Msg) {
     if (msg.body) {
       return msg.body.flatMap((seg, i) =>
         typeof seg === 'string'
           ? (seg.trim() ? [this.#mdDiv(`md-${msg.id}-${i}`, renderMarkdown(seg))] : [])
-          : this.#renderEmbed(seg))
+          : this.#renderInline(seg))
     }
     if (!msg.text) return null
     return this.#mdDiv(`md-${msg.id}`, msg.role === 'user' ? userMarkdown(msg) : renderMarkdown(msg.text))
   }
 
-  // A live or lone embed renders its app. A superseded one folds to a "<Name> — Version N" stub whose
-  // look never depends on outcome (TB-Agent-Mirror-Embed.md, Iteration): it's always the accent marker, so the title
+  // A live or lone inline bulb renders its app. A superseded one folds to a "<Name> — Version N" stub whose
+  // look never depends on outcome (TB-Agent-Mirror-Inline.md, Iteration): it's always the accent marker, so the title
   // never flips color on expand/collapse. Expanding mounts the old bulb and shows it beneath — its render,
-  // or a "could not render" message, with any error in the embed's own red strip; collapsing unmounts it,
+  // or a "could not render" message, with any error in the inline bulb's own red strip; collapsing unmounts it,
   // so re-expanding runs it fresh. Whether that version errored shows only while it's open.
-  #renderEmbed(embed: BulbEmbed) {
-    if (!this.#superseded.has(embed)) return [embed.view()]
-    const expanded = this.expandedEmbeds.has(embed.key)
-    const stub = div({ class: 'md', key: `fold-${embed.key}` },
-      div({ class: 'bulb-fold', onClick: () => this.#toggleEmbed(embed.key) },
+  #renderInline(bulb: InlineBulb) {
+    if (!this.#superseded.has(bulb)) return [bulb.view()]
+    const expanded = this.expandedInlineBulbs.has(bulb.key)
+    const stub = div({ class: 'md', key: `fold-${bulb.key}` },
+      div({ class: 'bulb-fold', onClick: () => this.#toggleInline(bulb.key) },
         caret(expanded),
-        span({ class: 'bulb-fold-text' }, `${embed.name ?? 'bulb'} — Version ${embed.chainPosition}`),
+        span({ class: 'bulb-fold-text' }, `${bulb.name ?? 'bulb'} — Version ${bulb.chainPosition}`),
         span({ class: 'bulb-fold-app' }, '💡')))
-    return expanded ? [stub, embed.view()] : [stub]
+    return expanded ? [stub, bulb.view()] : [stub]
   }
 
   #mdDiv(key: string, mount: (el: Element) => void) {

@@ -4,21 +4,22 @@
  */
 
 import { reloadClientScript } from './pageChrome.js'
+import { MODE } from 'typebulb/format'
 
 export const typebulbShim = `
 (() => {
-  // Embedded (bulb-in-a-bulb): runs inside a sandboxed iframe with no parent
+  // Inline (bulb-in-a-bulb): runs inside a sandboxed iframe with no parent
   // bridge, so privileged tb.* (AI, fs, server RPC) can't reach a host and would
   // otherwise fail with cryptic CORS/CSP errors. Detect it and fail clearly.
   //
-  // The host injects window.__TB_EMBED_ERR__ to override the text; absent it, the
+  // The host injects window.__TB_INLINE_ERR__ to override the text; absent it, the
   // nested-bulb wording applies. (The CLI's untrusted launch is NOT this path — it's
   // a top-level page, and its \`--trust\` message comes from the server 403.)
-  const isEmbedded = window.parent !== window;
-  const embedErr = (name) => new Error(
-    typeof window.__TB_EMBED_ERR__ === 'function'
-      ? window.__TB_EMBED_ERR__(name)
-      : name + ' is not available in an embedded bulb (no host bridge).'
+  const isFramed = window.parent !== window;
+  const inlineErr = (name) => new Error(
+    typeof window.__TB_INLINE_ERR__ === 'function'
+      ? window.__TB_INLINE_ERR__(name)
+      : name + ' is not available in an inline bulb (no host bridge).'
   );
 
   // JSON parser (handles jsonish - unquoted keys)
@@ -38,7 +39,7 @@ export const typebulbShim = `
   // URL re-injects its run before the bulb code reads tb.insight()/tb.data() — the template's
   // module script awaits __tbBoot, so the async decode still lands ahead of synchronous startup
   // reads. Decode failure falls through to the file's own blocks with a console note.
-  if (!isEmbedded && location.protocol.indexOf('http') === 0 && location.hash.indexOf('#tb=') === 0) {
+  if (!isFramed && location.protocol.indexOf('http') === 0 && location.hash.indexOf('#tb=') === 0) {
     globalThis.__tbBoot = fetch('/__infer-decode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -76,7 +77,7 @@ export const typebulbShim = `
     throw new Error(err.error || 'Failed to ' + action + ' file: ' + path);
   };
   const fetchFileBytes = async (path) => {
-    if (isEmbedded) throw embedErr('tb.fs');
+    if (isFramed) throw inlineErr('tb.fs');
     const resp = await fetch('/__fs/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -96,7 +97,7 @@ export const typebulbShim = `
     },
     readBytes: async (path) => new Uint8Array(await fetchFileBytes(path)),
     write: async (path, content) => {
-      if (isEmbedded) throw embedErr('tb.fs');
+      if (isFramed) throw inlineErr('tb.fs');
       const resp = await fetch('/__fs/write?path=' + encodeURIComponent(path), {
         method: 'POST',
         body: content
@@ -119,10 +120,10 @@ export const typebulbShim = `
   // Diagnostic logging (tb.log). Routes to the UNGATED /__log endpoint, which only ever
   // runs the server's built-in console.log — never a user server.ts export — so it crosses no
   // capability boundary and works even on a Restricted (untrusted) bulb (the FAQ's recommended
-  // debugging path). Embedded bulbs have no host, and any transport failure degrades to the page's
+  // debugging path). Inline bulbs have no host, and any transport failure degrades to the page's
   // own console: a diagnostic log must never throw or block.
   const tbLog = async (...args) => {
-    if (isEmbedded) { console.log(...args); return; }
+    if (isFramed) { console.log(...args); return; }
     try {
       const resp = await fetch('/__log', {
         method: 'POST',
@@ -174,10 +175,10 @@ export const typebulbShim = `
     }
   }
 
-  // Shared /__ai transport: embed guard, POST (stream:true flags the NDJSON path — JSON.stringify
+  // Shared /__ai transport: inline bulb guard, POST (stream:true flags the NDJSON path — JSON.stringify
   // drops the key when undefined, so the non-streaming body is unchanged), 403 → trust hint.
   const aiFetch = async (what, { messages, system, effort, provider, model, webSearch, signal } = {}, stream) => {
-    if (isEmbedded) throw embedErr(what);
+    if (isFramed) throw inlineErr(what);
     const resp = await fetch('/__ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -216,7 +217,7 @@ export const typebulbShim = `
   let inferState = 'idle';
   let dataOverrides = null;
   const infer = (opts = {}) => {
-    if (isEmbedded) return Promise.reject(embedErr('tb.infer()'));
+    if (isFramed) return Promise.reject(inlineErr('tb.infer()'));
     if (inferState === 'running') return Promise.reject(new Error('Inference already in progress'));
     inferState = 'running';
     // Data priority (matching the .com sandbox): explicit arg > setData overrides > undefined —
@@ -267,7 +268,7 @@ export const typebulbShim = `
       body: JSON.stringify({ args })
     }));
     const single = async () => {
-      if (isEmbedded) throw embedErr(what);
+      if (isFramed) throw inlineErr(what);
       const resp = await start();
       await deny403(resp, what);
       if (isStreamResp(resp)) { const out = []; for await (const v of readStream(resp)) out.push(v); return out; }
@@ -276,7 +277,7 @@ export const typebulbShim = `
       return data.result;
     };
     const iterate = async function* () {
-      if (isEmbedded) throw embedErr(what);
+      if (isFramed) throw inlineErr(what);
       const resp = await start();
       await deny403(resp, what);
       if (isStreamResp(resp)) { yield* readStream(resp); return; }
@@ -309,16 +310,16 @@ export const typebulbShim = `
 
     // Model discovery - fetches catalog from typebulb.com, filtered by local API keys
     models: async () => {
-      if (isEmbedded) return [];
+      if (isFramed) return [];
       const resp = await fetch('/__models');
       if (!resp.ok) return [];
       return resp.json();
     },
 
     // AI-access check - 'own' when the user's own AI backs tb.ai (env keys, compat endpoint, or
-    // Ollama), else 'none': an embed has no host AI, and the CLI has no courtesy model
+    // Ollama), else 'none': an inline bulb has no host AI, and the CLI has no courtesy model
     aiAccess: async () => {
-      if (isEmbedded) return 'none';
+      if (isFramed) return 'none';
       const resp = await fetch('/__ai-access');
       if (!resp.ok) return 'none';
       return await resp.json();
@@ -336,7 +337,7 @@ export const typebulbShim = `
     // Proxy: rewrite CDN URLs to the local server's /proxy/. Absolute when we have a
     // real origin (the CLI page, or a broken-out bulb) so the URL also works from a
     // worker's importScripts, which rejects a root-relative path. Relative in a
-    // null-origin srcdoc embed, where prefixing the "null" origin would yield the
+    // null-origin srcdoc inline bulb, where prefixing the "null" origin would yield the
     // broken string null/proxy/... ; there the relative path resolves against the
     // host page. Absolute and root-relative are equivalent for every other consumer
     // (fetch, new Worker, script src) when there is one real origin, so this only
@@ -370,14 +371,14 @@ export const typebulbShim = `
 
     // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to server.ts or
     // spawned tools); tb.fs itself already resolves relative paths against it. Absent in an
-    // embed (no filesystem to name), where access throws like tb.fs.
+    // inline bulb (no filesystem to name), where access throws like tb.fs.
     get dir() {
-      if (isEmbedded || !window.__TB_DIR__) throw embedErr('tb.dir');
+      if (isFramed || !window.__TB_DIR__) throw inlineErr('tb.dir');
       return window.__TB_DIR__;
     },
 
     // Receive a value pushed from the terminal via \`typebulb send\` (data-in, the dual of the
-    // ungated tb.log). Returns an unsubscribe fn. Inert when embedded — no server, so no
+    // ungated tb.log). Returns an unsubscribe fn. Inert when inline — no server, so no
     // sender; the handler is registered but never fires (cf. tb.models returning []). A handler's
     // non-undefined return (awaited) becomes the reply \`send --wait\` prints (TB-Interrogation.md).
     onMessage: (handler) => {
@@ -385,8 +386,8 @@ export const typebulbShim = `
       return () => messageHandlers.delete(handler);
     },
 
-    // Environment ('embedded' when running as a bulb-in-a-bulb)
-    mode: isEmbedded ? 'embedded' : 'local',
+    // Environment ('inline' when running as a bulb-in-a-bulb)
+    mode: isFramed ? '${MODE.inline}' : '${MODE.local}',
 
     // Theme accessor - delegates to the head-script engine (window.__tbTheme).
     // Get: override slot ('dark'|'light'|undefined). Set applies + persists
@@ -787,9 +788,9 @@ export const typebulbShim = `
 
   // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
   // 'message' delivers \`typebulb send\` pushes to tb.onMessage. Connect for a CLI-served page (http
-  // origin, not an embed); a srcdoc embed or a file:// static export has no server, so onMessage just
+  // origin, not an inline bulb); a srcdoc inline bulb or a file:// static export has no server, so onMessage just
   // stays inert there. Opening it independent of watch is what lets send reach a --no-watch page.
-  if (!isEmbedded && location.protocol.indexOf('http') === 0) {
+  if (!isFramed && location.protocol.indexOf('http') === 0) {
 ${reloadClientScript}
     es.addEventListener('message', async (e) => {
       // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved

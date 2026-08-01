@@ -1,6 +1,6 @@
 # typebulb
 
-**Typebulb** runs apps in markdown files called **bulbs**. Perfect for tools, visualizations & experiments. A bulb is a single self-contained file, so an agent can embed a working app right in its reply, and the same file can be published as a stand-alone web app. The *"markdown with code blocks"* format is one LLMs find natural to write.
+**Typebulb** runs apps in markdown files called **bulbs**. Perfect for tools, visualizations & experiments. A bulb is a single self-contained file, so an agent can inline a working app right into its reply, and the same file can be published as a stand-alone web app. The *"markdown with code blocks"* format is one LLMs find natural to write.
 
 Two ways to create and run bulbs:
 
@@ -17,7 +17,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 
 - **Server-side code** — Add a `**server.ts**` section; exported functions become callable from the browser via `tb.server.<name>()` (e.g., `export async function query(...)` → `await tb.server.query(...)`). An `export async function*` **streams**: consume it with `for await (const chunk of tb.server.gen())`. Requires `--trust`.
 - **CLI logging** — `tb.log(...)` prints to the CLI's stdout, from `code.tsx` and `server.ts` alike (no trust needed)
-- **Wake-on-event** — `typebulb wait <file|agent>` blocks until the target server logs a new line, prints it, and exits. Run in the background, that exit *is* an agent's wake-up: a user action a bulb logs, or an embed's render outcome — no polling.
+- **Wake-on-event** — `typebulb wait <file|agent>` blocks until the target server logs a new line, prints it, and exits. Run in the background, that exit *is* an agent's wake-up: a user action a bulb logs, or an inline bulb's render outcome — no polling.
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
 - **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
@@ -30,7 +30,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 - **`tb.infer()`** — one-shot runtime inference over the bulb's own blocks (`infer.md` + `data.txt` → `insight.json`), with a confirmation modal, streaming, and share/save of a good run. Requires `--trust`.
 - **Restricted by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces a Restricted run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
-- **Agent mirror** — a browser view of your coding agent's sessions, rendering embedded bulbs, KaTeX, and mermaid live inline, plus runs/stops local bulbs. On Pi it also carries a prompt panel, so the user can drive their pi sessions from the mirror directly. `typebulb agent` brings it up, auto-detecting your harness (Claude Code, Codex, or Pi).
+- **Agent mirror** — a browser view of your coding agent's sessions, rendering inline bulbs, KaTeX, and mermaid live in the conversation, plus runs/stops local bulbs. On Pi it also carries a prompt panel, so the user can drive their pi sessions from the mirror directly. `typebulb agent` brings it up, auto-detecting your harness (Claude Code, Codex, or Pi).
 - **Proxying Claude** — the agent mirror lets you proxy Claude with a model from [OpenRouter](https://openrouter.ai). This will apply to your project only.
 
 ## Usage
@@ -183,8 +183,8 @@ npm install -g typebulb
 
 `tb` is a pre-declared global your code can use without importing. One access rule covers the whole
 table: the *Needs trust* rows are the privileged tier — locally they 403 until the run is trusted
-(`--trust`), and they are exactly the calls an **embedded** bulb doesn't have at all (an embed can
-never be trusted; the call throws `"not available in an embedded bulb"`). Everything else works
+(`--trust`), and they are exactly the calls an **inline** bulb doesn't have at all (an inline bulb
+can never be trusted; the call throws `"not available in an inline bulb"`). Everything else works
 everywhere.
 
 | API | What it does | Needs trust |
@@ -192,15 +192,15 @@ everywhere.
 | `tb.data(n)` / `tb.json(n)` | Read data chunk `n` from the `data.txt` block — raw string, or parsed JSON | |
 | `tb.insight()` | Read the `insight.json` block as JSON | |
 | `tb.theme` | Get/set the light/dark override; `undefined` follows the OS | |
-| `tb.mode` | Runtime mode — `'local'` (CLI) or `'embedded'` (sandboxed iframe); `'editor'`/`'published'` on typebulb.com | |
+| `tb.mode` | Runtime mode — `'local'` (CLI) or `'inline'` (sandboxed iframe); `'ide'`/`'published'` on typebulb.com | |
 | `tb.proxy(url)` | Rewrite a CDN URL to load through the host origin (Web Worker / WASM) | |
 | `tb.dump(...)` | Log values (incl. lazy / device-backed tensors) to the browser console | |
 | `tb.copy(text)` | Copy text to the clipboard | |
 | `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
-| `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when embedded (no host AI) | |
+| `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when inline (no host AI) | |
 | `tb.aiAccess()` | What backs `tb.ai` — `'own' \| 'courtesy' \| 'none'` | |
 | `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
-| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when embedded (no sender) | |
+| `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when inline (no sender) | |
 | `tb.fs.read/readBytes/write` | Read and write local files | yes |
 | `tb.dir` | The bulb's folder (absolute path), where relative `tb.fs` paths land | |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | yes |
@@ -208,49 +208,49 @@ everywhere.
 | `tb.ai.stream({ … })` | Streaming AI — `for await` an `AsyncIterable<{ kind, text }>` of deltas | yes |
 | `tb.infer()` | One-shot LLM call driven by the `infer.md` block — opens a confirmation modal, streams, updates `tb.insight()` | yes |
 
-- **Embeds also have no persistent storage** (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail — a client-only sandboxed iframe), so keep state in memory. `tb.mode === 'embedded'` lets a bulb detect this and self-adjust.
+- **Inline bulbs also have no persistent storage** (`localStorage`, `IndexedDB`, cookies, same-origin Workers all fail — a client-only sandboxed iframe), so keep state in memory. `tb.mode === 'inline'` lets a bulb detect this and self-adjust.
 - **`tb.proxy` only rewrites allow-listed CDNs** — `esm.sh`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`; any other host 403s. Serve a WASM/worker asset (a tesseract or ffmpeg core, a pdf.js worker) from one of these.
 
 ## Agent Harness Support
 
 The agent mirror gives the user a great scratchpad experience for the **Claude Code**, **Codex**, and **Pi** agent harnesses (`npx typebulb agent:{claude|codex|pi}`). This lets the user:
 
-* view the project's conversations/sessions, where assistant messages containing bulbs render as embedded bulbs inline in the conversation, alongside KaTeX math, mermaid diagrams and svg.
+* view the project's conversations/sessions, where assistant messages containing bulbs render as inline bulbs in the conversation, alongside KaTeX math, mermaid diagrams and svg.
 * run and stop any bulb in their project.
-* promote any embedded bulb to a `.bulb.md` file in the `typebulbs/` folder.
+* promote any inline bulb to a `.bulb.md` file in the `typebulbs/` folder.
 
 Start it yourself with `npx typebulb agent` (it auto-detects your harness) — don't wait for the user — and end your reply with the localhost link it prints: it's the user's next click, and a link buried mid-message gets missed.
 
 One exception: if `TYPEBULB_MIRROR=1` is set in your environment, the user is prompting you from the mirror itself — it's already open in front of them, so skip `npx typebulb agent` and don't end with its link; just emit bulbs.
 
-### When agents should output local vs embedded bulbs
+### When agents should output local vs inline bulbs
 
-- **First, can it even embed?** A bulb needing `tb.ai`, `tb.infer`, `tb.fs`, or `server.ts` must be **local** — embeds are client-only, so those calls fail there. The choice below is only for client-only bulbs.
-- **Is anyone watching?** An embed only renders live when the agent mirror is open; with none it shows as raw text. `npx typebulb agent` starts the mirror if needed and prints its link — share it with the user; don't make the user start anything.
-- **Something to see right now, in the flow of the conversation** — a chart of some numbers, a quick simulation, an illustrative widget. → **embedded**: emit it in a `bulb` block so it renders live inline.
-- **A tool worth keeping** — something to reuse, run on its own, or refine over several turns. → **local**: write a `.bulb.md` file run with `npx typebulb`. An embedded block is throwaway and can't be edited in place, so it's the wrong fit for anything iterative.
+- **First, can it even run inline?** A bulb needing `tb.ai`, `tb.infer`, `tb.fs`, or `server.ts` must be **local** — inline bulbs are client-only, so those calls fail there. The choice below is only for client-only bulbs.
+- **Is anyone watching?** An inline bulb only renders live when the agent mirror is open; with none it shows as raw text. `npx typebulb agent` starts the mirror if needed and prints its link — share it with the user; don't make the user start anything.
+- **Something to see right now, in the flow of the conversation** — a chart of some numbers, a quick simulation, an illustrative widget. → **inline**: emit it in a `bulb` block so it renders live in the conversation.
+- **A tool worth keeping** — something to reuse, run on its own, or refine over several turns. → **local**: write a `.bulb.md` file run with `npx typebulb`. An inline block is throwaway and can't be edited in place, so it's the wrong fit for anything iterative.
 
-### Emitting an embedded bulb
+### Emitting an inline bulb
 
 To render a bulb live inline, wrap the **entire** bulb — frontmatter and all blocks — in a fenced code block whose opening line is **four backticks immediately followed by `bulb`**, and whose closing line is four backticks. Four, not three, so the bulb's own triple-backtick code fences nest inside without prematurely closing the outer block.
 
-The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and Restricted unless you trust it. Embedded bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`/`tb.infer`, no storage.
+The agent mirror turns that block into a live, sandboxed app, with a *breakout ↗* control that saves it as a `.bulb.md` in the `typebulbs/` folder — editable with hot reload, and Restricted unless you trust it. Inline bulbs are client-only — no `server.ts`, no `tb.fs`/`tb.ai`/`tb.infer`, no storage.
 
-**Iterating on an embed?** Re-emit under the *same* `name:` to refine it (a different `name:` starts a separate bulb) — the mirror keeps the latest version live and folds each earlier one into an expandable stub in place, so the transcript shows the bulb's evolution, not a stack of repeated renders. Same move fixes a broken embed.
+**Iterating on an inline bulb?** Re-emit under the *same* `name:` to refine it (a different `name:` starts a separate bulb) — the mirror keeps the latest version live and folds each earlier one into an expandable stub in place, so the transcript shows the bulb's evolution, not a stack of repeated renders. Same move fixes a broken one.
 
-**An embed's outcome reads back — and can wake you.** The mirror forwards each embed's outcome to `typebulb logs agent`: `[embed <name> vN] ok`, or its compile/runtime error verbatim — so when one breaks, pull the error from the log instead of asking the user to copy-paste.
+**An inline bulb's outcome reads back — and can wake you.** The mirror forwards each inline bulb's outcome to `typebulb logs agent`: `[inline <name> vN] ok`, or its compile/runtime error verbatim — so when one breaks, pull the error from the log instead of asking the user to copy-paste.
 
-- **For an embed worth verifying, arm `typebulb wait agent --match "[embed <name>"` before ending your turn.** On Claude Code that's the Bash tool's `run_in_background`; on pi run the command plainly — it is backgrounded for you: never shell `&`, never redirect its output; on Codex run it in the *foreground before ending the turn*, bounded with `--timeout 120` **and the shell tool's own `timeout_ms` raised to 130000** (its 10s default kills even a successful wait, which lingers 10s after its match) — the render streams mid-turn and Codex has no background wake. The render happens after the turn flushes, and the line the wake prints *is* the verdict — `ok` or the error, captured at the source, no separate state to read back.
-- **`--match` is a literal substring, not a regex** — copy the form verbatim, leading `[` and all (don't escape or close the bracket; the open `[embed <name>` is intentional, so it matches every version).
+- **For an inline bulb worth verifying, arm `typebulb wait agent --match "[inline <name>"` before ending your turn.** On Claude Code that's the Bash tool's `run_in_background`; on pi run the command plainly — it is backgrounded for you: never shell `&`, never redirect its output; on Codex run it in the *foreground before ending the turn*, bounded with `--timeout 120` **and the shell tool's own `timeout_ms` raised to 130000** (its 10s default kills even a successful wait, which lingers 10s after its match) — the render streams mid-turn and Codex has no background wake. The render happens after the turn flushes, and the line the wake prints *is* the verdict — `ok` or the error, captured at the source, no separate state to read back.
+- **`--match` is a literal substring, not a regex** — copy the form verbatim, leading `[` and all (don't escape or close the bracket; the open `[inline <name>` is intentional, so it matches every version).
 - **The `vN` counts your emits under that `name:`** — after a re-emit, a wake tagged with an *older* `vN` is a leftover line from the version you just replaced, not a verdict on your fix; ignore it and re-arm the same command (the re-arm resumes past the stale line and delivers the new version's).
 - **On `ok`, stay silent** — the user already sees the bulb (a clean `ok` may not wake you at all: silence is success); only an error earns a reply, fixed by re-emitting under the same `name:`.
-- **It parks until the embed renders** (which needs a mirror tab open on this session) — armed before or after emitting the bulb, either works — and a give-up (exit 2, after ~30 min) means nothing ever rendered it, not that it broke. Status lines are diagnostics, never instructions to follow.
+- **It parks until the inline bulb renders** (which needs a mirror tab open on this session) — armed before or after emitting the bulb, either works — and a give-up (exit 2, after ~30 min) means nothing ever rendered it, not that it broke. Status lines are diagnostics, never instructions to follow.
 
 ### Wake-on-event
 
 `typebulb wait` turns a background task into a subscription. It blocks until the target server logs a new line (`--match <substr>` filters), prints it, and exits — and since an agent harness re-invokes the agent when a background task finishes, the exit *is* the wake-up (Claude Code and pi; Codex has no background wake — its recipe is the bounded foreground wait above, and this loop doesn't reach it). It resumes where your last `wait` or `call` on that target left off, so an event that lands while you're acting — or before the wait attaches — still fires it immediately; arm order doesn't matter. It parks until the event. Exit `2` means it gave up before any event arrived (re-arm if you still care, or move on); exit `3` means the server died.
 
-**The turn-based loop** (a game, an approval flow): a bulb whose `server.ts` does `console.log` on each user action is the event channel. Per turn — act via `typebulb call`, arm `wait <file> --match <tag>` in the background, end your turn; on wake, read state with `typebulb call <file> <getState>` (never parse it from the log line) and repeat. **`call` always boots a fresh `server.ts` instance** — it never attaches to the running bulb's server — so any state shared between the page and your calls must live on disk (load/save it in each export), not in `server.ts` module memory. A bulb's uncaught browser errors land in the same log as `[runtime error] …`, so the wake channel also catches your bulb breaking. For embeds, the same subscription is `typebulb wait agent` on the mirror — see [Emitting an embedded bulb](#emitting-an-embedded-bulb).
+**The turn-based loop** (a game, an approval flow): a bulb whose `server.ts` does `console.log` on each user action is the event channel. Per turn — act via `typebulb call`, arm `wait <file> --match <tag>` in the background, end your turn; on wake, read state with `typebulb call <file> <getState>` (never parse it from the log line) and repeat. **`call` always boots a fresh `server.ts` instance** — it never attaches to the running bulb's server — so any state shared between the page and your calls must live on disk (load/save it in each export), not in `server.ts` module memory. A bulb's uncaught browser errors land in the same log as `[runtime error] …`, so the wake channel also catches your bulb breaking. For inline bulbs, the same subscription is `typebulb wait agent` on the mirror — see [Emitting an inline bulb](#emitting-an-inline-bulb).
 
 **Keep every loop command argument-stable.** A harness that permission-matches exact command strings prompts the user on *every* event if varying data (a move, a payload) rides the command line. Keep it off: write the args to a fixed file and pipe them — `cat <bulb-folder>/args.json | typebulb call <file> <fn> --args -` — so each of the loop's commands is one constant string, approved once. `wait` and a `getState` call are constant already.
 
@@ -291,11 +291,11 @@ A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no 
 
 The host owns a bulb's **width**; you own its **height**.
 
-**Width is the host's.** Standalone, a bulb fills its browser window; in the agent mirror, an embed fits the conversation column by default, with a per-embed *spread* toggle to the full transcript width — and a cap so a tall embed doesn't run away down the transcript. Don't set a width or guess how much room you'll get. `max-width` is the one width worth setting — a readability cap that only declines excess, so it's safe at any granted width. It's also what *spread* runs into: a dense visualization that earns the full transcript width should omit it.
+**Width is the host's.** Standalone, a bulb fills its browser window; in the agent mirror, an inline bulb fits the conversation column by default, with a per-bulb *spread* toggle to the full transcript width — and a cap so a tall one doesn't run away down the transcript. Don't set a width or guess how much room you'll get. `max-width` is the one width worth setting — a readability cap that only declines excess, so it's safe at any granted width. It's also what *spread* runs into: a dense visualization that earns the full transcript width should omit it.
 
-**Height follows your content.** Set a height that adapts — content-driven or viewport-filling — never a fixed pixel value, which neither grows to fill a broken-out window nor shrinks to its content. Prose, a form, a chart flow to their natural height: set none. A full-bleed surface with no natural height of its own gets `height: 100dvh` **and** a pixel floor like `min-height: 420px`. Both are needed — `100dvh` fills its own window if the bulb is broken out, and the floor holds a definite band when embedded. Without the floor a bare `100dvh` collapses to zero embedded, because the mirror sizes an embed to its content height and `100dvh` gives it nothing to measure against. Chrome-plus-panel layouts (a header and controls above a board that should take the rest, no scrollbar) are the same case composed: make the `100dvh` element a flex column and give the panel `flex: 1; min-height: 0` — the remainder is sized by containment, never by measuring.
+**Height follows your content.** Set a height that adapts — content-driven or viewport-filling — never a fixed pixel value, which neither grows to fill a broken-out window nor shrinks to its content. Prose, a form, a chart flow to their natural height: set none. A full-bleed surface with no natural height of its own gets `height: 100dvh` **and** a pixel floor like `min-height: 420px`. Both are needed — `100dvh` fills its own window if the bulb is broken out, and the floor holds a definite band when inline. Without the floor a bare `100dvh` collapses to zero inline, because the mirror sizes an inline bulb to its content height and `100dvh` gives it nothing to measure against. Chrome-plus-panel layouts (a header and controls above a board that should take the rest, no scrollbar) are the same case composed: make the `100dvh` element a flex column and give the panel `flex: 1; min-height: 0` — the remainder is sized by containment, never by measuring.
 
-**Keep vertical space on the root in `padding`, not `margin`.** The mirror measures an embed by `document.body.scrollHeight`, and the runtime makes `body` a block formatting context so a root child's vertical margin (yours, or a UA default like `<h1>`'s) is contained rather than escaping the measurement — so you no longer have to get this exactly right. It's still cleaner to keep the horizontal `auto` for centering and move the vertical space to padding:
+**Keep vertical space on the root in `padding`, not `margin`.** The mirror measures an inline bulb by `document.body.scrollHeight`, and the runtime makes `body` a block formatting context so a root child's vertical margin (yours, or a UA default like `<h1>`'s) is contained rather than escaping the measurement — so you no longer have to get this exactly right. It's still cleaner to keep the horizontal `auto` for centering and move the vertical space to padding:
 
 ```css
 .wrap { margin: 0 auto; padding: 24px 16px; }   /* not: margin: 24px auto */
@@ -304,7 +304,7 @@ The host owns a bulb's **width**; you own its **height**.
 ## Tips for Agents
 
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
-- **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except embedded.
+- **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except inline.
 - **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).
 - **See what's already running** — `typebulb logs` with no argument lists every running bulb and mirror; check it before launching anything.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.log(...)`, and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
@@ -334,13 +334,13 @@ Typebulb has 3 trust tiers for a bulb, captured by 2 axes:
 
 |  | browser: **iframe** | browser: **top-level** |
 |---|:---:|:---:|
-| node access: **no** | **Embedded** | **Restricted** |
+| node access: **no** | **Inline** | **Restricted** |
 | node access: **yes** | — | **Trusted** |
 
 The 3 Tiers from least to most powerful:
 
-* **Embedded**: These bulbs live in an iframe, and have the most restricted capability. They're created by Typebulb's Agent Mirror when rendering chat files. When bulb-markdown is detected in your agent's replies, they're rendered as embedded bulbs. 
-* **Restricted**: These bulbs are launched as localhost pages. Unlike embedded bulbs, they can also access storage, cookies, web workers, WebGPU etc.
+* **Inline**: These bulbs live in an iframe, and have the most restricted capability. They're created by Typebulb's Agent Mirror when rendering chat files. When bulb-markdown is detected in your agent's replies, they're rendered as inline bulbs. 
+* **Restricted**: These bulbs are launched as localhost pages. Unlike inline bulbs, they can also access storage, cookies, web workers, WebGPU etc.
 * **Trusted**: These bulbs are the most powerful and must be explicitly marked as trusted. Unlike restricted bulbs, they can access node via your `server.ts` or via privileged `tb.*` functions such as `tb.fs` or `tb.ai`. To grant, call typebulb with `--trust` for one run, or `typebulb trust <file>` to remember it — per file, for your user account, across all your projects. Revoke a remembered grant with `typebulb untrust <file>`; `--no-trust` forces a single Restricted run without forgetting the grant.
 
 Here's a state transition diagram for the trust tiers:
@@ -348,15 +348,15 @@ Here's a state transition diagram for the trust tiers:
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> Embedded
+    [*] --> Inline
     [*] --> Restricted
-    Embedded --> Restricted: breakout
+    Inline --> Restricted: breakout
     Restricted --> Trusted: trust
     Trusted --> Restricted: untrust
 ```
 **Capability Summary Table**:
 
-| Capability | Embedded | Restricted | Trusted |
+| Capability | Inline | Restricted | Trusted |
 |---|:--:|:--:|:--:|
 | Run code in browser, access network including localhost | ✅ | ✅ | ✅ |
 | Use storage, cookies, background threads, and the GPU | 🚫 | ✅ | ✅ |
@@ -456,7 +456,7 @@ Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoni
 |-------|---------------|------------------|
 | `'own'` | The user's own keys, or their own local model server | Run everything |
 | `'courtesy'` | typebulb.com's quota-limited courtesy model | Fine for a call or two; a bulb that makes many (an agent loop, a model-vs-model game) shows a "use your own keys" notice instead of the run controls |
-| `'none'` | No AI at all — the CLI with no keys, or an embedded bulb | Say so; don't leave dead controls on screen |
+| `'none'` | No AI at all — the CLI with no keys, or an inline bulb | Say so; don't leave dead controls on screen |
 
 ```ts
 const [access, setAccess] = useState<AiAccess>("own");

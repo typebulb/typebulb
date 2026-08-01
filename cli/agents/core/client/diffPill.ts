@@ -5,8 +5,10 @@ import { searchFilter } from './ui.js'
 import { OverviewRuler, type RulerMark } from './overviewRuler.js'
 import { highlightToLines } from './markdown.js'
 
-// One changed file from gitChangedFiles; add/del ride from --numstat when known (absent ⇒ "new").
-interface ChangedFile { path: string; status: string; add?: number; del?: number }
+// One changed file from gitChangedFiles; add/del ride from --numstat when known. Absent counts mean
+// *unknown* (binary, or no content change once git normalizes) — never "new": only the status letter
+// says that, and reading absence as new mislabelled renames, binaries and eol-only rows.
+interface ChangedFile { path: string; status: string; add?: number; del?: number; binary?: boolean }
 type DiffKind = 'add' | 'del' | 'ctx' | 'gap'
 type DiffLine = { kind: DiffKind; text: string }
 
@@ -121,7 +123,7 @@ export class DiffPill extends ComboboxPill<never> {
     try {
       const { repo, root, files } = await tb.server.gitChangedFiles() as { repo: boolean; root: string; files: ChangedFile[] }
       const changed = repo !== this.repo || files.length !== this.files.length ||
-        files.some((f, i) => { const o = this.files[i]; return f.path !== o?.path || f.status !== o.status || f.add !== o.add || f.del !== o.del })
+        files.some((f, i) => { const o = this.files[i]; return f.path !== o?.path || f.status !== o.status || f.add !== o.add || f.del !== o.del || f.binary !== o.binary })
       this.repo = repo
       this.root = root
       this.files = files
@@ -245,7 +247,11 @@ export class DiffPill extends ComboboxPill<never> {
       span({ class: 'gitdiff-path', title: f.path }, f.path),
       f.add !== undefined || f.del !== undefined
         ? span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, `+${f.add ?? 0}`), span({ class: 'count-del' }, `−${f.del ?? 0}`))
-        : span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, 'new')),
+        // No counts: 'U' is genuinely untracked; anything else is unknown, so say nothing rather than
+        // claim. Neutral (classless) so only a real all-added row wears the add colour.
+        : f.status === 'U'
+          ? span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, 'new'))
+          : span({ class: 'gitdiff-counts' }, span({}, f.binary ? 'binary' : '—')),
     )
   }
 

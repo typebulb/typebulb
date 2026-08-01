@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   // Keep each harness's background-`wait` support in place (TB-Wait.md) — for pi,
   // a `wait`-intercepting extension written into its config. Through the adapter contract, not a direct
   // agents/ import. Runs on every invocation so the file is present across a session boundary well
-  // before any embed/turn wait (closing the activation gap — a just-placed shim isn't active until pi's
+  // before any inline bulb/turn wait (closing the activation gap — a just-placed shim isn't active until pi's
   // next session start). Gated on the harness being present (Claude-Code-only users get nothing
   // written) and never throws — at worst two stats on the hot path.
   ensureHarnessSupport()

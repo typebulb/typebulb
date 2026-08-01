@@ -2,8 +2,8 @@
  * Public node-side entry: the breakout server-management capability — launch, list,
  * and stop standalone bulb dev servers. Separate from the browser `.` entry (render.ts)
  * because this spawns processes and touches the on-disk registry, so it must never be
- * bundled into the self-contained browser build (Embed spec Invariant 6). Hosts of
- * embedded bulbs import this to graduate an embed into its own running server.
+ * bundled into the self-contained browser build (TB-Agent-Mirror-Inline.md Invariant 6). Hosts of
+ * inline bulbs import this to graduate an inline bulb into its own running server.
  */
 export { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, serverLogPath, type BulbServer } from './serve/serverRegistry.js'
 export { listBulbFiles, listBulbBatches, type BulbFileInfo } from './serve/bulbFiles.js'
@@ -13,7 +13,7 @@ export { lastRunTimes } from './serve/portBlocks.js'
 export { predictBulbTrust } from './serve/predictBulbTrust.js'
 export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
 // Derive missing config.json `dependencies` from a bulb's imports (TB-Lint-Transpile.md) — breakout
-// uses it so a promoted embed is a correct, runnable .bulb.md even when the author omitted config.json.
+// uses it so a promoted inline bulb is a correct, runnable .bulb.md even when the author omitted config.json.
 export { ensureDeclaredDependencies } from './bulb/deriveDeps.js'
 // Cross-platform editor launcher (open a cited file at a line). Agent-agnostic, so any mirror
 // bulb shares one resolved-editor, detached-spawn implementation instead of re-deriving it.

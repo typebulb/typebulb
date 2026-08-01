@@ -4,7 +4,7 @@
 //
 // The mirror engine (../server/mirror.ts) is harness-NEUTRAL; this barrel realizes it for Claude by
 // constructing it with the ClaudeAdapter, then re-exporting:
-//   - the engine's transcript RPCs (info/poll/listSessions/searchSessions/attach/logEmbedStatus),
+//   - the engine's transcript RPCs (info/poll/listSessions/searchSessions/attach/logInlineStatus),
 //   - the neutral launcher (breakout / bulb launcher / openFile — ../server/launcher.ts),
 //   - the Claude-only agent switcher + model probe (./server/switcher.ts — the wire proxy, which Pi
 //     does not have: TB-Agent-Switcher.md). `export *` runs switcher's boot reconcile on import.
@@ -19,7 +19,7 @@ const adapter = new ClaudeAdapter()
 export const displayName = adapter.displayName
 // composerPasteRead (read-only, paste-dir-scoped) rides along composer-less: any mirror renders a
 // paste-mention thumbnail it encounters in a transcript.
-export const { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
+export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'

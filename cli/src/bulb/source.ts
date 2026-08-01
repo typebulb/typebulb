@@ -1,7 +1,7 @@
 /**
  * Pure bulb-source helpers — name extraction, slugging, frontmatter stripping.
  * Isomorphic (no node builtins), so both the browser `.` entry and the node
- * `./servers` entry re-export them. Every host that writes/launches/embeds bulbs
+ * `./servers` entry re-export them. Every host that writes/launches/inline bulbs bulbs
  * re-derives these from the leading `---` frontmatter, so they're a capability,
  * not host code.
  */

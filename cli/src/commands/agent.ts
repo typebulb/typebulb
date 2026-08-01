@@ -19,9 +19,9 @@ function palette(tty: boolean) {
 /**
  * `typebulb agent` (no `:target`) — the first command an agent runs. It prints (TB-Skill.md) a status
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
- * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the embed-vs-local rule
+ * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the inline bulb-vs-local rule
  * (the one decision agents most often get wrong — a weak model that under-reads the skill plans a
- * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted embed (a *backgrounded* `wait` — the
+ * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted inline bulb (a *backgrounded* `wait` — the
  * render lands only on turn-end, so a foreground or pre-emit wait would deadlock; backgrounding fixes
  * both halves. Codex inverts both facts — items stream to the rollout mid-turn and no background wake
  * exists — so its branch is a bounded FOREGROUND wait: TB-Agent-Codex.md § Wait under Codex), and a
@@ -89,10 +89,10 @@ async function launchAndReport(version: string, name: string): Promise<void> {
     ? [
         `  Agent mirror (${name}) is live💡`,
         `    ${lit('●')} ${litLink(viewer.url)}`,
-        `      Embedded bulbs render live here.`,
+        `      Inline bulbs render live here.`,
         `  Agents:`,
         `    Reusable app/tool → write a ${lit('.bulb.md')}`,
-        `    Show something inline → embed a bulb`,
+        `    Show something inline → emit an inline bulb`,
         // "background" told pi agents to shell-'&' the wait, decoupling the wake (TB-Wait.md).
         // Codex has no background wake at all — its wait runs FOREGROUND in the emitting turn
         // (items stream to the rollout mid-turn), bounded because it occupies that turn
@@ -100,13 +100,13 @@ async function launchAndReport(version: string, name: string): Promise<void> {
         // wait lingers 10s AFTER its match, so Codex's own default kills even a clean `ok`.
         ...(name === 'codex'
           ? [`      verify it this turn — foreground-wait, bounded:`,
-             `      • ${lit('typebulb wait agent --match "[embed <name>" --timeout 120')}`,
+             `      • ${lit('typebulb wait agent --match "[inline <name>" --timeout 120')}`,
              `        raise the shell tool's timeout_ms to 130000`,
              `        (its 10s default kills even a clean ok)`]
           : [name === 'pi'
               ? `      arm a wait for its render verdict — run it plainly:`
               : `      background a wait for its render verdict:`,
-             `      • ${lit('typebulb wait agent --match "[embed <name>"')}`]),
+             `      • ${lit('typebulb wait agent --match "[inline <name>"')}`]),
         ...skill,
         `    End this reply with the mirror link above`,
         `      • easy to miss the link mid-message`,

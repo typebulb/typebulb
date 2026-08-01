@@ -5,7 +5,7 @@ import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { extractDescription } from 'typebulb/format'
 
-// The mirror's bulb-side RPCs: open a cited file in the editor, promote an embedded bulb to a file
+// The mirror's bulb-side RPCs: open a cited file in the editor, promote an inline bulb to a file
 // (breakout), and the status-bar launcher (list / launch / stop / trust / tail this project's bulbs).
 // These touch only the project cwd + the typebulb capabilities in src/servers.js — none of the
 // transcript machinery — so they live apart from the core (the A→B split: this is A, the core is B).
@@ -24,13 +24,13 @@ export async function openFile(filePath: string, line?: number) {
   return { ok: true }
 }
 
-// ---- breakout: promote an embedded bulb to a standalone file + launch it ----
+// ---- breakout: promote an inline bulb to a standalone file + launch it ----
 
 // The filename comes from the bulb's own `name:` frontmatter, slugified (slugifyBulbName,
 // the typebulb capability) — no prompt, no guess. The host owns only *where* the file lands.
 export async function breakout(source: string) {
   const cwd = projectCwd
-  // The embed render path is forgiving of an undeclared import (render.ts), but a real `.bulb.md` must
+  // The inline bulb render path is forgiving of an undeclared import (render.ts), but a real `.bulb.md` must
   // satisfy the authored-config contract (the local run / `check` enforce UNDECLARED_IMPORT). So at the
   // moment a throwaway becomes a kept file, derive any missing `config.json` `dependencies` from the
   // imports — a model that omitted config.json (the GLM case) still breaks out to a correct, runnable
@@ -42,7 +42,7 @@ export async function breakout(source: string) {
   mkdirSync(dir, { recursive: true })
   const slug = slugifyBulbName(bulb)
   // Never clobber a file we didn't write: an identical existing file is reused (idempotent relaunch; the
-  // comparison is against the derived bulb, so re-breaking-out the same embed re-uses its file); a name
+  // comparison is against the derived bulb, so re-breaking-out the same inline bulb re-uses its file); a name
   // clash with different content takes the next -N.
   let file = `${slug}.bulb.md`
   for (let n = 2; existsSync(join(dir, file)) && readFileSync(join(dir, file), 'utf8') !== bulb; n++) {

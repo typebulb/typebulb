@@ -1,6 +1,6 @@
 import type { VElement } from 'domeleon'
 import type { CopyButton } from './copyButton.js'
-import type { BulbEmbed } from './bulbEmbed.js'
+import type { InlineBulb } from './inlineBulb.js'
 // The poll() event union + token shape are the server↔client wire contract — one canonical definition
 // in core/events.ts (no more "keep in sync" copy). `ServerEvent` is the client's name for `Event`.
 import type { ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, Event as ServerEvent, TokenCounts } from '../events.js'
@@ -120,13 +120,13 @@ export interface IRoot {
 // collapsed row's indented ⎿ line once the result lands.
 export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean; digest?: string }
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set
-// only when an assistant message contains live ````bulb```` embeds: the text split into markdown
-// chunks (string) and BulbEmbed components, rendered in order in place of the single markdown div.
+// only when an assistant message contains live ````bulb```` inline bulbs: the text split into markdown
+// chunks (string) and InlineBulb components, rendered in order in place of the single markdown div.
 // `turnCopy` is the prose-mode copy shared across a turn's assistant messages — one pill over the
 // joined turn prose, rendered on the turn's last prose bubble (see MessageList.renderTurn).
 // `fork` is set only on a `role: 'fork'` pseudo-message — a collapsed stub for an abandoned branch
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | BulbEmbed)[]; fork?: { count: number; sub: Msg[] } }
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] } }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; batch?: string; predicted?: string; denied?: string }
 // `batches` = the bulb's named batch scopes (TB-Batch.md), newest first — what the stopped row's

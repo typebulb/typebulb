@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { ensureDeclaredDependencies } from '../src/bulb/deriveDeps.js'
 import { parseBulb } from '../../format/src/index.js'
 
-// breakout calls ensureDeclaredDependencies so a promoted embed satisfies the authored-config contract
+// breakout calls ensureDeclaredDependencies so a promoted inline bulb satisfies the authored-config contract
 // even when the author omitted config.json (the GLM case): every bare import gets a `dependencies`
 // entry, derived as "latest" (the version the import-driven resolver already uses for an undeclared
-// import). The embed render path stays forgiving; this is where the real file is made correct.
+// import). The inline bulb render path stays forgiving; this is where the real file is made correct.
 
 const wrap = (code: string, config?: string) =>
   `---\nformat: typebulb/v1\nname: T\n---\n\n**code.tsx**\n\n\`\`\`tsx\n${code}\n\`\`\`\n` +

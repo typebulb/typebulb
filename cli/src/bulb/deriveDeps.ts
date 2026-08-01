@@ -7,8 +7,8 @@ import { bareImportRoots } from 'typebulb/lint'
  * import-driven resolver already CDN-resolves an *undeclared* import to (TB-Resolver.md), so this only
  * makes the existing resolution explicit; nothing about how the bulb runs changes.
  *
- * Used by `breakout` (agents/.../launcher.ts) so a promoted embed is a *correct, runnable* `.bulb.md`
- * even when the model that authored the embed omitted `config.json` (the GLM case). The embed render
+ * Used by `breakout` (agents/.../launcher.ts) so a promoted inline bulb is a *correct, runnable* `.bulb.md`
+ * even when the model that authored the inline bulb omitted `config.json` (the GLM case). The inline bulb render
  * path stays deliberately forgiving (render.ts runs the client lint *without* `dependencies`, so
  * UNDECLARED_IMPORT is dormant there), and the authored-config contract is satisfied here instead — at
  * the one moment a throwaway becomes a real file the local run / `check` will enforce against.
@@ -39,7 +39,7 @@ export function ensureDeclaredDependencies(source: string): string {
   for (const root of undeclared) deps[root] = 'latest'
   config.dependencies = deps
 
-  // Rebuild from the parsed blocks with the augmented config. Embeds are client-only, so there's no
+  // Rebuild from the parsed blocks with the augmented config. Inline bulbs are client-only, so there's no
   // server.ts to preserve — serializeBulb covers every format kind.
   const bulb: BulbSource = { name: parsed.frontmatter.name }
   for (const [filename, content] of parsed.files) {

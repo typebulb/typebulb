@@ -781,9 +781,9 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     const agentSrc = readFileSync(new URL('../src/commands/agent.ts', import.meta.url), 'utf-8')
     for (const wording of [
       'Reusable app/tool → write a ',            // trailed by lit('.bulb.md') in agent.ts
-      'Show something inline → embed a bulb',
+      'Show something inline → emit an inline bulb',
       'arm a wait for its render verdict — run it plainly:',
-      'typebulb wait agent --match "[embed <name>"',
+      'typebulb wait agent --match "[inline <name>"',
       'Read the authoring skill before writing a bulb:',
     ]) {
       expect(agentSrc, `agent.ts no longer says: ${wording}`).toContain(wording)
@@ -791,40 +791,40 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     }
   })
 
-  it('suppresses the wake on a clean embed-ok verdict — silence is the ok; errors still wake', () => {
+  it('suppresses the wake on a clean inline bulb-ok verdict — silence is the ok; errors still wake', () => {
     const src = piExtensionSource()
     // The per-line predicate, as written into the extension.
     const m = src.match(/return (\/.+\/)\.test\(l\);/)
     expect(m).not.toBeNull()
     const re = new Function(`return ${m![1]}`)() as RegExp
     // Mirror the shim's blob→lines→every classification (wait bursts multiple lines into one payload).
-    const embedOk = (text: string) => {
+    const inlineOk = (text: string) => {
       const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
       return lines.length > 0 && lines.every(l => re.test(l))
     }
-    expect(embedOk('[embed Japan v1] ok')).toBe(true)
+    expect(inlineOk('[inline Japan v1] ok')).toBe(true)
     // The bug this fixes: a version-agnostic --match replays v1+v2 into one multi-line payload — still all ok.
-    expect(embedOk('[embed Japan v1] ok\n[embed Japan v2] ok')).toBe(true)
-    expect(embedOk('[embed Japan v2] compile error: x is not defined')).toBe(false)
-    expect(embedOk('[embed Japan v1] ok\n[embed Japan v2] runtime error: boom')).toBe(false)  // one error still wakes
-    expect(embedOk('[embed Japan v1] malformed: no code block')).toBe(false)
-    expect(embedOk('MOVE e2e4')).toBe(false)                      // a turn-based loop event must wake
-    expect(embedOk('')).toBe(false)
-    expect(src).toContain('text && !embedOk')                     // ok never reaches sendUserMessage
+    expect(inlineOk('[inline Japan v1] ok\n[inline Japan v2] ok')).toBe(true)
+    expect(inlineOk('[inline Japan v2] compile error: x is not defined')).toBe(false)
+    expect(inlineOk('[inline Japan v1] ok\n[inline Japan v2] runtime error: boom')).toBe(false)  // one error still wakes
+    expect(inlineOk('[inline Japan v1] malformed: no code block')).toBe(false)
+    expect(inlineOk('MOVE e2e4')).toBe(false)                      // a turn-based loop event must wake
+    expect(inlineOk('')).toBe(false)
+    expect(src).toContain('text && !inlineOk')                     // ok never reaches sendUserMessage
   })
 
-  it('defangs the suppression notify — a quoted "[embed <name>" tag would echo into the watched log and loop', () => {
+  it('defangs the suppression notify — a quoted "[inline <name>" tag would echo into the watched log and loop', () => {
     const src = piExtensionSource()
     // The composer driver echoes extension notifies into the mirror's log (driver.ts), which wait
     // matches by substring — so the ok text is bracket-stripped before notifying, or every
     // suppressed ok wakes the NEXT same-match wait via its own echo (the grok 4.3 field failure).
-    expect(src).toContain('embedOk ? text.replace(/[\\[\\]]/g, "")')
+    expect(src).toContain('inlineOk ? text.replace(/[\\[\\]]/g, "")')
     const defang = (t: string) => t.replace(/[\[\]]/g, '')
-    expect(defang('[embed Color Perception v1] ok')).not.toContain('[embed Color Perception')
+    expect(defang('[inline Color Perception v1] ok')).not.toContain('[inline Color Perception')
     // And the echo line itself, delivered in a later burst, must classify as a wake, never an ok.
     const m = src.match(/return (\/.+\/)\.test\(l\);/)
     const re = new Function(`return ${m![1]}`)() as RegExp
-    expect(re.test('[composer] pi extension: typebulb wait: [embed Japan v1] ok')).toBe(false)
+    expect(re.test('[composer] pi extension: typebulb wait: [inline Japan v1] ok')).toBe(false)
   })
 
   it('re-runs the intercepted command under bash, never node shell:true cmd.exe (POSIX ";" as args field failure)', () => {
@@ -852,10 +852,10 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     const re = new Function(`return ${m![1]}`)() as RegExp
     const strip = (c: string) => c.replace(re, '')
     // The Toroidal Life field command: & stripped, redirect kept (bash then blocks until the match).
-    expect(strip('npx typebulb wait agent --match "[embed Toroidal Life" > /tmp/x.log 2>&1 &'))
-      .toBe('npx typebulb wait agent --match "[embed Toroidal Life" > /tmp/x.log 2>&1')
-    expect(strip('npx typebulb wait agent --match "[embed X" &')).toBe('npx typebulb wait agent --match "[embed X"')
-    expect(strip('npx typebulb wait agent --match "[embed X"')).toBe('npx typebulb wait agent --match "[embed X"')  // no-op without &
+    expect(strip('npx typebulb wait agent --match "[inline Toroidal Life" > /tmp/x.log 2>&1 &'))
+      .toBe('npx typebulb wait agent --match "[inline Toroidal Life" > /tmp/x.log 2>&1')
+    expect(strip('npx typebulb wait agent --match "[inline X" &')).toBe('npx typebulb wait agent --match "[inline X"')
+    expect(strip('npx typebulb wait agent --match "[inline X"')).toBe('npx typebulb wait agent --match "[inline X"')  // no-op without &
     // Exit 0 with empty stdout = the verdict was redirected away; the wake points at the mirror log.
     expect(src).toContain('code === 0 && !text')
     expect(src).toContain('typebulb logs agent')

@@ -2,7 +2,7 @@ import { existsSync, openSync, readSync, closeSync, statSync, readdirSync, watch
 import { stat } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
 import { errorMessage, projectCwd } from './context.js'
-import { EmbedStatusDedup } from './embedStatusLog.js'
+import { InlineStatusDedup } from './inlineStatusLog.js'
 import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
@@ -542,13 +542,13 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (h) console.log(`No sessions for ${state.cwd} — ${h.count} exist for ${h.dir}. Launched from a subfolder? Relaunch from the project root.`)
   }).catch(() => {})
 
-  // The mirror host's embed-status forward (TB-Agent-Mirror-Embed.md, Iteration Invariant 7). The client
+  // The mirror host's inline bulb-status forward (TB-Agent-Mirror-Inline.md, Iteration Invariant 7). The client
   // formats the line; we own the idempotency. console.log tees to `<pid>.log` (what `typebulb logs
   // <agent>` reads and `typebulb wait <agent>` wakes on); the dedup lives here, off the shared /__log
   // channel, so a refresh can't pile the line up.
-  const embedStatus = new EmbedStatusDedup()
-  async function logEmbedStatus(tag: string, line: string) {
-    if (embedStatus.accept(tag, line)) console.log(line)
+  const inlineStatus = new InlineStatusDedup()
+  async function logInlineStatus(tag: string, line: string) {
+    if (inlineStatus.accept(tag, line)) console.log(line)
   }
 
   // "The agent is mid-turn" is two predicates ANDed: the chain shape (adapter) and process liveness
@@ -869,5 +869,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer }
 }

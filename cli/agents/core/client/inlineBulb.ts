@@ -2,16 +2,16 @@ import { Component, div, button } from 'domeleon'
 import { createBulbFrame, stripFrontmatter, bulbName, validateBulbStructure } from '../../../src/render.js'
 import { mdPlain } from './markdown.js'
 
-// A live ````bulb```` embed: a sandboxed nested app plus its controls. createBulbFrame (the
+// A live ````bulb```` inline bulb: a sandboxed nested app plus its controls. createBulbFrame (the
 // typebulb package) compiles the source into an auto-sizing iframe and owns sandbox policy,
 // host-theme inheritance, and runtime-error forwarding; we own placement and the fit⇄spread /
 // code⇄run / copy / breakout controls. The iframe is parented once via onMounted — moving an
 // <iframe> in the DOM reloads it — and the source listing is markdown rendered through innerHTML.
 //
-// Mounting is host-driven: the embed is a state object holding "do I have a compiled frame", and the
+// Mounting is host-driven: the inline bulb is a state object holding "do I have a compiled frame", and the
 // host (MessageList) calls setMounted() from the same-name chain so only a run's live tail compiles —
-// superseded versions fold to a stub and unmount (TB-Agent-Mirror-Embed.md, Iteration).
-export class BulbEmbed extends Component {
+// superseded versions fold to a stub and unmount (TB-Agent-Mirror-Inline.md, Iteration).
+export class InlineBulb extends Component {
   spread = false
   showingCode = false
   copied = false
@@ -24,7 +24,7 @@ export class BulbEmbed extends Component {
   #compileError?: string
   #runtimeError?: string
   #shouldMount = false                                 // the host sets this from chain state
-  #chainPos = 1                                        // 1-based version in the same-name run; host-set, stable per embed
+  #chainPos = 1                                        // 1-based version in the same-name run; host-set, stable per inline bulb
   #building = false                                    // a createBulbFrame is in flight
   #abort?: AbortController                             // removes the frame's host-side message listener on teardown
   #breakoutState: 'idle' | 'busy' | 'done' = 'idle'   // busy: shimmer+disabled; done: result shown, still disabled
@@ -41,18 +41,18 @@ export class BulbEmbed extends Component {
   get name() { return this.#name }
   get key() { return this.#key }
 
-  // The host sets each embed's version from the chain pass (chainPositions); the fold stub reads it
+  // The host sets each inline bulb's version from the chain pass (chainPositions); the fold stub reads it
   // back for its "Version N" label. It's in the forwarded status tag because the dedup compares whole
   // lines: a *re-emit* takes the next version, so its line logs even when the text is identical (same
   // `ok`, same error), while a replay reconstructs the same version and still dedups
-  // (TB-Agent-Mirror-Embed.md, Iteration Invariant 7).
+  // (TB-Agent-Mirror-Inline.md, Iteration Invariant 7).
   setChainPosition(n: number) { this.#chainPos = n }
   get chainPosition() { return this.#chainPos }
 
   // The host drives mount state from the chain: only a run's live tail (or one the user expanded)
   // mounts. A bare onAttached compile would defeat that — domeleon attaches every discovered child, so
-  // a never-rendered superseded embed would still compile — so the compile is gated here. onAttached
-  // reconciles too, for the case the host set the flag before this embed had a ctx.
+  // a never-rendered superseded inline bulb would still compile — so the compile is gated here. onAttached
+  // reconciles too, for the case the host set the flag before this inline bulb had a ctx.
   setMounted(want: boolean) {
     if (want === this.#shouldMount) return
     this.#shouldMount = want
@@ -89,7 +89,7 @@ export class BulbEmbed extends Component {
         })
     } else {
       // Fold: tear the frame down so the older version stops processing and stops leaking its host-side
-      // listener (Embed Invariant 8). A collapsed fold shows nothing, so the runtime error is cleared —
+      // listener (TB-Agent-Mirror-Inline.md Invariant 8). A collapsed fold shows nothing, so the runtime error is cleared —
       // re-expanding runs the bulb fresh (which can even resolve a time/state-dependent failure).
       // #compileError stays sticky: recompiling identical source is deterministic, so skip it.
       if (!this.#frame && !this.#building) return
@@ -101,28 +101,28 @@ export class BulbEmbed extends Component {
     }
   }
 
-  // Forward an embed outcome — ok, or an error — to the mirror's own server log, name+version-tagged, so
-  // `typebulb logs agent` reads back exactly what the user sees (Embed Iteration Invariant 1) and a
-  // `typebulb wait agent` watcher wakes on it. Routed through the mirror host's own `logEmbedStatus`
+  // Forward an inline bulb outcome — ok, or an error — to the mirror's own server log, name+version-tagged, so
+  // `typebulb logs agent` reads back exactly what the user sees (TB-Agent-Mirror-Inline.md Iteration Invariant 1) and a
+  // `typebulb wait agent` watcher wakes on it. Routed through the mirror host's own `logInlineStatus`
   // (not the shared `tb.log`) so the host owns the tag-keyed idempotency that keeps a refresh from
   // piling up the same line (Invariant 7). Diagnostics only — fire-and-forget, drives nothing (Invariant 2).
   // `ok` fires from createBulbFrame's onReady (first paint, never after an error); the host-side guards
-  // here can't race it because a compile error means no frame and a folded embed never built one.
+  // here can't race it because a compile error means no frame and a folded inline bulb never built one.
   #log(kind: 'ok' | 'compile' | 'runtime' | 'malformed', message?: string) {
     const tag = this.#name ?? this.#key
     const body = kind === 'ok' ? 'ok'
       : kind === 'malformed' ? `malformed: ${message}`
       : `${kind} error: ${message}`
-    void tb.server.logEmbedStatus(tag, `[embed ${tag} v${this.#chainPos}] ${body}`).catch(() => {})
+    void tb.server.logInlineStatus(tag, `[inline ${tag} v${this.#chainPos}] ${body}`).catch(() => {})
   }
 
-  // Abort the host-side listener when the whole transcript is dropped (session switch); the embed
+  // Abort the host-side listener when the whole transcript is dropped (session switch); the inline bulb
   // components go with it, but the window-level message listener would otherwise outlive them.
   dispose() { this.#abort?.abort() }
 
   view() {
-    const cls = ['embed', 'bulb-embed', this.spread ? 'spread' : 'fit', this.showingCode ? 'code-open' : '', this.#compileError ? 'err' : '']
-    // Errors name the bulb, so a broken embed (whose iframe shows nothing useful) still says which one
+    const cls = ['embed', 'bulb-inline', this.spread ? 'spread' : 'fit', this.showingCode ? 'code-open' : '', this.#compileError ? 'err' : '']
+    // Errors name the bulb, so a broken inline bulb (whose iframe shows nothing useful) still says which one
     // it is — `Cone Sensitivity — …` rather than a bare message.
     const tag = this.#name ? `${this.#name} — ` : ''
     const inner =
@@ -131,14 +131,14 @@ export class BulbEmbed extends Component {
       : [
           this.#controls(),
           // Frame host: display:contents (see CSS) so the iframe lays out as a direct child of
-          // .bulb-embed — the sizing / spread-breakout rules target it — while domeleon owns this
+          // .bulb-inline — the sizing / spread-breakout rules target it — while domeleon owns this
           // node. onMounted parents the iframe exactly once; the code-open class hides it.
           div({ class: 'bulb-frame', key: 'frame', onMounted: (el: Element) => { if (this.#frame) el.replaceChildren(this.#frame) } }),
           this.showingCode ? this.#codeView() : null,
           this.#runtimeError ? div({ class: 'bulb-err-strip', key: 'err' }, `⚠ ${tag}${this.#runtimeError}`) : null,
           this.#malformed ? div({ class: 'bulb-warn-strip', key: 'warn' }, `⚠ ${tag}malformed: ${this.#malformed}`) : null,
         ]
-    // Wrapped in `.md` so the embed's CSS (`.md .bulb-embed …`) applies as a bubble sibling.
+    // Wrapped in `.md` so the inline bulb's CSS (`.md .bulb-inline …`) applies as a bubble sibling.
     return div({ class: 'md', key: this.#key }, div({ class: cls }, ...inner))
   }
 

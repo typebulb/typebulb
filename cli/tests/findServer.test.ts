@@ -8,7 +8,7 @@ import type { BulbServer } from '../src/serve/serverRegistry.js'
  * the symmetry with bare `typebulb agent` / `stop --agent`. Before this, an agent that launched via
  * auto-detect (never learning it was claude vs pi) had no working `wait`/`logs` command: `wait agent`
  * fell through to a file-path match and errored (Kimi 2.7 typed exactly that and gave up on verifying
- * its embed). A specific harness name still resolves its own mirror; a pid and a file path still win.
+ * its inline bulb). A specific harness name still resolves its own mirror; a pid and a file path still win.
  */
 const here = '/proj/app'
 const other = '/proj/other'
@@ -75,7 +75,7 @@ describe('findServer — the literal `agent` token', () => {
  * When BOTH a pi and a claude mirror run for the same project (the moment pi support let a cwd have two
  * mirrors), `agent` must resolve to the CALLER's own harness — a Claude Code wait renders into and must
  * watch the claude mirror, never the pi one. The pre-fix "first cwd match" picked whichever started
- * first (the pi mirror), so a Claude `wait agent` watched the pi log and missed its own embed render —
+ * first (the pi mirror), so a Claude `wait agent` watched the pi log and missed its own inline bulb render —
  * timing out against the wrong target (TB-Wait.md). This is the real-world
  * `C:\Code\chat` shape: a pi mirror started before a claude one.
  */

@@ -7,7 +7,7 @@ import { piRecipes } from './recipes.js'
 // pi's agent mirror client entry: the neutral Root plus a read-only model pill (pi switches models
 // natively — no switcher proxy or watchdog overlay, unlike Claude; TB-Agent-Harness.md) and the composer —
 // pi is drivable (PiAdapter.createDriver), so this mirror gets the prompt panel Claude's doesn't
-// (TB-Agent-Composer.md). Everything else (transcript, embeds, session picker, token chip, bulb
+// (TB-Agent-Composer.md). Everything else (transcript, inline bulbs, session picker, token chip, bulb
 // launcher, prose toggle) is the shared neutral UI.
 document.title = 'Pi Mirror'
 

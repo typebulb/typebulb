@@ -12,7 +12,7 @@ import hljsPlaintext from 'highlight.js/lib/languages/plaintext'
 import hljsPython from 'highlight.js/lib/languages/python'
 import hljsBash from 'highlight.js/lib/languages/bash'
 import hljsYaml from 'highlight.js/lib/languages/yaml'
-import { parseBulb, findEmbeddedBulbs } from '../../../src/render.js'
+import { parseBulb, findUnfencedBulbs } from '../../../src/render.js'
 import type { Msg } from './types.js'
 
 // `html: true` lets the agent's natural semantic HTML through the parser — today only <details>/<summary>
@@ -328,15 +328,15 @@ const defaultFence: MdRenderRule = md.renderer.rules.fence
 md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   const t = tokens[idx]
   const lang = (t.info ?? '').trim().toLowerCase()
-  // Note: no `bulb` case here. Live embeds are split out of the text before markdown runs
-  // (splitBulbSegments → BulbEmbed), so a ````bulb```` fence reaching markdown is illustrative
+  // Note: no `bulb` case here. Live inline bulbs are split out of the text before markdown runs
+  // (splitBulbSegments → InlineBulb), so a ````bulb```` fence reaching markdown is illustrative
   // source — it falls through to defaultFence like any other unrecognised fence.
   // ```svg``` fences embed raw SVG. Same trust level as the rest of the assistant
   // markdown we render, but raw SVG can carry <script>/onload/<foreignObject>, so
   // it goes through DOMPurify's svg profile first — geometry survives, the script
   // surface is stripped. Lets the agent draw anything (smiley, plot from an
   // equation) without an iframe, since it's static markup, not executed code.
-  // Live embeds are assistant-only by construction: a user turn renders through mdUser, whose
+  // Live inline bulbs are assistant-only by construction: a user turn renders through mdUser, whose
   // fence rule always emits a plain source block, so no gate is needed here.
   if (lang === 'svg') {
     const safe = DOMPurify.sanitize(t.content, { USE_PROFILES: { svg: true, svgFilters: true } })
@@ -522,7 +522,7 @@ const mdUser = new MarkdownIt('zero', { linkify: true, breaks: true })
 mdUser.enable(['fence', 'backticks', 'newline', 'link', 'linkify'])
 applyMathRules(mdUser)
 applyLinkTargetRule(mdUser)
-// Every user-turn fence renders as a plain copyable source block, never a live embed — svg/mermaid/
+// Every user-turn fence renders as a plain copyable source block, never a live bulb — svg/mermaid/
 // bulb are assistant media, and a pasted snippet should read literally.
 const defaultUserFence: MdRenderRule = mdUser.renderer.rules.fence
   ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts))
@@ -551,7 +551,7 @@ export const userMarkdown = (msg: Msg) => {
 //     begins with a stray ````bulb opener line). So we promote any fence whose body parses as a real bulb,
 //     after stripping a stray leading bulb-opener. Don't revert this to an info-string-only check.
 //
-// (b) Naked — no enclosing fence at all (findEmbeddedBulbs). Kimi notably skips the fence and dumps the
+// (b) Naked — no enclosing fence at all (findUnfencedBulbs). Kimi notably skips the fence and dumps the
 //     raw frontmatter + blocks into the message, using `---` thematic breaks as delimiters, so md.parse
 //     only ever sees the bulb's *inner* ```tsx/```css fences — none of which parses as a whole bulb — and
 //     path (a) finds nothing. We scan the raw lines for the frontmatter signature instead.
@@ -573,7 +573,7 @@ export function splitBulbSegments(text: string): BulbSegment[] {
     if (isBulb) spans.push({ start: t.map[0], end: t.map[1], source })
   }
   // (b) Naked bulbs, skipping any that sit inside a fenced span we already have.
-  for (const b of findEmbeddedBulbs(text)) {
+  for (const b of findUnfencedBulbs(text)) {
     if (spans.some(s => b.start >= s.start && b.start < s.end)) continue
     spans.push({ start: b.start, end: b.end, source: b.source })
   }

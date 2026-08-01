@@ -71,8 +71,8 @@ export interface CliArgs {
   lines?: number
   /** `wait --match <substring>`: only lines containing this **literal substring** wake the wait
    *  (default: any new line). NOT a regex — `[`/`]`/`.` etc. are matched verbatim. This is what lets the
-   *  embed wake match the `[embed <name>` tag prefix and a turn-based bulb wait on its `[chess]` event
-   *  tag; a regex `[chess]` would be a character class, and the unpaired `[embed` an error. */
+   *  inline-bulb wake match the `[inline <name>` tag prefix and a turn-based bulb wait on its `[chess]`
+   *  event tag; a regex `[chess]` would be a character class, and the unpaired `[inline` an error. */
   match?: string
   /** `wait --timeout <sec>`: a manual override of the housekeeping give-up cap (exit 2). Near-
    *  vestigial — `wait` is a subscription, so a caller sets it only when the wait must run in the
@@ -410,7 +410,7 @@ Usage:
   typebulb wait [file|agent]     Block until the target server logs a new line,
                                  print it, exit (2: timeout; 3: server died).
                                  For agents: run it in the background — the exit
-                                 is your wake-up ('wait agent': embed outcomes;
+                                 is your wake-up ('wait agent': inline bulb outcomes;
                                  'wait <file>': the bulb's own console.log).
                                  Resumes where your last wait/call left off, so
                                  an event that beats the wait still fires it.

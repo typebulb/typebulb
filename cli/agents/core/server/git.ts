@@ -42,7 +42,7 @@ export async function gitChangedFiles() {
   if (!root) return { repo: false, root: '', files: [] }
   try {
     const out = await git(['status', '--porcelain', '-z'], root)
-    const files: { path: string; status: string; add?: number; del?: number }[] = []
+    const files: { path: string; status: string; add?: number; del?: number; binary?: boolean }[] = []
     const parts = out.split('\0')
     for (let i = 0; i < parts.length; i++) {
       const e = parts[i]
@@ -50,18 +50,28 @@ export async function gitChangedFiles() {
       if (e[0] === 'R' || e[0] === 'C') i++          // rename/copy: the NEXT token is the original path
       files.push({ path: e.slice(3), status: statusChar(e[0], e[1]) })
     }
-    // ± counts vs HEAD where numstat has them (tracked text files; untracked rows show "new" instead).
-    // Exact path match only — a rename's "old => new" spelling just misses, leaving that row uncounted.
+    // ± counts vs HEAD where numstat has them. `-z` is load-bearing: the text form compacts a rename to
+    // `dir/{old => new}.ts`, which never equals the status path, so every renamed row came back
+    // uncounted — and the client used to read "uncounted" as "new". A row can still legitimately have
+    // no counts (binary, or content identical to HEAD once git normalizes line endings); absent counts
+    // mean *unknown*, and only the status letter says new.
     try {
-      const stat = await git(['diff', '--numstat', 'HEAD'], root)
-      const counts = new Map<string, { add: number; del: number }>()
-      for (const line of stat.split('\n')) {
-        const m = /^(\d+)\t(\d+)\t(.+)$/.exec(line)
-        if (m) counts.set(m[3], { add: +m[1], del: +m[2] })
+      const stat = await git(['diff', '--numstat', '-z', 'HEAD'], root)
+      const counts = new Map<string, { add: number; del: number; binary: boolean }>()
+      const toks = stat.split('\0')
+      for (let i = 0; i < toks.length; i++) {
+        const m = /^(\d+|-)\t(\d+|-)\t(.*)$/.exec(toks[i])
+        if (!m) continue
+        // Under `-z` a rename leaves the path field empty and follows with pre- then post-image paths;
+        // key on the post-image, which is the path `git status` reports. A binary file reports `-`/`-`.
+        const path = m[3] || toks[(i += 2)]
+        if (path) counts.set(path, { add: +m[1] || 0, del: +m[2] || 0, binary: m[1] === '-' })
       }
       for (const f of files) {
         const c = counts.get(f.path)
-        if (c) { f.add = c.add; f.del = c.del }
+        if (!c) continue
+        if (c.binary) f.binary = true
+        else { f.add = c.add; f.del = c.del }
       }
     } catch {}                                        // no HEAD yet (fresh repo) — rows stay uncounted
     files.sort((a, b) => a.path.localeCompare(b.path))

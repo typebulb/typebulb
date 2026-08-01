@@ -10,7 +10,7 @@ import { PiAdapter } from './server/adapter.js'
 
 const adapter = new PiAdapter()
 export const displayName = adapter.displayName
-export const { info, poll, logEmbedStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer } = createMirror(adapter)
+export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, shutdownComposer } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'

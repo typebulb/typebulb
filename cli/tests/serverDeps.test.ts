@@ -6,7 +6,7 @@ import { applyDeclaredRange, extractServerImports, isInstalled } from '../src/se
 
 /**
  * Guards the server-side install version logic. The bug it exists to catch: a
- * package the bulb uses on BOTH sides (e.g. `typebulb` — browser embed via the
+ * package the bulb uses on BOTH sides (e.g. `typebulb` — browser inline bulb via the
  * import map + server breakout via `typebulb/servers`) once installed a stale
  * copy on the server and never upgraded, because the "is it installed?" check
  * only asked whether the folder existed. A stale `typebulb` lacking the newer

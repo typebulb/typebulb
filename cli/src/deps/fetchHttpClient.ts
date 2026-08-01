@@ -4,7 +4,7 @@ import type { HttpClient } from 'typebulb/resolver'
  * Reference resolver HttpClient over the global `fetch` — no retry, errors
  * swallowed to `undefined` (the resolver reads that as a cache miss and falls
  * back). Shared by the node serve path ([resolver.ts](./resolver.ts)) and the
- * browser embed path ([render.ts](./render.ts)); both want the simple no-retry
+ * browser inline bulb path ([render.ts](./render.ts)); both want the simple no-retry
  * client. (The web client uses a ky-based one instead, for retries.)
  *
  * Type-only import + global `fetch`, so this stays browser-safe — render.ts

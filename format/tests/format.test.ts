@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
-  validateBulbStructure, findEmbeddedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
-  forbiddenAssetExt, slugify,
+  validateBulbStructure, findUnfencedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
+  forbiddenAssetExt, slugify, MODE, modeUnion,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -115,7 +115,7 @@ Set up your **config.json** with the deps you need.
   })
 })
 
-describe('findEmbeddedBulbs — naked bulbs in prose (no enclosing fence)', () => {
+describe('findUnfencedBulbs — naked bulbs in prose (no enclosing fence)', () => {
   // The Kimi failure mode: the bulb is dumped straight into the message, framed by `---` thematic
   // breaks instead of a ````bulb```` fence, with trailing prose after it.
   const KIMI = `Here's a fireworks bulb, rendered inline below.
@@ -144,7 +144,7 @@ console.log("boom")
 The agent mirror is live at http://localhost:3000.`
 
   it('finds the bulb framed by --- and parses it', () => {
-    const found = findEmbeddedBulbs(KIMI)
+    const found = findUnfencedBulbs(KIMI)
     expect(found).toHaveLength(1)
     const p = parseBulb(found[0].source)!
     expect(p).not.toBeNull()
@@ -154,7 +154,7 @@ The agent mirror is live at http://localhost:3000.`
   })
 
   it('does not swallow trailing prose into the source', () => {
-    const [b] = findEmbeddedBulbs(KIMI)
+    const [b] = findUnfencedBulbs(KIMI)
     expect(b.source).not.toContain('The agent mirror is live')
     // The closing `---` thematic break is past the last block, so it stays out of the bulb too.
     const lines = KIMI.split('\n')
@@ -163,11 +163,11 @@ The agent mirror is live at http://localhost:3000.`
   })
 
   it('ignores a lone --- frontmatter region with no blocks', () => {
-    expect(findEmbeddedBulbs('intro\n\n---\nformat: typebulb/v1\nname: x\n---\n\nmore prose')).toEqual([])
+    expect(findUnfencedBulbs('intro\n\n---\nformat: typebulb/v1\nname: x\n---\n\nmore prose')).toEqual([])
   })
 
   it('does not fire on ordinary prose with horizontal rules', () => {
-    expect(findEmbeddedBulbs('one\n\n---\n\ntwo\n\n---\n\nthree')).toEqual([])
+    expect(findUnfencedBulbs('one\n\n---\n\ntwo\n\n---\n\nthree')).toEqual([])
   })
 
   it('reports bodyEndLine just past the last captured block, not end of content', () => {
@@ -402,5 +402,12 @@ describe('slugify', () => {
     expect(slugify('Rock & Roll')).toBe('rock-and-roll')      // transliterates; a regex yields rock-roll
     expect(slugify('café')).toBe('cafe')                      // folds accents; a regex strips them (caf)
     expect(slugify("Prisoner's Dilemma")).toBe('prisoners-dilemma')   // apostrophe collapses, not hyphenates
+  })
+})
+
+describe('tb.mode values', () => {
+  it('generates the emitted typings union from MODE, in declaration order', () => {
+    expect(modeUnion).toBe(`'local' | 'ide' | 'published' | 'inline'`)
+    expect(Object.keys(MODE)).toEqual(Object.values(MODE))   // key and value never drift apart
   })
 })

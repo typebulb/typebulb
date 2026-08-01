@@ -21,7 +21,7 @@ import { VERSION } from '../version.js'
  *  registry. A wrong-target `wait`/`logs`/`stop` is worse than a clean miss — the earlier `?? mirrors[0]`
  *  fallback quietly turned "no mirror here" into either a full-timeout `wait` against another project or a
  *  read of its log; no cwd match now ⇒ undefined ⇒ requireServer's fast exit(1), recovering that fail.
- *  The embed-error readback in TB-Wait.md depends on hitting *this* project's
+ *  The inline bulb-error readback in TB-Wait.md depends on hitting *this* project's
  *  mirror, not whichever one ranks first. (With no cwd context at all — an unusual call — fall back to the
  *  first mirror, since nothing can be matched.) Else a resolved file path (compared via the registry's
  *  canonical key, so either spelling of the path matches). */
@@ -32,7 +32,7 @@ export function findServer(servers: BulbServer[], arg: string, cwd?: string, cal
     if (!cwd) return mirrors[0]
     const inCwd = mirrors.filter(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd))
     // The generic `agent` token is disambiguated by the CALLER's OWN harness: a Claude Code process
-    // renders its embeds into the claude mirror, a pi process into the pi mirror, and there is ≤1 mirror
+    // renders its inline bulbs into the claude mirror, a pi process into the pi mirror, and there is ≤1 mirror
     // per (harness, cwd) (Inv. 2) — so (caller-harness, cwd) is a unique target and there is nothing to
     // guess. Without this, two mirrors in one cwd made `agent` resolve to whichever sat first, so a
     // Claude wait could watch the *pi* log and miss its own render (TB-Wait.md).
@@ -149,7 +149,7 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  * `typebulb wait <file|pid|agent>` — block until the target server's log grows, print the new line(s),
  * exit. The wake-up half of the agent lifecycle (TB-Wait.md): any
  * process that blocks-until-event-then-exits is a signal an agent can subscribe to as a background task,
- * so a bulb's `console.log` on a user action — or the mirror's `[embed …]` status forward — re-invokes the
+ * so a bulb's `console.log` on a user action — or the mirror's `[inline …]` status forward — re-invokes the
  * agent with no model-side polling. Exit codes: 0 = printed new line(s); 2 = gave up (the housekeeping
  * cap elapsed with nothing matching — nobody watching, never "broken"); 3 = the server died mid-wait.
  *
@@ -168,10 +168,10 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // `typebulb wait` is a SUBSCRIBE primitive — block until the next matching line, then exit — not an
   // await-for-completion, so it carries no domain timeout (TB-Wait.md). A wait the
   // pi shim backgrounded (TYPEBULB_WAIT_SHIM) can't block a turn, so it's a pure subscription: NO give-up
-  // clock at all. It waits for the event however long — an embed's first paint (which only happens once a
+  // clock at all. It waits for the event however long — an inline bulb's first paint (which only happens once a
   // tab opens on this session, a coffee-break away — a render landing then must NOT be swallowed) or a
   // running bulb's next `[chess]`-style line — bounded only by the shim's session reap and the mirror-
-  // died exit below. Embed and turn-based bulb loop are the same shape here: both subscriptions, neither
+  // died exit below. Inline-bulb and turn-based bulb loops are the same shape here: both subscriptions, neither
   // "completes". The surviving give-up cap is HOUSEKEEPING (an unwatched orphan shouldn't park forever),
   // never a semantic signal, so it is one generous default for every target. A mirror wait briefly
   // carried a special 30s cap as a foreground-deadlock guard; removed, because the clock starts at
@@ -193,8 +193,8 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // the end (log restarted/trimmed) degrades to the no-cursor default.
   //
   // No-cursor default: a *filtered* first run scans from log start (0), not the attach-time EOF. The
-  // EOF snapshot loses the embed wake race — an embed's `--match` is unique per name, so every embed
-  // wait is first-run, and its `[embed …] ok` line can land before the npx-booted `wait` reads EOF
+  // EOF snapshot loses the inline bulb wake race — an inline bulb's `--match` is unique per name, so every inline bulb
+  // wait is first-run, and its `[inline …] ok` line can land before the npx-booted `wait` reads EOF
   // (render beats attach; flush ordering only guarantees armed-mid-turn, not attached-before-render).
   // The match filter bounds the cost: a genuinely-new name has no prior matching line, so scanning from
   // 0 fires exactly its line; a *reused* name re-fires its old lines once — a spurious wake the protocol
@@ -204,7 +204,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
   let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
   const deadline = Date.now() + timeoutSec * 1000
-  // After the first match, linger so a burst lands in one wake. An embed's `ok`/`malformed` can be chased
+  // After the first match, linger so a burst lands in one wake. An inline bulb's `ok`/`malformed` can be chased
   // by a runtime error trailing first paint, so a mirror wait lingers 10s (the window that error can land
   // in). A bulb event (a move, an approval) is a single line, so 1s. A matched *error* line clamps the
   // linger to 2s instead of ending it: a crash cascade emits a second, different error a frame to one

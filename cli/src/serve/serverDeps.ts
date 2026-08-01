@@ -35,7 +35,7 @@ const NODE_BUILTINS = new Set(builtinModules)
  * @param bulbCacheDir - The bulb's `.typebulb/` directory.
  * @param declaredRanges - The bulb's `config.json` `dependencies`. A bare spec
  *                whose name appears here installs at that range, so a package the
- *                bulb uses on *both* sides (e.g. `typebulb`: browser embed via the
+ *                bulb uses on *both* sides (e.g. `typebulb`: browser inline bulb via the
  *                import map + server breakout via `typebulb/servers`) resolves to
  *                the same published version on each — no cross-consumer skew. A spec
  *                that already carries a version is left untouched.

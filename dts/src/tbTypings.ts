@@ -9,6 +9,8 @@
  * TypeChecker, and the CLI's emitted typecheck dirs.
  */
 
+import { modeUnion } from 'typebulb/format'
+
 const dataAndJson = `
   /**
    * Get raw data chunk from the Data tab.
@@ -110,7 +112,7 @@ const models = `
    *
    * - \`'own'\` — the user's own API keys (or their own local model server)
    * - \`'courtesy'\` — the quota-limited courtesy model, fine for a call or two
-   * - \`'none'\` — no AI at all (the CLI with no keys, an embedded bulb)
+   * - \`'none'\` — no AI at all (the CLI with no keys, an inline bulb)
    *
    * A bulb making many AI calls should show a "use your own keys" notice
    * instead of running unless this is \`'own'\`. Never derive it from
@@ -138,12 +140,12 @@ const mode = `
    * The mode this bulb is running in.
    *
    * - \`'local'\` — Running via the typebulb CLI
-   * - \`'editor'\` — Running in the typebulb.com editor
+   * - \`'ide'\` — Running in the typebulb.com editor
    * - \`'published'\` — Running as a published/standalone bulb on typebulb.com
-   * - \`'embedded'\` — Running as a bulb embedded inside another bulb (sandboxed,
-   *   client-only: AI, filesystem, and server RPC are unavailable)
+   * - \`'inline'\` — Running inline in an agent's transcript, rendered by the mirror
+   *   (sandboxed, client-only: AI, filesystem, and server RPC are unavailable)
    */
-  mode: 'local' | 'editor' | 'published' | 'embedded';`
+  mode: ${modeUnion};`
 
 const fs = `
   /**
@@ -153,7 +155,7 @@ const fs = `
    * \`<bulb-dir>/<filename-stem>/\`, created on demand), so
    * \`tb.fs.write('results.json')\` lands beside the bulb. \`../\` reaches sibling
    * bulbs' folders; everything stays confined to the project (the launch cwd).
-   * Throws in editor/published mode.
+   * Throws in ide/published mode.
    */
   fs: {
     /** Read a file as UTF-8 text. Throws if the file is not valid UTF-8 — use readBytes for binary. */
@@ -171,7 +173,7 @@ const dir = `
    *
    * For interop only (handing a path to \`server.ts\` or a spawned tool):
    * \`tb.fs\` already resolves relative paths against it, so bulb code writing
-   * its own files never needs it. CLI only — throws in editor/published/embedded mode.
+   * its own files never needs it. CLI only — throws in ide/published/inline mode.
    */
   readonly dir: string;`
 
@@ -256,7 +258,7 @@ const onMessage = `
    * JSON; \`undefined\` for a bare \`typebulb send <file>\`). A non-\`undefined\` return value (awaited)
    * becomes the reply \`send --wait\` prints on stdout — JSON-serializable, at most one handler
    * replying — the structured read-back for self-tests. Returns an unsubscribe function. Inert in
-   * an embedded bulb (no sender) — the handler is registered but never fires.
+   * an inline bulb (no sender) — the handler is registered but never fires.
    *
    * @param handler - Called with each pushed message; may return a JSON-serializable reply.
    * @returns An unsubscribe function.
@@ -268,7 +270,7 @@ const log = `
    * Print to the CLI's stdout — the bulb's log channel, read back with \`typebulb logs <file>\`.
    *
    * Ungated: needs no \`server.ts\` block and no \`--trust\`, so a Restricted client-only bulb can
-   * instrument itself. Args cross to the CLI as JSON; where no CLI serves the page (web, embedded,
+   * instrument itself. Args cross to the CLI as JSON; where no CLI serves the page (web, inline,
    * or a transport failure) it falls back to the browser console. Works in \`server.ts\` too (same
    * as \`console.log\` there).
    */

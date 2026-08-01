@@ -13,16 +13,16 @@
  * line depends on — a deadlock.
  *
  * This module ships a tiny pi **extension** that supplies the missing primitive: it intercepts any
- * `typebulb wait …` bash call, blocks the foreground execution (so the turn ends and the embed/turn
+ * `typebulb wait …` bash call, blocks the foreground execution (so the turn ends and the inline bulb/turn
  * renders), spawns the real `typebulb wait` in the background itself, and on its exit injects the
  * outcome via `pi.sendUserMessage` — pi's own native "trigger a turn" facility, the analogue of CC's
  * process-exit notification. Because it just runs the real `typebulb wait`, pi inherits all of it for
- * free (the `--match` semantics, the from-0 offset, the 30s cap) and it generalises to BOTH the embed
+ * free (the `--match` semantics, the from-0 offset, the 30s cap) and it generalises to BOTH the inline bulb
  * loop and the turn-based bulb loop. The agent-facing instruction stays the one harness-agnostic line.
  *
  * The same extension also carries the composer's guaranteed-delivery orientation: on every turn of a
  * MIRROR-DRIVEN session (TYPEBULB_MIRROR=1, set by PiRpcDriver's spawn env) its before_agent_start
- * handler appends the embed-vs-local decision block — the one `typebulb agent` prints for kickoff
+ * handler appends the inline bulb-vs-local decision block — the one `typebulb agent` prints for kickoff
  * flows (commands/agent.ts) — to the system prompt. Ambient skill discovery alone demonstrably fails
  * weaker models (they plan a .bulb.md when asked to show something inline); in-context delivery is
  * what fixed it for the kickoff flow, and this is that same fix for the flow that never runs the
@@ -106,13 +106,13 @@ var TB_SKILL_PATH = "__TB_SKILL_PATH__";
 // only the mirror-link lines differ (the user is already IN the mirror). Change it there first.
 var TB_MIRROR_BLOCK = [
   "Typebulb: the user is prompting you from the typebulb agent mirror (already open in front of them).",
-  "  Embedded bulbs render live in this conversation.",
+  "  Inline bulbs render live in this conversation.",
   "  • do not run npx typebulb agent — the mirror is already running",
   "  • no need to end your reply with a mirror link",
   "  Reusable app/tool → write a .bulb.md",
-  "  Show something inline → embed a bulb",
+  "  Show something inline → emit an inline bulb",
   "    arm a wait for its render verdict — run it plainly:",
-  '    • typebulb wait agent --match "[embed <name>"',
+  '    • typebulb wait agent --match "[inline <name>"',
   "  Read the authoring skill before writing a bulb:",
   "    • " + TB_SKILL_PATH,
 ].join("\n");
@@ -137,7 +137,7 @@ export default function (pi) {
         // Run the REAL typebulb wait in the background instead of foreground (which would deadlock the
         // turn). It does the mirror/registry lookup, --match and offsets itself. The marker tells it this
         // is a shim-backgrounded (non-blocking) wait, so it runs as a pure subscription: no give-up clock,
-        // it waits for the event however long (bounded by the session-shutdown reap below) — an embed's
+        // it waits for the event however long (bounded by the session-shutdown reap below) — an inline bulb's
         // first paint OR a running bulb's next event line alike.
         // The agent may self-background ("… &") — the generic-shell reading of "arm it in the
         // background", but here the SHIM is the backgrounder: bash would exit 0 instantly with empty
@@ -166,24 +166,24 @@ export default function (pi) {
           pending.delete(child);
           try {
             const text = out.trim();
-            // Exit 0 with output is a real outcome (embed ok/error, a turn-based move) -> wake the
+            // Exit 0 with output is a real outcome (inline bulb ok/error, a turn-based move) -> wake the
             // agent (followUp delivers immediately when idle and queues when streaming — the same call
             // git-merge-and-resolve.ts makes from agent_end). A late wake is fine; it just reports
             // something true. Exit 2/3 (no render yet / server gone) surface passively, no turn.
             // Any OTHER non-zero exit means the subscription itself broke (bad args, no resolvable
             // mirror): the agent parked on a wake that can never come, so that failure must wake too —
             // missed wakes are fatal, spurious wakes cheap (TB-Wait.md). null (reap-killed) stays silent.
-            // EXCEPT an embed's clean ok verdict ("[embed <name> vN] ok" — core/client/bulbEmbed.ts):
+            // EXCEPT an inline bulb's clean ok verdict ("[inline <name> vN] ok" — core/client/inlineBulb.ts):
             // the user already sees the bulb and the skill orders silence on ok, so a wake would spend
             // a whole turn saying nothing and render a noise message. Silence IS the ok. Anything else
-            // (an embed error, a turn-based loop event) still wakes; an unrecognized shape wakes too.
+            // (an inline error, a turn-based loop event) still wakes; an unrecognized shape wakes too.
             // Checked PER LINE, not over the whole blob: wait lingers 10s and bursts every matching line
-            // into one payload, and a version-agnostic --match ("[embed <name>") replays v1+v2+... from
+            // into one payload, and a version-agnostic --match ("[inline <name>") replays v1+v2+... from
             // log start, so an all-ok payload is routinely multi-line. Suppress iff EVERY line is an ok;
             // one error line among oks still wakes.
             var waitLines = text.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
-            const embedOk = code === 0 && waitLines.length > 0 && waitLines.every(function (l) { return /^\[embed .*\] ok$/.test(l); });
-            if (code === 0 && text && !embedOk) {
+            const inlineOk = code === 0 && waitLines.length > 0 && waitLines.every(function (l) { return /^\[inline .*\] ok$/.test(l); });
+            if (code === 0 && text && !inlineOk) {
               pi.sendUserMessage("typebulb wait result:\n" + text, { deliverAs: "followUp" });
             } else if (code === 0 && !text) {
               // A successful wait always prints its matched line(s), so exit 0 with nothing captured
@@ -194,13 +194,13 @@ export default function (pi) {
               var diag = (text + "\n" + errOut.trim()).trim();
               pi.sendUserMessage("typebulb wait FAILED (exit " + code + ")" + (diag ? ":\n" + diag : " with no output.") + "\nThe wait never armed — nothing is watching. Fix the command and re-arm it.", { deliverAs: "followUp" });
             } else if (ctx.ui && typeof ctx.ui.notify === "function") {
-              // INVARIANT: this notify must never quote the "[embed <name>" tag verbatim. In a
+              // INVARIANT: this notify must never quote the "[inline <name>" tag verbatim. In a
               // composer-driven session the mirror's driver echoes extension notifies into the
               // mirror's own log (driver.ts) — the very log wait watches by substring — so a
               // verbatim tag re-fires the next same-match wait with a non-ok line: a self-
               // sustaining wake loop that defeats this suppression (TB-Wait.md). Stripping the
               // brackets kills the matchable substring while keeping the verdict readable.
-              ctx.ui.notify("typebulb wait: " + (embedOk ? text.replace(/[\[\]]/g, "") : code === 2 ? "timed out, nothing to report" : "ended (code " + code + ")"), "info");
+              ctx.ui.notify("typebulb wait: " + (inlineOk ? text.replace(/[\[\]]/g, "") : code === 2 ? "timed out, nothing to report" : "ended (code " + code + ")"), "info");
             }
           } catch (e) { logErr("exit", e && e.message); }
         });

@@ -17,6 +17,7 @@
 
 import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
 import { consumeStreamText, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
+import { MODE } from 'typebulb/format'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { readFsBytes, writeFsFile } from './tbFs.js'
@@ -86,6 +87,6 @@ export function installServerTb(dir: string, containRoot = process.cwd()): void 
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     aiAccess,
-    mode: 'local' as const,
+    mode: MODE.local,
   })
 }

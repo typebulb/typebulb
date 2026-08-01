@@ -2,11 +2,11 @@
  * HTML page for the debulbified agent mirror.
  *
  * The bulb template (`bulb/template.ts`) builds a page around a compiled bulb: import
- * map, the full `tb` shim, the embed protocol. The mirror needs none of that — it's
+ * map, the full `tb` shim, the inline bulb protocol. The mirror needs none of that — it's
  * ordinary bundled code, so its client (`client.js`) is a self-contained ESM module
  * with no bare imports to resolve, and it talks to its `server.ts` through one tiny
  * surface: `tb.server.<name>()` / `tb.log()`. This builds the trimmed page:
- * the no-flash theme engine (so nested embeds inherit the host theme), the mirror's
+ * the no-flash theme engine (so nested inline bulbs inherit the host theme), the mirror's
  * styles and mount stub, the minimal `tb`, and the module script tag.
  */
 
@@ -17,7 +17,7 @@ export const clientBundleUrl = (agent: string) => `/agents/${agent}/client.js`
 
 /**
  * The mirror's `tb`. Only `tb.server.<name>(...)` (RPC → `POST /__api/<name>`, the exact
- * transport from `bulb/shim.ts`) and `tb.log(...)` (→ `POST /__log`). No embed,
+ * transport from `bulb/shim.ts`) and `tb.log(...)` (→ `POST /__log`). No inline bulb,
  * fs, ai, proxy, or theme paths — the mirror uses none of them, and it always runs
  * `trusted`, so `/__api` is never 403 for it. The `__TYPEBULB_WATCH__` listener mirrors
  * the shim's hot-reload (an esbuild rebuild restarts the server, dropping the SSE; the

@@ -93,7 +93,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
 
   // Start + register the server, and get the shared SIGINT/SIGTERM cleanup shell
   // (serveSession.ts). The cross-project registry entry is what breakout's launch/list/stop
-  // builds on (TB-Agent-Mirror-Embed.md).
+  // builds on (TB-Agent-Mirror-Inline.md).
   const { port, url, onCleanup } = await startAndRegister({
     port: assignedPort,
     portNote,
