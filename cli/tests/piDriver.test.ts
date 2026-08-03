@@ -10,7 +10,6 @@ import { PiRpcDriver } from '../agents/pi/server/driver.js'
 import { trustNotice } from '../agents/pi/server/trust.js'
 import { piExtensionSource } from '../agents/pi/server/piExtension.js'
 import { writeOllamaProvider } from '../agents/pi/server/ollama.js'
-import { applyPatch, discoverDiffKeys, patchOwnership } from '../agents/pi/server/piPatcherExtension.js'
 import { createMirror } from '../agents/core/server/mirror.js'
 import { AgentAdapter, type AgentDriver } from '../agents/core/server/adapter.js'
 import type { SessionFile } from '../agents/core/events.js'
@@ -397,84 +396,6 @@ describe('trustNotice', () => {
     const { driver } = makeDriver('C:\\s.jsonl')
     driver.notice('pi has no trust decision for this project', 'warning')
     expect(driver.status).toEqual({ text: 'pi has no trust decision for this project', kind: 'warning' })
-  })
-})
-
-// The pi patcher extension's apply core (TB-Agent-Pi-Patcher.md): matchu-patchu semantics over
-// real files in a temp dir. The pi wiring (registerTool/setActiveTools) is verified live.
-describe('piPatcherExtension applyPatch', () => {
-  let dir: string
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'tb-patch-')) })
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
-
-  const TWO_FILE_DIFF = [
-    '--- a/one.txt', '+++ b/one.txt', '@@', '-alpha', '+ALPHA',
-    '--- a/two.txt', '+++ b/two.txt', '@@', '-beta', '+BETA', '',
-  ].join('\n')
-
-  it('multi-file mode: keys come from a/ b/ headers via the lib\'s own parser, one changeset patches both', async () => {
-    expect(discoverDiffKeys(TWO_FILE_DIFF)).toEqual(['one.txt', 'two.txt'])
-    await writeFile(join(dir, 'one.txt'), 'alpha\nkeep\n')
-    await writeFile(join(dir, 'two.txt'), 'beta\nkeep\n')
-    const r = applyPatch(dir, { diff: TWO_FILE_DIFF })
-    expect(r.ok).toBe(true)
-    expect(r.message).toContain('1 edit(s) to one.txt')
-    expect(r.message).toContain('1 edit(s) to two.txt')
-    expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('ALPHA\nkeep\n')
-    expect(await readFile(join(dir, 'two.txt'), 'utf-8')).toBe('BETA\nkeep\n')
-  })
-
-  it('a changeset is atomic across files (P2): one bad hunk means no byte lands anywhere', async () => {
-    await writeFile(join(dir, 'one.txt'), 'alpha\nkeep\n')
-    await writeFile(join(dir, 'two.txt'), 'NOT-beta\nkeep\n')
-    const r = applyPatch(dir, { diff: TWO_FILE_DIFF })
-    expect(r.ok).toBe(false)
-    expect(r.message).toContain('error(s)')
-    expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('alpha\nkeep\n')
-    const missing = applyPatch(dir, { diff: TWO_FILE_DIFF.replace(/two\.txt/g, 'gone.txt') })
-    expect(missing.ok).toBe(false)
-    expect(missing.message).toContain('file not found: gone.txt')
-    expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('alpha\nkeep\n')
-  })
-
-  it('filePath mode applies a headerless bare-hunk diff (MCP applyCore semantics)', async () => {
-    await writeFile(join(dir, 'one.txt'), 'alpha\nkeep\n')
-    const r = applyPatch(dir, { diff: '@@\n-alpha\n+ALPHA\n', filePath: 'one.txt' })
-    expect(r.ok).toBe(true)
-    expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('ALPHA\nkeep\n')
-    const again = applyPatch(dir, { diff: '@@\n-alpha\n+ALPHA\n', filePath: 'one.txt' })
-    expect(again.ok).toBe(true)
-    expect(again.message).toContain('already contains this change')
-  })
-
-  it('dryRun returns the patched output and leaves the file untouched', async () => {
-    await writeFile(join(dir, 'one.txt'), 'alpha\nkeep\n')
-    const r = applyPatch(dir, { diff: '@@\n-alpha\n+ALPHA\n', filePath: 'one.txt', dryRun: true })
-    expect(r.ok).toBe(true)
-    expect(r.message).toContain('--- patched output ---')
-    expect(r.message).toContain('ALPHA\nkeep\n')
-    expect(await readFile(join(dir, 'one.txt'), 'utf-8')).toBe('alpha\nkeep\n')
-  })
-})
-
-// The session_start ownership check that keeps a foreign `patch` extension from ever colliding
-// with the shim (P3): register when absent, stand down when foreign, re-apply when ours.
-describe('piPatcherExtension patchOwnership', () => {
-  const ours = { name: 'patch', sourceInfo: { path: 'C:\\Users\\t\\.pi\\agent\\extensions\\matchu-patchu.ts' } }
-  const foreign = { name: 'patch', sourceInfo: { path: 'C:\\proj\\.pi\\extensions\\patcher\\index.ts' } }
-
-  it('no patch registered → absent (we register)', () => {
-    expect(patchOwnership([{ name: 'read' }, { name: 'edit' }], false)).toBe('absent')
-  })
-
-  it('a foreign patch → stand down, never collide', () => {
-    expect(patchOwnership([foreign], false)).toBe('foreign')
-    expect(patchOwnership([{ name: 'patch' }], false)).toBe('foreign')  // no sourceInfo at all
-  })
-
-  it('ours by path, or by the same-process flag on a re-fire', () => {
-    expect(patchOwnership([ours], false)).toBe('ours')
-    expect(patchOwnership([foreign], true)).toBe('ours')
   })
 })
 

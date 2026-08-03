@@ -1,8 +1,7 @@
 /**
  * The typebulb pi extension — typebulb's general presence inside every pi session, installed as
  * `~/.pi/agent/extensions/typebulb.ts`. Two jobs today: the background-wait shim, and the
- * mirror-driven orientation block. (The patcher extension rides the same ensure call as its own
- * file, matchu-patchu.ts.)
+ * mirror-driven orientation block.
  *
  * The wait shim: `typebulb wait` is a wake-up primitive: a process that blocks until an event, then exits, so a
  * harness that re-invokes the agent on a background task's exit turns that exit into a wake
@@ -38,25 +37,20 @@
  * direction `agentViewer/resolve.ts` already uses for `PiAdapter`. Imported as this bare module, not
  * the pi server barrel, so it pulls in no mirror/createMirror boot.
  */
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import * as path from 'path'
-import { fileURLToPath } from 'url'
 import { bundledSkillPath } from '../../../src/servers.js'
 
 const piHome = () => path.join(homedir(), '.pi', 'agent')
 const extensionPath = () => path.join(piHome(), 'extensions', 'typebulb.ts')
-// The pre-generalization install name (wait-only era). MUST be removed when writing the new file:
-// pi loads every file in extensions/, so a stale copy would double-register the wait interceptor
-// and double-spawn every background wait.
-const legacyExtensionPath = () => path.join(piHome(), 'extensions', 'typebulb-wait.ts')
-
-// The patcher extension (TB-Agent-Pi-Patcher.md) is a BUILT asset, not a string literal — it
-// carries the bundled matchu-patchu lib. At runtime this module lives inside the dist/index.js
-// bundle, so the asset is a sibling under dist/agents/pi/; running from source (vitest) the path
-// doesn't exist and the copy silently skips.
-const patcherAssetPath = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'agents', 'pi', 'matchu-patchu.ts')
-const patcherTargetPath = () => path.join(piHome(), 'extensions', 'matchu-patchu.ts')
+// Extensions typebulb used to install and must now REMOVE on sight — pi loads every file in
+// extensions/, so a leftover keeps running forever. `typebulb-wait.ts` is the pre-generalization
+// name of the file above (a stale copy double-registers the wait interceptor, double-spawning every
+// background wait). `matchu-patchu.ts` was the pi patcher extension: it deleted pi's built-in `edit`
+// on session_start, so leaving it behind would keep that tool gone long after we stopped shipping it.
+const staleExtensionPaths = () =>
+  ['typebulb-wait.ts', 'matchu-patchu.ts'].map(f => path.join(piHome(), 'extensions', f))
 
 /**
  * The shim source, written verbatim into pi's extensions dir and loaded by pi (via jiti) inside the
@@ -228,8 +222,6 @@ export function piExtensionSource(): string {
  * task on the CLI hot path; a disk/permission error must not crash the user's actual `typebulb` command).
  * No `~/.pi/agent` → the user doesn't use pi → write nothing. Clobbers unconditionally: whatever typebulb
  * you run writes its own extension, so a downgrade lands that version's too — no stale file, no versioning.
- * The patcher extension rides the same call under the same contract; the two writes are independently
- * wrapped so one failing cannot stop the other.
  */
 export function ensurePiExtension(): void {
   try {
@@ -239,13 +231,10 @@ export function ensurePiExtension(): void {
     const target = extensionPath()
     mkdirSync(path.dirname(target), { recursive: true })
     writeFileSync(target, piExtensionSource())
-    rmSync(legacyExtensionPath(), { force: true })
   } catch {}
-  try {
-    const asset = patcherAssetPath()
-    if (!existsSync(asset)) return
-    const target = patcherTargetPath()
-    mkdirSync(path.dirname(target), { recursive: true })
-    copyFileSync(asset, target)
-  } catch {}
+  // Wrapped per path, separately from the write: a failed write must not skip the reap, and a
+  // left-behind matchu-patchu.ts is the one that costs the user their `edit` tool.
+  for (const stale of staleExtensionPaths()) {
+    try { rmSync(stale, { force: true }) } catch {}
+  }
 }
