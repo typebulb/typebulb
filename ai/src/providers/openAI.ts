@@ -15,7 +15,9 @@ import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProv
 
 // OpenAI Responses API reasoning types. typebulb effort 0 maps to `none` (reasoning off) — `none` is
 // supported across the GPT-5.x line, whereas `minimal` is model-gated (gpt-5.5 has it; gpt-5.4-mini
-// 400s on it), so `none` is the robust floor. low/medium/high are 1/2/3. (`xhigh` is outside the dial.)
+// 400s on it, and 5.6 dropped the rung family-wide), so `none` is the robust floor. Verified against
+// gpt-5.6-luna 2026-08: `none` → 0 reasoning tokens (a real off, not a degrade to low), `minimal` →
+// 400 `unsupported_value`. low/medium/high are 1/2/3. (`xhigh` is outside the dial.)
 export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high'
 export type OpenAIReasoningSummary = 'auto' | 'concise' | 'detailed'
 

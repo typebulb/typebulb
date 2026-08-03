@@ -39,7 +39,7 @@ const insight = `
 const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
-    /** Reasoning effort hint: 0=minimal, 1=low, 2=med, 3=high. Mapped to each provider's native mechanism (OpenAI/OpenRouter reasoning effort, Gemini thinking budget, Anthropic adaptive thinking). 0 minimizes reasoning — a floor, not a guaranteed "off": some models still think a little at 0, and adaptive models already self-skip at 1 (low). Level 1 (low) is the sensible default for most work; reach for 0 only when you truly want minimal deliberation. Omit for the model's own default. */
+    /** Reasoning effort: 0=minimal, 1=low, 2=med, 3=high. Mapped to each provider's native mechanism (OpenAI/OpenRouter reasoning effort, Gemini thinking level, Anthropic adaptive thinking). 0 reaches the vendor's explicit off switch, and floors to a little thinking only on always-thinking models. Pin 1 (low) for most work; pick 0 deliberately, when you want the raw model or latency is the constraint. Omitting is NOT off — it buys the model's own default (medium on GPT-5.6), which reasons and bills invisibly. Ignored on the courtesy model, which runs at the level Typebulb sets. */
     effort?: 0 | 1 | 2 | 3;
     provider?: string;
     model?: string;

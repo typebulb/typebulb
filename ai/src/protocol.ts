@@ -62,10 +62,21 @@ export type ProviderProtocol = 'openai' | 'anthropic' | 'openrouter' | 'gemini' 
 /** Reasoning effort hint: 0 (minimal) – 3 (high). 0 minimizes reasoning, mapped to each provider's
  *  least rung — OpenAI/OpenRouter `none` (`minimal` is model-gated, so `none` is the robust floor),
  *  Gemini `thinkingBudget: 0`, Anthropic no-thinking on Opus (or `low` where thinking can't be
- *  disabled). Higher levels are `low`/`medium`/`high`. Omit entirely for the model's own default. Note
- *  0 is a floor, not a guaranteed "off": always-thinking models degrade it to the lowest available
- *  thinking, and on adaptive models `low` already self-skips. */
+ *  disabled). Higher levels are `low`/`medium`/`high`. Omitting is the model's own *default*, not
+ *  "off" — a native-default reasoner (GPT-5.6: medium) then thinks and bills invisibly. 0 floors to
+ *  the lowest available thinking only on always-thinking models. */
 export type EffortLevel = 0 | 1 | 2 | 3
+
+/** Narrow an untrusted number to the dial, or `undefined` if it isn't one. 0 is a valid level, so a
+ *  falsy check would silently coerce minimal to "omit" — which buys the provider default, not off. */
+export const asEffort = (v: number | undefined | null): EffortLevel | undefined =>
+  v != null && v >= 0 && v <= 3 ? v as EffortLevel : undefined
+
+/** Pull a stored number onto the dial. Unlike `asEffort`, an out-of-range value is capped rather than
+ *  dropped — for persisted settings, where the nearest level beats falling back to a provider default.
+ *  The upper bound must track the dial's top if a level is ever added. */
+export const clampEffort = (v: number): EffortLevel =>
+  Math.max(0, Math.min(v, 3)) as EffortLevel
 
 /** A streamed delta from `tb.ai.stream()`. Discriminated union — exactly one kind per chunk, so
  *  `switch (chunk.kind)` is exhaustive and no `{}`/both-fields state is representable. The public
