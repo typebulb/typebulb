@@ -3,7 +3,8 @@
  *
  * An agent mirror is a browser view over a coding-agent's session — it tails the on-disk
  * transcript and renders the bulbs the agent emits inline. Its code lives under `agents/<name>/`
- * (TB-Agent-Mirror.md). `claude` is the canonical agent; `pi` the second.
+ * (TB-Agent-Mirror.md). `claude` is the canonical agent (first registered, so the default when no
+ * harness is installed); the rest follow it in the order the docs and help text list them.
  *
  * Each entry pairs the two harness-specific factories the rest of the CLI needs:
  *   - `adapter` — construct the harness's `AgentAdapter`. Side-effect free, so `resolve.ts` can read
@@ -19,8 +20,8 @@
  */
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
 import { ClaudeAdapter } from '../../agents/claude/server/adapter.js'
-import { PiAdapter } from '../../agents/pi/server/adapter.js'
 import { CodexAdapter } from '../../agents/codex/server/adapter.js'
+import { PiAdapter } from '../../agents/pi/server/adapter.js'
 
 interface AgentRegistration {
   adapter: () => AgentAdapter
@@ -29,8 +30,8 @@ interface AgentRegistration {
 
 const AGENTS: Record<string, AgentRegistration> = {
   claude: { adapter: () => new ClaudeAdapter(), server: () => import('../../agents/claude/server.js') },
-  pi: { adapter: () => new PiAdapter(), server: () => import('../../agents/pi/server.js') },
   codex: { adapter: () => new CodexAdapter(), server: () => import('../../agents/codex/server.js') },
+  pi: { adapter: () => new PiAdapter(), server: () => import('../../agents/pi/server.js') },
 }
 
 /** Is `name` a reserved agent the CLI can launch (`agent:<name>`)? */
