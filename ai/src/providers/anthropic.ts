@@ -146,7 +146,8 @@ export class AnthropicProvider extends AIProvider {
 
     const payload: AnthropicRequestPayload = {
       model,
-      max_tokens: this.getMaxTokens(model),
+      // A cap never raises the model's own ceiling, so the smaller of the two wins.
+      max_tokens: Math.min(this.getMaxTokens(model), opts?.maxOutputTokens ?? Infinity),
       // Breakpoints on the final two messages cache the conversation prefix (extends each turn)
       messages: this.withTailMessagesCached(conversationMessages),
       stream
@@ -169,15 +170,17 @@ export class AnthropicProvider extends AIProvider {
         // 0 = minimal: thinking off, via the explicit `thinking.disabled` switch. Omitting `thinking`
         // is NOT off — 4.6/4.7/4.8 default to no-thinking, but the 5 family thinks by default, so
         // silence bought thinking there anyway, and hid it (`display` defaults to 'omitted').
-        // `disabled` is rejected above effort `high`, which the 0–3 dial never reaches.
+        // `disabled` is rejected above effort `high`. The dial now reaches `max` (4), but only ever
+        // pairs `disabled` with effort `low` below, so the two can't collide.
         if (depth === 0) {
           if (!this.alwaysThinks(model)) payload.thinking = { type: 'disabled' }
           payload.output_config = { effort: 'low' }
         } else {
-          const effortMap: Record<1 | 2 | 3, 'low' | 'medium' | 'high'> = {
+          const effortMap: Record<1 | 2 | 3 | 4, 'low' | 'medium' | 'high' | 'max'> = {
             1: 'low',
             2: 'medium',
-            3: 'high'
+            3: 'high',
+            4: 'max'
           }
           // display defaults to 'omitted' on Fable 5 / Mythos 5 / Opus 4.7+ / Sonnet 5 (a silent change from
           // Opus 4.6 / Sonnet 4.6, which defaulted to 'summarized') — thinking still happens and is billed,
@@ -188,10 +191,11 @@ export class AnthropicProvider extends AIProvider {
       } else if (depth !== 0) {
         // Older models: manual thinking with budget_tokens. 0 = minimal → omit `thinking` entirely (off);
         // budget_tokens: 0 is rejected, so there's no "tiny budget" rung below the smallest here.
-        const budgetMap: Record<1 | 2 | 3, number> = {
+        const budgetMap: Record<1 | 2 | 3 | 4, number> = {
           1: 2048,
           2: 4096,
-          3: 8192
+          3: 8192,
+          4: 16384
         }
         payload.thinking = {
           type: 'enabled',

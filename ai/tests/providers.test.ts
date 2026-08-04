@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { joinUrl, getProvider } from '../src/aiProviders.js'
-import type { ProviderProtocol } from '../src/protocol.js'
+import { asEffort, clampEffort, type EffortLevel, type ProviderProtocol } from '../src/protocol.js'
 
 /**
  * Guards the providers' production wire behavior (web chat, inference, tb.ai, CLI): URL
@@ -90,7 +90,7 @@ describe('a prefixed / gateway base keeps its prefix', () => {
  * numeric budget. Sending the wrong one (or both) is a 400 upstream.
  */
 describe('gemini effort → thinking config translation', () => {
-  const thinkingConfig = (model: string, effort?: 0 | 1 | 2 | 3) => {
+  const thinkingConfig = (model: string, effort?: 0 | 1 | 2 | 3 | 4) => {
     const p: any = getProvider('gemini').buildPayload(
       [{ role: 'user', content: 'hi' }], model, { effort, webSearch: false }, false)
     return p.generationConfig?.thinkingConfig
@@ -114,6 +114,11 @@ describe('gemini effort → thinking config translation', () => {
     expect(thinkingConfig('gemini-2.5-flash', 3)).toEqual({ includeThoughts: true, thinkingBudget: -1 })
   })
 
+  it('xhigh clamps to high — gemini has no rung above it, and a missing rung never errors', () => {
+    expect(thinkingConfig('gemini-3.5-flash', 4)).toEqual({ includeThoughts: true, thinkingLevel: 'high' })
+    expect(thinkingConfig('gemini-2.5-flash', 4)).toEqual({ includeThoughts: true, thinkingBudget: -1 })
+  })
+
   it('unversioned aliases fall back to budgets (Google back-compat remaps them)', () => {
     expect(thinkingConfig('gemini-flash-latest', 2)).toEqual({ includeThoughts: true, thinkingBudget: 8192 })
   })
@@ -129,7 +134,7 @@ describe('gemini effort → thinking config translation', () => {
  * default, so a silent minimal bought thinking (invisibly, since `display` defaults to 'omitted').
  */
 describe('anthropic minimal effort → thinking off', () => {
-  const think = (model: string, effort?: 0 | 1 | 2 | 3) => {
+  const think = (model: string, effort?: 0 | 1 | 2 | 3 | 4) => {
     const p: any = getProvider('anthropic').buildPayload(
       [{ role: 'user', content: 'hi' }], model, { effort, webSearch: false }, false)
     return { thinking: p.thinking, effort: p.output_config?.effort }
@@ -156,5 +161,79 @@ describe('anthropic minimal effort → thinking off', () => {
     expect(think('claude-3-5-sonnet', 0)).toEqual({ thinking: undefined, effort: undefined })
     expect(think('claude-3-5-sonnet', 2))
       .toEqual({ thinking: { type: 'enabled', budget_tokens: 4096 }, effort: undefined })
+  })
+
+  it('xhigh reaches `max`, anthropic\'s own top rung', () => {
+    expect(think('claude-opus-5', 4))
+      .toEqual({ thinking: { type: 'adaptive', display: 'summarized' }, effort: 'max' })
+    expect(think('claude-3-5-sonnet', 4))
+      .toEqual({ thinking: { type: 'enabled', budget_tokens: 16384 }, effort: undefined })
+  })
+})
+
+/**
+ * Guards the dial's top rung on the two providers that have one natively. `xhigh` is one word (the
+ * spelling OpenAI's own 400 lists), and `none` must stay unsummarized while every thinking level
+ * requests its trace.
+ */
+describe('xhigh (effort 4) → the rung above high', () => {
+  const reasoning = (protocol: 'openai' | 'openrouter', effort?: EffortLevel) => {
+    const p: any = getProvider(protocol).buildPayload(
+      [{ role: 'user', content: 'hi' }], 'gpt-5.6-sol', { effort, webSearch: false }, false)
+    return p.reasoning
+  }
+
+  it('openai sends xhigh with the summary still requested', () => {
+    expect(reasoning('openai', 3)).toEqual({ effort: 'high', summary: 'auto' })
+    expect(reasoning('openai', 4)).toEqual({ effort: 'xhigh', summary: 'auto' })
+    expect(reasoning('openai', 0)).toEqual({ effort: 'none' })
+  })
+
+  it('openrouter sends xhigh — its enum is protocol-wide, per-model support is curated', () => {
+    expect(reasoning('openrouter', 4)).toEqual({ effort: 'xhigh' })
+  })
+
+  it('the dial accepts 4 and clamps a stored value to it', () => {
+    expect(asEffort(4)).toBe(4)
+    expect(asEffort(5)).toBeUndefined()
+    expect(clampEffort(9)).toBe(4)
+    expect(clampEffort(0)).toBe(0)
+  })
+})
+
+/**
+ * Guards the courtesy output cap, which is the only limit on what Typebulb's own key can spend.
+ * It used to be poked in as a chat-completions `max_tokens` by the caller, so it silently failed to
+ * bind on the two providers that name the field differently. Each provider now writes its own.
+ */
+describe('maxOutputTokens → each provider\'s own field', () => {
+  const payload = (protocol: ProviderProtocol, model: string) =>
+    getProvider(protocol).buildPayload(
+      [{ role: 'user', content: 'hi' }], model, { maxOutputTokens: 4000, webSearch: false }, false) as any
+
+  it('openai uses max_output_tokens, not max_tokens', () => {
+    const p = payload('openai', 'gpt-5.6-sol')
+    expect(p.max_output_tokens).toBe(4000)
+    expect(p.max_tokens).toBeUndefined()
+  })
+
+  it('gemini nests it in generationConfig, surviving alongside thinkingConfig', () => {
+    const p: any = getProvider('gemini').buildPayload(
+      [{ role: 'user', content: 'hi' }], 'gemini-3.5-flash',
+      { maxOutputTokens: 4000, effort: 2, webSearch: false }, false)
+    expect(p.generationConfig.maxOutputTokens).toBe(4000)
+    expect(p.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 'medium' })
+    expect(p.max_tokens).toBeUndefined()
+  })
+
+  it('chat-completions shapes keep max_tokens', () => {
+    expect(payload('openrouter', 'openai/gpt-5.6-sol').max_tokens).toBe(4000)
+  })
+
+  it('anthropic takes the smaller of the cap and the model ceiling', () => {
+    expect(payload('anthropic', 'claude-opus-5').max_tokens).toBe(4000)
+    const uncapped: any = getProvider('anthropic').buildPayload(
+      [{ role: 'user', content: 'hi' }], 'claude-opus-5', { webSearch: false }, false)
+    expect(uncapped.max_tokens).toBe(64000)
   })
 })

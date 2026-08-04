@@ -39,8 +39,8 @@ const insight = `
 const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     system?: string;
-    /** Reasoning effort: 0=minimal, 1=low, 2=med, 3=high. Mapped to each provider's native mechanism (OpenAI/OpenRouter reasoning effort, Gemini thinking level, Anthropic adaptive thinking). 0 reaches the vendor's explicit off switch, and floors to a little thinking only on always-thinking models. Pin 1 (low) for most work; pick 0 deliberately, when you want the raw model or latency is the constraint. Omitting is NOT off — it buys the model's own default (medium on GPT-5.6), which reasons and bills invisibly. Ignored on the courtesy model, which runs at the level Typebulb sets. */
-    effort?: 0 | 1 | 2 | 3;
+    /** Reasoning effort: 0=minimal, 1=low, 2=med, 3=high, 4=xhigh. Mapped to each provider's native mechanism (OpenAI/OpenRouter reasoning effort, Gemini thinking level, Anthropic adaptive thinking). 0 reaches the vendor's explicit off switch, and floors to a little thinking only on always-thinking models. 4 reaches the rung above high where the vendor has one (OpenAI/OpenRouter xhigh, Anthropic max) and clamps to high where it doesn't (Gemini) — never an error. Pin 1 (low) for most work; pick 0 deliberately, when you want the raw model or latency is the constraint. Omitting is NOT off — it buys the model's own default (medium on GPT-5.6), which reasons and bills invisibly. Ignored on the courtesy model, which runs at the level Typebulb sets. */
+    effort?: 0 | 1 | 2 | 3 | 4;
     provider?: string;
     model?: string;
     /** Enable/disable web search. Default: on for BYOK, always off for free model. */
@@ -77,7 +77,7 @@ const ai = `
      * Streaming counterpart of \`tb.ai()\`. Yields \`{ kind: "text" | "reasoning", text }\` deltas
      * as they arrive; break the loop (or abort \`signal\`) to cancel and stop the upstream.
      *
-     * \`kind: "reasoning"\` deltas only arrive when you pass \`effort: 1-3\` AND use a
+     * \`kind: "reasoning"\` deltas only arrive when you pass \`effort: 1-4\` AND use a
      * thinking-capable model; otherwise the stream is \`text\`-only.
      *
      * @example

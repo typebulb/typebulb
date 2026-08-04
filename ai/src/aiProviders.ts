@@ -42,9 +42,12 @@ export interface SendAIRequestOpts {
   stream: boolean
   effort?: EffortLevel
   webSearch?: boolean
+  /** Hard cap on response tokens (reasoning included). Replaces the old `modifyPayload` hook, which
+   *  wrote a chat-completions `max_tokens` and so silently failed to bind on the OpenAI Responses
+   *  API and Gemini — the two whose payloads name it differently. */
+  maxOutputTokens?: number
   origin?: string
   signal?: AbortSignal
-  modifyPayload?: (payload: Record<string, unknown>) => void
 }
 
 /**
@@ -74,11 +77,9 @@ export async function sendAIRequest(
   const payload = spec.buildPayload(
     opts.messages,
     provider.model,
-    { effort: opts.effort, webSearch: opts.webSearch },
+    { effort: opts.effort, webSearch: opts.webSearch, maxOutputTokens: opts.maxOutputTokens },
     opts.stream
   ) as Record<string, unknown>
-
-  opts.modifyPayload?.(payload)
 
   return fetch(url, {
     method: 'POST',

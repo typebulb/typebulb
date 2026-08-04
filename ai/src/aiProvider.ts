@@ -9,8 +9,12 @@ import type {
   StreamErrorCode
 } from './protocol.js'
 
-/** Options for building chat request payloads */
-export type ChatRequestOpts = { effort?: EffortLevel; webSearch?: boolean } | undefined
+/** Options for building chat request payloads. `maxOutputTokens` is a hard cap on the response
+ *  (reasoning included, since it bills as output) — each provider writes it to its own field, the
+ *  way `effort` is translated, because the field name is payload-shaped and only the provider
+ *  knows the shape. */
+export type ChatRequestOpts =
+  { effort?: EffortLevel; webSearch?: boolean; maxOutputTokens?: number } | undefined
 
 /**
  * Error thrown by provider stream parsing when the provider or server reports an error.

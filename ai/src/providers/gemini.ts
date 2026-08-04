@@ -102,7 +102,9 @@ export class GeminiProvider extends AIProvider {
   readonly defaultBaseUrl = 'https://generativelanguage.googleapis.com'
   readonly path = '/v1beta/models'
 
-  private readonly budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1 }
+  // 4 repeats 3's `-1`: dynamic already means "think maximally", so the dial's top rung has nowhere
+  // higher to go on 2.5-era models — the clamp, expressed in the table.
+  private readonly budgetMap: Record<EffortLevel, number> = { 0: 0, 1: 1024, 2: 8192, 3: -1, 4: -1 }
 
   // ── Request building ─────────────────────────────────────────────
 
@@ -160,6 +162,12 @@ export class GeminiProvider extends AIProvider {
       payload.generationConfig = {
         thinkingConfig: effort === 0 ? dial : { includeThoughts: true, ...dial },
       }
+    }
+
+    // Gemini nests it under generationConfig — merged rather than assigned, so it survives
+    // alongside a thinkingConfig set above (and creates the object when effort was omitted).
+    if (opts?.maxOutputTokens !== undefined) {
+      payload.generationConfig = { ...payload.generationConfig, maxOutputTokens: opts.maxOutputTokens }
     }
 
     return payload
@@ -238,10 +246,11 @@ export class GeminiProvider extends AIProvider {
   }
 
   /** Dial → level, clamped to the family's supported enum: `minimal` is 3.5+; earlier 3.x floors at
-   *  `low`. (gemini-3-pro-preview's low|high-only enum would need a wider clamp, but Google retired
-   *  the model — 404 verified 2026-07-15.) */
+   *  `low`. Gemini has no rung above `high`, so the dial's 4 clamps down to it — clamping, never a
+   *  400, is the rule for a missing rung. (gemini-3-pro-preview's low|high-only enum would need a
+   *  wider clamp, but Google retired the model — 404 verified 2026-07-15.) */
   private thinkingLevelFor(version: number, effort: EffortLevel): GeminiThinkingLevel {
-    const level = (['minimal', 'low', 'medium', 'high'] as const)[effort]
+    const level = (['minimal', 'low', 'medium', 'high', 'high'] as const)[effort]
     return level === 'minimal' && version < 3.5 ? 'low' : level
   }
 

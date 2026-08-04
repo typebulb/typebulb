@@ -17,8 +17,9 @@ import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProv
 // supported across the GPT-5.x line, whereas `minimal` is model-gated (gpt-5.5 has it; gpt-5.4-mini
 // 400s on it, and 5.6 dropped the rung family-wide), so `none` is the robust floor. Verified against
 // gpt-5.6-luna 2026-08: `none` → 0 reasoning tokens (a real off, not a degrade to low), `minimal` →
-// 400 `unsupported_value`. low/medium/high are 1/2/3. (`xhigh` is outside the dial.)
-export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high'
+// 400 `unsupported_value` naming the survivors (none/low/medium/high/xhigh/max) — which is also the
+// evidence for `xhigh` at 4. low/medium/high are 1/2/3. (`max` sits above the dial, deliberately.)
+export type OpenAIReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 export type OpenAIReasoningSummary = 'auto' | 'concise' | 'detailed'
 
 // OpenAI Responses API tool types
@@ -32,6 +33,9 @@ export type OpenAITool = OpenAIWebSearchTool
 export interface OpenAIResponsesApiRequestDto {
   model: string
   input: string  // Single string instead of messages array
+  // The Responses API names it `max_output_tokens`; a chat-completions `max_tokens` is not
+  // recognized here, which is why the cap is translated per provider rather than patched in.
+  max_output_tokens?: number
   reasoning?: {
     effort: OpenAIReasoningEffort
     summary?: OpenAIReasoningSummary
@@ -139,7 +143,8 @@ export class OpenAIProvider extends AIProvider {
     0: 'none',
     1: 'low',
     2: 'medium',
-    3: 'high'
+    3: 'high',
+    4: 'xhigh'
   }
 
   // ── Request building ─────────────────────────────────────────────
@@ -175,6 +180,10 @@ export class OpenAIProvider extends AIProvider {
       const effort = this.effortMap[opts.effort]
       // `summary: 'auto'` requests a reasoning summary; at `none` there's no reasoning to summarize.
       payload.reasoning = effort === 'none' ? { effort } : { effort, summary: 'auto' }
+    }
+
+    if (opts?.maxOutputTokens !== undefined) {
+      payload.max_output_tokens = opts.maxOutputTokens
     }
 
     return payload

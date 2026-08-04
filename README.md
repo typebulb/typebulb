@@ -419,7 +419,7 @@ Or you can rely on the default provider and model if you set them in `.env`.
 
 ### Reasoning effort
 
-`tb.ai()` accepts an optional `effort` parameter (0–3) that hints at how much the model should reason. `low` (1) is the sensible default for most work; omit it for the model's own default.
+`tb.ai()` accepts an optional `effort` parameter (0–4) that hints at how much the model should reason. `low` (1) is the sensible default for most work; omit it for the model's own default.
 
 | Level | Label | Effect |
 |-------|-------|--------|
@@ -427,6 +427,7 @@ Or you can rely on the default provider and model if you set them in `.env`.
 | 1 | Low | Light reasoning |
 | 2 | Med | Moderate reasoning |
 | 3 | High | Heavy reasoning |
+| 4 | XHigh | The rung above high where the provider has one (OpenAI, Anthropic); clamps down to High where it doesn't, never errors. |
 
 ```typescript
 const { text } = await tb.ai({
@@ -446,7 +447,7 @@ for await (const c of tb.ai.stream({ messages })) {
 }
 ```
 
-Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-3` and a thinking-capable model**.
+Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-4` and a thinking-capable model**.
 
 ### AI access
 
