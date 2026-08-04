@@ -16,7 +16,7 @@
     "sourceMap": false,
     "outDir": ".tsbuild",
     "esModuleInterop": true,
-    "strictFunctionTypes": true,
+    "strict": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
