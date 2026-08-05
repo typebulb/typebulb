@@ -237,3 +237,28 @@ describe('maxOutputTokens → each provider\'s own field', () => {
     expect(uncapped.max_tokens).toBe(64000)
   })
 })
+
+/**
+ * Guards the web-search default: a bare call must not attach a search tool — the spend decision is
+ * the caller's (TB-AI.md invariant 16), matching every provider API's own default of off.
+ */
+describe('webSearch → opt-in, never a default tool', () => {
+  const searchPayload = (protocol: ProviderProtocol, model: string, webSearch?: boolean) =>
+    getProvider(protocol).buildPayload(
+      [{ role: 'user', content: 'hi' }], model, { webSearch }, false) as any
+
+  it('omitted webSearch attaches no tool on any provider', () => {
+    expect(searchPayload('anthropic', 'claude-opus-5').tools).toBeUndefined()
+    expect(searchPayload('openai', 'gpt-5.6-sol').tools).toBeUndefined()
+    expect(searchPayload('gemini', 'gemini-3.5-flash').tools).toBeUndefined()
+    expect(searchPayload('openrouter', 'openai/gpt-5.6-sol').plugins).toBeUndefined()
+  })
+
+  it('webSearch: true attaches each provider\'s native tool', () => {
+    expect(searchPayload('anthropic', 'claude-opus-5', true).tools)
+      .toEqual([{ type: 'web_search_20250305', name: 'web_search' }])
+    expect(searchPayload('openai', 'gpt-5.6-sol', true).tools).toEqual([{ type: 'web_search' }])
+    expect(searchPayload('gemini', 'gemini-3.5-flash', true).tools).toEqual([{ google_search: {} }])
+    expect(searchPayload('openrouter', 'openai/gpt-5.6-sol', true).plugins).toEqual([{ id: 'web' }])
+  })
+})

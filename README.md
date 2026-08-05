@@ -316,7 +316,7 @@ The host owns a bulb's **width**; you own its **height**.
 - **All imports at the top of `code.tsx`, and every bare import declared in `config.json` `dependencies`.** Bare imports (`react`, `d3`, `three`, …) resolve from a CDN — no install step — but declaring them is **required, not optional**: an import missing from `dependencies` is a lint error that fails `npx typebulb check` *and* refuses to run. Declaring is also what pins versions and lets `check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`). So a bulb with imports must carry a `config.json` with a matching `dependencies` entry for each.
 - **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
 - **Native dropdowns.** Style `select, option { background: Canvas; color: CanvasText }` (system colors track the host's `color-scheme`) — a `transparent` `<select>` otherwise opens an unthemed popup, white-on-white in dark mode.
-- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **on** in the CLI (you supply your own key); pass `webSearch: false` to turn it off. For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
+- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **off**; pass `webSearch: true` to give the model a web-search tool (searches bill to your key). For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
 - **Gate AI-heavy bulbs on `tb.aiAccess()`** — `'own'` / `'courtesy'` / `'none'`, never re-derived from `tb.mode` or the model list (see [AI access](#ai-access)).
 - **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
 - **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
@@ -413,7 +413,7 @@ Run `typebulb models` to list the models available for the providers specified.
 
 Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys.
 
-You can call the provider and model explicitly like this: `tb.ai({ provider: "gemini", model: "gemini-3.1-flash-lite", ... })`.
+You can call the provider and model explicitly like this: `tb.ai({ provider: "openai", model: "gpt-5.6-luna", ... })`.
 
 Or you can rely on the default provider and model if you set them in `.env`.
 

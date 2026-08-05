@@ -71,9 +71,9 @@ export interface TbAiRequest {
 /**
  * Send a resolved `tb.ai` request and return the raw streamed provider Response. Always streams under
  * the hood (SSE keeps long responses alive past httpClient's 20s timeout); the caller projects it to
- * text (`consumeStreamText`) or chunks (`streamAiChunks`). Centralizes the system-prepend, the
+ * text (`consumeStreamText`) or chunks (`streamAiChunks`). Centralizes the system-prepend and the
  * effort normalization (`asEffort`: only 0–4 pass through, anything else omits the hint → provider
- * default), and the webSearch default (on).
+ * default).
  */
 export function sendTbAi(resolved: ResolvedAIProvider, req: TbAiRequest): Promise<Response> {
   const chatMessages: ChatMessageDto[] = [
@@ -84,7 +84,7 @@ export function sendTbAi(resolved: ResolvedAIProvider, req: TbAiRequest): Promis
     messages: chatMessages,
     stream: true,
     effort: asEffort(req.effort),
-    webSearch: req.webSearch ?? true,
+    webSearch: req.webSearch,
     signal: req.signal,
   })
 }

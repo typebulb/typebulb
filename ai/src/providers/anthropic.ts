@@ -153,8 +153,7 @@ export class AnthropicProvider extends AIProvider {
       stream
     }
 
-    // Enable web search by default, can be disabled via opts.webSearch = false
-    if (opts?.webSearch !== false) {
+    if (opts?.webSearch === true) {
       payload.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
     }
 

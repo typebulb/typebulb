@@ -136,8 +136,7 @@ export class GeminiProvider extends AIProvider {
 
     const payload: GeminiRequestPayload = { contents }
 
-    // Enable search grounding by default, can be disabled via opts.webSearch = false
-    if (opts?.webSearch !== false) {
+    if (opts?.webSearch === true) {
       payload.tools = [{ google_search: {} }]
     }
 

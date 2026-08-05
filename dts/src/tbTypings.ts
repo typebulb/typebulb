@@ -43,7 +43,7 @@ const aiOptions = `options: {
     effort?: 0 | 1 | 2 | 3 | 4;
     provider?: string;
     model?: string;
-    /** Enable/disable web search. Default: on for BYOK, always off for free model. */
+    /** Give the model a web-search tool, billed to the user's key. Off by default; the free model never searches. */
     webSearch?: boolean;
     /** Abort the request. On abort the promise rejects / the stream ends. */
     signal?: AbortSignal;
