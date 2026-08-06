@@ -18,6 +18,7 @@ export type OpenRouterRequestPayload = {
   messages: ChatMessageDto[]
   stream: boolean
   max_tokens?: number
+  stream_options?: { include_usage: boolean }
   reasoning?: { effort: 'none' | 'low' | 'medium' | 'high' | 'xhigh' }
   plugins?: OpenRouterWebPlugin[]
 }
@@ -77,6 +78,12 @@ export class OpenRouterProvider extends ChatCompletionsProvider {
       model,
       messages,
       stream
+    }
+
+    // Chat Completions streams report no usage unless asked — the final extra chunk (empty
+    // `choices`, `usage` set) only arrives with this opt-in. The other providers volunteer usage.
+    if (stream) {
+      payload.stream_options = { include_usage: true }
     }
 
     // Off by default: a bare `web` plugin auto-selects the model's NATIVE search, which bills the

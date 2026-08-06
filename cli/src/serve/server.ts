@@ -9,7 +9,7 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
-import { normalizeUpstreamError, consumeStreamText, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
+import { normalizeUpstreamError, consumeStreamResult, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
 import { parseConfig, splitIntoChunks, contentTypeFor, forbiddenAssetExt } from 'typebulb/format'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { inferModalJs } from '../bulb/inferModalUi.js'
@@ -389,18 +389,21 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       }
 
       // tb.ai.stream(): tunnel each provider delta to the bulb as an AiChunk over the shared NDJSON
-      // transport. Non-streaming tb.ai() keeps buffering to a single { text } (reasoning discarded).
+      // transport (the final usage chunk rides along). Non-streaming tb.ai() buffers to a single
+      // { text, usage? } (reasoning discarded).
       if (wantStream) {
         return streamNdjson(c, streamAiChunks(response, resolved.protocol))
       }
 
-      const text = await consumeStreamText(response, resolved.protocol)
+      const { text, usage } = await consumeStreamResult(response, resolved.protocol)
 
       if (!text) {
         console.warn('[tb.ai] Empty response from provider')
       }
 
-      return c.json({ text })
+      // JSON.stringify drops an undefined usage, so a provider that reported nothing keeps the
+      // body shape bulbs had before.
+      return c.json({ text, usage })
     } catch (e) {
       return c.json(toStreamError(e), 500)
     }

@@ -194,15 +194,16 @@ export const typebulbShim = `
     err.retryable = !!data.retryable;
     return err;
   };
-  // tb.ai(): non-streaming, resolves with the full { text } (unchanged 90% path).
+  // tb.ai(): non-streaming, resolves with the full { text, usage? } (unchanged 90% path).
   const aiCall = async (opts) => {
     const resp = await aiFetch('tb.ai()', opts, undefined);
     const data = await resp.json();
     if (!resp.ok) throw aiError(data);
     return data;
   };
-  // tb.ai.stream(): async iterable of AiChunk ({ kind:'text'|'reasoning', text }). Same idiom as a
-  // streaming tb.server.<gen>(). Break the loop (or abort the signal) to cancel.
+  // tb.ai.stream(): async iterable of AiChunk ({ kind:'text'|'reasoning', text } deltas, then one
+  // final { kind:'usage', usage } when the provider reported counts). Same idiom as a streaming
+  // tb.server.<gen>(). Break the loop (or abort the signal) to cancel.
   const aiStream = (opts = {}) => (async function* () {
     const resp = await aiFetch('tb.ai.stream()', opts, true);
     if (!resp.ok && !isStreamResp(resp)) throw aiError(await resp.json().catch(() => ({})));

@@ -21,6 +21,7 @@ export type OllamaRequestPayload = {
   model: string
   messages: ChatMessageDto[]
   stream: boolean
+  stream_options?: { include_usage: boolean }
 }
 
 export class OllamaProvider extends ChatCompletionsProvider {
@@ -51,12 +52,16 @@ export class OllamaProvider extends ChatCompletionsProvider {
   // Web search and the reasoning-effort knob have no equivalent on the OpenAI-compat endpoint,
   // so the payload stays minimal. Ollama-specific options (num_ctx, think, …) are intentionally
   // out of scope for tb.ai — use a server.ts export for those (runtime-specs/TB-Server-Streaming.md).
+  // `stream_options.include_usage` is standard Chat Completions (Ollama, vLLM and LM Studio all
+  // honor it); an endpoint that ignores it simply reports no usage.
   buildPayload(
     messages: ChatMessageDto[],
     model: string,
     _opts: ChatRequestOpts,
     stream: boolean
   ): OllamaRequestPayload {
-    return { model, messages, stream }
+    return stream
+      ? { model, messages, stream, stream_options: { include_usage: true } }
+      : { model, messages, stream }
   }
 }

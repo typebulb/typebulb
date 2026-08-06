@@ -15,8 +15,8 @@
  * agent that logs the same way in both.
  */
 
-import type { AiChunk, ProviderProtocol, TbModelDto } from 'typebulb/ai'
-import { consumeStreamText, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
+import type { AiChunk, AiUsage, ProviderProtocol, TbModelDto } from 'typebulb/ai'
+import { consumeStreamResult, streamAiChunks, normalizeUpstreamError } from 'typebulb/ai'
 import { MODE } from 'typebulb/format'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { getFilteredModels, aiAccess } from './modelCatalog.js'
@@ -25,7 +25,7 @@ import { readFsBytes, writeFsFile } from './tbFs.js'
 interface TbAiOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
   system?: string
-  effort?: 0 | 1 | 2 | 3
+  effort?: 0 | 1 | 2 | 3 | 4
   provider?: string
   model?: string
   webSearch?: boolean
@@ -45,9 +45,9 @@ async function open(opts: TbAiOptions): Promise<{ response: Response; protocol: 
   return { response, protocol: resolved.protocol }
 }
 
-async function tbAi(opts: TbAiOptions): Promise<{ text: string }> {
+async function tbAi(opts: TbAiOptions): Promise<{ text: string; usage?: AiUsage }> {
   const { response, protocol } = await open(opts)
-  return { text: await consumeStreamText(response, protocol) }
+  return consumeStreamResult(response, protocol)
 }
 
 async function* tbAiStream(opts: TbAiOptions): AsyncGenerator<AiChunk> {

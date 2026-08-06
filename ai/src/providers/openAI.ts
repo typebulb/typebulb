@@ -7,8 +7,10 @@ import type {
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
-  ProviderStreamEventDto
+  ProviderStreamEventDto,
+  AiUsage
 } from '../protocol.js'
+import { finalizeUsage } from '../protocol.js'
 import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProvider.js'
 
 // ── Wire types ───────────────────────────────────────────────────────
@@ -67,11 +69,21 @@ export interface OpenAIResponseReasoningItem {
 
 export type OpenAIResponseOutputItem = OpenAIResponseOutputMessage | OpenAIResponseReasoningItem
 
+// Usage on the Responses API: inclusive counts (`input_tokens` contains the cached subset,
+// `output_tokens` the reasoning subset), with the subsets itemized under *_details.
+export interface OpenAIUsageDto {
+  input_tokens?: number
+  output_tokens?: number
+  input_tokens_details?: { cached_tokens?: number }
+  output_tokens_details?: { reasoning_tokens?: number }
+}
+
 // OpenAI Responses API response format (non-streaming)
 export interface OpenAIResponsesApiResponseDto extends ProviderResponseDto {
   object: 'response'
   output_text: string  // Quick access to text output
   output: Array<OpenAIResponseOutputItem>  // Structured output including reasoning
+  usage?: OpenAIUsageDto
 }
 
 // SSE events (OpenAI Responses API)
@@ -213,7 +225,7 @@ export class OpenAIProvider extends AIProvider {
       }
     }
 
-    return { text, reasoning }
+    return { text, reasoning, usage: this.mapUsage(json.usage) }
   }
 
   protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
@@ -234,12 +246,29 @@ export class OpenAIProvider extends AIProvider {
       case 'response.reasoning_summary_text.delta':
         return { reasoning: (json as OpenAIResponseReasoningSummaryTextDeltaEvent).delta }
 
+      // The final event carries the complete response, usage included — the one place the
+      // Responses API reports token counts on a stream.
+      case 'response.completed': {
+        const usage = this.mapUsage((json as OpenAIResponseCompletedEvent).response?.usage)
+        return usage ? { usage } : null
+      }
+
       default:
         return null
     }
   }
 
   // ── Private helpers ──────────────────────────────────────────────
+
+  private mapUsage(u: OpenAIUsageDto | undefined): AiUsage | undefined {
+    if (!u) return undefined
+    return finalizeUsage({
+      input: u.input_tokens,
+      output: u.output_tokens,
+      reasoning: u.output_tokens_details?.reasoning_tokens,
+      cacheRead: u.input_tokens_details?.cached_tokens,
+    })
+  }
 
   private convertMessagesToInput(messages: ChatMessageDto[]): string {
     return messages.map(m => {

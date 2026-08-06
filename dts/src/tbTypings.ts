@@ -51,10 +51,17 @@ const aiOptions = `options: {
 
 /** A streamed delta from \`tb.ai.stream()\` — a discriminated union, exactly one kind per chunk. */
 const aiChunkType = `
+/** Provider-reported token counts for one call — real usage from the API, never an estimate.
+ *  \`output\` is total billed output (reasoning included); \`reasoning\` is the itemized subset where
+ *  the provider splits it (OpenAI, Gemini, OpenRouter — Anthropic doesn't); \`cacheRead\` is the
+ *  cached subset of \`input\`. */
+type AiUsage = { input: number; output: number; reasoning?: number; cacheRead?: number };
+
 /** A single streamed delta from \`tb.ai.stream()\`. Discriminated by \`kind\`. */
 type AiChunk =
   | { kind: "text"; text: string }
-  | { kind: "reasoning"; text: string };
+  | { kind: "reasoning"; text: string }
+  | { kind: "usage"; usage: AiUsage };
 `
 
 /** What \`tb.aiAccess()\` answers. Named so bulbs can hold it in state without respelling the union. */
@@ -68,14 +75,18 @@ const ai = `
    * General-purpose AI call. \`tb.ai(opts)\` resolves with the full text; \`tb.ai.stream(opts)\`
    * returns an async iterable of {@link AiChunk} deltas you consume with \`for await\`.
    *
-   * @returns Promise resolving to { text: string }
+   * @returns Promise resolving to { text, usage? } — \`usage\` is the provider-reported token
+   *   counts ({@link AiUsage}), absent when the provider reported none
    * @throws On rate limit, network error, or provider error
    */
   ai: {
-    (${aiOptions}): Promise<{ text: string }>;
+    (${aiOptions}): Promise<{ text: string; usage?: AiUsage }>;
     /**
      * Streaming counterpart of \`tb.ai()\`. Yields \`{ kind: "text" | "reasoning", text }\` deltas
-     * as they arrive; break the loop (or abort \`signal\`) to cancel and stop the upstream.
+     * as they arrive, then one final \`{ kind: "usage", usage }\` chunk with the call's token
+     * counts (when the provider reported them); break the loop (or abort \`signal\`) to cancel
+     * and stop the upstream. Match \`kind\` positively — a bare \`else\` branch that assumes
+     * "not reasoning means text" will misread the usage chunk.
      *
      * \`kind: "reasoning"\` deltas only arrive when you pass \`effort: 1-4\` AND use a
      * thinking-capable model; otherwise the stream is \`text\`-only.

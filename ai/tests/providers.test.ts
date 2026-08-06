@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { joinUrl, getProvider } from '../src/aiProviders.js'
 import { asEffort, clampEffort, type EffortLevel, type ProviderProtocol } from '../src/protocol.js'
+import { streamAiChunks } from '../src/sseParser.js'
 
 /**
  * Guards the providers' production wire behavior (web chat, inference, tb.ai, CLI): URL
@@ -260,5 +261,96 @@ describe('webSearch → opt-in, never a default tool', () => {
     expect(searchPayload('openai', 'gpt-5.6-sol', true).tools).toEqual([{ type: 'web_search' }])
     expect(searchPayload('gemini', 'gemini-3.5-flash', true).tools).toEqual([{ google_search: {} }])
     expect(searchPayload('openrouter', 'openai/gpt-5.6-sol', true).plugins).toEqual([{ id: 'web' }])
+  })
+})
+
+/**
+ * Guards token-usage reporting (TB-AI.md: the un-deferred usage decision). Every provider reports
+ * real counts and the parsers must keep them: normalized `{ input, output, reasoning?, cacheRead? }`
+ * with `input` inclusive of cache reads, `output` inclusive of reasoning, subsets itemized where
+ * the provider splits them. The chat-completions stream only reports usage under the
+ * `stream_options.include_usage` opt-in, as a final chunk whose `choices` is empty.
+ */
+describe('usage → kept, normalized, never estimated', () => {
+  it('anthropic splits usage across message_start (input side) and message_delta (output)', () => {
+    const p = getProvider('anthropic')
+    expect(p.parseStreamChunk({
+      type: 'message_start',
+      message: { usage: { input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 5, output_tokens: 1 } }
+    })).toEqual({ usage: { input: 105, output: 1, cacheRead: 90 } })
+    expect(p.parseStreamChunk({ type: 'message_delta', delta: {}, usage: { output_tokens: 250 } }))
+      .toEqual({ usage: { input: undefined, output: 250, cacheRead: undefined } })
+  })
+
+  it('openai reports complete usage on response.completed, subsets itemized', () => {
+    const piece = getProvider('openai').parseStreamChunk({
+      type: 'response.completed',
+      response: {
+        object: 'response',
+        usage: {
+          input_tokens: 70, output_tokens: 1500,
+          input_tokens_details: { cached_tokens: 64 },
+          output_tokens_details: { reasoning_tokens: 1400 }
+        }
+      }
+    })
+    expect(piece).toEqual({ usage: { input: 70, output: 1500, reasoning: 1400, cacheRead: 64 } })
+  })
+
+  it('gemini normalizes output to answer + thoughts (its counts are disjoint)', () => {
+    const piece = getProvider('gemini').parseStreamChunk({
+      candidates: [{ content: { role: 'model', parts: [{ text: 'hi' }] } }],
+      usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 30, thoughtsTokenCount: 270 }
+    })
+    expect(piece).toEqual({ text: 'hi', reasoning: undefined, usage: { input: 40, output: 300, reasoning: 270, cacheRead: undefined } })
+  })
+
+  it('chat-completions reads the usage-only final chunk despite its empty choices', () => {
+    const piece = getProvider('openrouter').parseStreamChunk({
+      choices: [],
+      usage: { prompt_tokens: 26, completion_tokens: 900, completion_tokens_details: { reasoning_tokens: 700 } }
+    })
+    expect(piece).toEqual({ text: undefined, reasoning: undefined, usage: { input: 26, output: 900, reasoning: 700, cacheRead: undefined } })
+  })
+
+  it('chat-completions builders opt in to stream usage — and only on streams', () => {
+    const payload = (protocol: ProviderProtocol, stream: boolean) =>
+      getProvider(protocol).buildPayload([{ role: 'user', content: 'hi' }], 'm', undefined, stream) as any
+    expect(payload('openrouter', true).stream_options).toEqual({ include_usage: true })
+    expect(payload('openrouter', false).stream_options).toBeUndefined()
+    expect(payload('ollama', true).stream_options).toEqual({ include_usage: true })
+    expect(payload('ollama', false).stream_options).toBeUndefined()
+    // The other providers volunteer usage; their payloads carry no such flag.
+    expect(payload('openai', true).stream_options).toBeUndefined()
+    expect(payload('anthropic', true).stream_options).toBeUndefined()
+  })
+
+  const sse = (events: unknown[]) =>
+    new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''))
+
+  it('streamAiChunks merges the fragments into ONE final usage chunk after the deltas', async () => {
+    const response = sse([
+      { type: 'message_start', message: { usage: { input_tokens: 12, cache_read_input_tokens: 88, output_tokens: 1 } } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hel' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'lo' } },
+      { type: 'message_delta', delta: {}, usage: { output_tokens: 42 } },
+      { type: 'message_stop' }
+    ])
+    const chunks = []
+    for await (const c of streamAiChunks(response, 'anthropic')) chunks.push(c)
+    expect(chunks).toEqual([
+      { kind: 'text', text: 'hel' },
+      { kind: 'text', text: 'lo' },
+      { kind: 'usage', usage: { input: 100, output: 42, reasoning: undefined, cacheRead: 88 } }
+    ])
+  })
+
+  it('a stream with no usage events emits no usage chunk (absence, not zeros)', async () => {
+    const response = sse([
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } }
+    ])
+    const chunks = []
+    for await (const c of streamAiChunks(response, 'anthropic')) chunks.push(c)
+    expect(chunks).toEqual([{ kind: 'text', text: 'hi' }])
   })
 })

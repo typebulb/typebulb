@@ -9,8 +9,10 @@ import type {
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
-  ProviderStreamEventDto
+  ProviderStreamEventDto,
+  AiUsage
 } from '../protocol.js'
+import { finalizeUsage } from '../protocol.js'
 import { AIProvider, ProviderStreamError, type ChatRequestOpts } from '../aiProvider.js'
 
 // ── Wire types ───────────────────────────────────────────────────────
@@ -78,10 +80,20 @@ export interface GeminiPromptFeedback {
   blockReason?: string
 }
 
+// Cumulative usage counts, attached to (at least) the final streamed chunk. `candidatesTokenCount`
+// is answer-only — thoughts are itemized separately in `thoughtsTokenCount`.
+export interface GeminiUsageMetadata {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  thoughtsTokenCount?: number
+  cachedContentTokenCount?: number
+}
+
 // Non-streaming response
 export interface GeminiResponseDto extends ProviderResponseDto {
   candidates?: GeminiCandidate[]
   promptFeedback?: GeminiPromptFeedback
+  usageMetadata?: GeminiUsageMetadata
 }
 
 // SSE streaming event - same structure as non-streaming, delivered incrementally
@@ -224,7 +236,7 @@ export class GeminiProvider extends AIProvider {
       status = 'failed'
     }
 
-    return { text, status }
+    return { text, status, usage: this.mapUsage(json.usageMetadata) }
   }
 
   protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
@@ -233,10 +245,27 @@ export class GeminiProvider extends AIProvider {
     if (!this.isGeminiResponse(json)) return null
 
     const piece = this.extractParts(json)
-    return (piece.text || piece.reasoning) ? piece : null
+    // Counts are cumulative per chunk, so passing every sighting through is safe — the stream
+    // adapter's later-wins merge lands on the final (complete) one.
+    const usage = this.mapUsage(json.usageMetadata)
+    if (usage) piece.usage = usage
+    return (piece.text || piece.reasoning || piece.usage) ? piece : null
   }
 
   // ── Private helpers ──────────────────────────────────────────────
+
+  /** `output` is normalized to total billed output — Gemini itemizes answer and thought tokens as
+   *  disjoint counts, where the other providers report an inclusive total with subsets. */
+  private mapUsage(u: GeminiUsageMetadata | undefined): AiUsage | undefined {
+    if (!u) return undefined
+    const hasOutput = u.candidatesTokenCount !== undefined || u.thoughtsTokenCount !== undefined
+    return finalizeUsage({
+      input: u.promptTokenCount,
+      output: hasOutput ? (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) : undefined,
+      reasoning: u.thoughtsTokenCount,
+      cacheRead: u.cachedContentTokenCount,
+    })
+  }
 
   /** Major.minor from a versioned model name (`gemini-3.5-flash` → 3.5); null for aliases. */
   private geminiVersion(model: string): number | null {

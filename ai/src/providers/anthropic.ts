@@ -6,8 +6,10 @@ import type {
   ChatStreamPieceDto,
   ChatResponseDto,
   ProviderResponseDto,
-  ProviderStreamEventDto
+  ProviderStreamEventDto,
+  AiUsage,
 } from '../protocol.js'
+import { finalizeUsage } from '../protocol.js'
 import { AIProvider, type ChatRequestOpts } from '../aiProvider.js'
 
 // ── Wire types ───────────────────────────────────────────────────────
@@ -223,7 +225,7 @@ export class AnthropicProvider extends AIProvider {
       .map(block => block.thinking)
       .join('\n\n')
 
-    return { text, reasoning: reasoning || undefined }
+    return { text, reasoning: reasoning || undefined, usage: finalizeUsage(this.mapUsage(json.usage)) }
   }
 
   protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
@@ -239,12 +241,42 @@ export class AnthropicProvider extends AIProvider {
         }
         return null
 
+      // Usage is split across the stream: message_start carries the input-side counts, each
+      // message_delta the cumulative output count. Emitted as partial pieces; the stream adapter
+      // merges them (later wins) into one final usage chunk.
+      case 'message_start': {
+        const usage = this.mapUsage(json.message?.usage)
+        return usage ? { usage } : null
+      }
+      case 'message_delta': {
+        const usage = this.mapUsage(json.usage)
+        return usage ? { usage } : null
+      }
+
       default:
         return null
     }
   }
 
   // ── Private helpers ──────────────────────────────────────────────
+
+  /** Anthropic itemizes uncached input, cache reads and cache writes as disjoint counts; `input`
+   *  is normalized to their sum (the full prompt, matching the other providers' inclusive count).
+   *  Thinking tokens are folded into `output_tokens` unitemized, so `reasoning` stays absent. */
+  private mapUsage(u: unknown): Partial<AiUsage> | undefined {
+    if (typeof u !== 'object' || u === null) return undefined
+    const r = u as Record<string, unknown>
+    const n = (v: unknown) => (typeof v === 'number' ? v : undefined)
+    const uncached = n(r.input_tokens)
+    const cacheRead = n(r.cache_read_input_tokens)
+    const cacheWrite = n(r.cache_creation_input_tokens)
+    const output = n(r.output_tokens)
+    const input = uncached !== undefined || cacheRead !== undefined || cacheWrite !== undefined
+      ? (uncached ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0)
+      : undefined
+    if (input === undefined && output === undefined) return undefined
+    return { input, output, cacheRead }
+  }
 
   /**
    * Cache breakpoints on the final two messages. The last extends conversations whose tail is the

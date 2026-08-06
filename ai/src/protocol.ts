@@ -12,6 +12,7 @@ export interface ChatResponseDto {
   reasoning?: string
   status?: 'complete' | 'interrupted' | 'failed' | 'cancelled'
   error?: string
+  usage?: AiUsage
 }
 
 // Generic upstream error
@@ -25,6 +26,10 @@ export interface UpstreamErrorDto {
 export interface ChatStreamPieceDto {
   text?: string
   reasoning?: string
+  /** Partial by design: providers deliver usage across events (Anthropic: input at message_start,
+   *  output at message_delta), so each piece carries what its event knew. `streamAiChunks` merges
+   *  field-wise (later wins — counts are cumulative) into the one final `usage` chunk. */
+  usage?: Partial<AiUsage>
 }
 
 /** A provider's raw JSON response body. Each AIProvider narrows it to its own DTO — the interfaces that extend this (see providers/*). */
@@ -80,12 +85,44 @@ export const asEffort = (v: number | undefined | null): EffortLevel | undefined 
 export const clampEffort = (v: number): EffortLevel =>
   Math.max(0, Math.min(v, 4)) as EffortLevel
 
+/** Provider-reported token counts for one call (TB-AI.md invariant 20). Normalized: `input` is
+ *  the full prompt (cache reads included), `output` is total billed output (reasoning included),
+ *  `reasoning`/`cacheRead` are the itemized subsets where the provider splits them (Anthropic
+ *  doesn't split reasoning). Absent entirely when the provider reported nothing. */
+export interface AiUsage {
+  input: number
+  output: number
+  reasoning?: number
+  cacheRead?: number
+}
+
+/** Fold one wire-piece usage fragment into an accumulation. Field-wise, later wins — providers
+ *  report cumulative counts, so the last sighting of each field is the total. */
+export const mergeUsage = (
+  acc: Partial<AiUsage> | undefined,
+  piece: Partial<AiUsage>
+): Partial<AiUsage> => {
+  const out: Partial<AiUsage> = { ...acc }
+  for (const k of ['input', 'output', 'reasoning', 'cacheRead'] as const) {
+    if (piece[k] !== undefined) out[k] = piece[k]
+  }
+  return out
+}
+
+/** Settle a partial usage accumulation into the public shape — or nothing, when no event ever
+ *  reported a count (the whole-object absence bulbs test for). Missing halves settle to 0. */
+export const finalizeUsage = (u: Partial<AiUsage> | undefined): AiUsage | undefined =>
+  u === undefined || (u.input === undefined && u.output === undefined)
+    ? undefined
+    : { input: u.input ?? 0, output: u.output ?? 0, reasoning: u.reasoning, cacheRead: u.cacheRead }
+
 /** A streamed delta from `tb.ai.stream()`. Discriminated union — exactly one kind per chunk, so
  *  `switch (chunk.kind)` is exhaustive and no `{}`/both-fields state is representable. The public
  *  shape; the internal wire piece (`ChatStreamPieceDto { text?, reasoning? }`) stays loose. */
 export type AiChunk =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
+  | { kind: 'usage'; usage: AiUsage }
 
 /** What backs `tb.ai` for the current user: their own keys (`own`), the quota-limited courtesy
  *  model (`courtesy`), or nothing at all (`none` — the CLI without keys, an embedded bulb). Which

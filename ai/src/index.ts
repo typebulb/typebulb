@@ -9,7 +9,7 @@ export {
   type ResolvedAIProvider,
   type SendAIRequestOpts
 } from './aiProviders.js'
-export { parseSseBlock, consumeSseStream, consumeSseStreamGen, consumeStreamText, streamAiChunks } from './sseParser.js'
+export { parseSseBlock, consumeSseStream, consumeSseStreamGen, consumeStreamText, consumeStreamResult, streamAiChunks } from './sseParser.js'
 
 // Inference layer shared with typebulb.com: prompt template, JSON sanitizer, #tb= result encoding.
 export {

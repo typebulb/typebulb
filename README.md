@@ -420,10 +420,10 @@ Run `typebulb models` to list the models available for the providers specified.
 Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys.
 
 ```ts
-tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })   // → Promise<{ text }>
+tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })   // → Promise<{ text, usage? }>
 ```
 
-Name the provider and model explicitly — `tb.ai({ provider: "openai", model: "gpt-5.6-luna", … })` — or rely on the defaults you set in `.env`. `webSearch` defaults **off**; pass `webSearch: true` to give the model a web-search tool (searches bill to your key).
+Name the provider and model explicitly — `tb.ai({ provider: "openai", model: "gpt-5.6-luna", … })` — or rely on the defaults you set in `.env`. `webSearch` defaults **off**; pass `webSearch: true` to give the model a web-search tool (searches bill to your key). `usage` is the provider-reported token counts — `{ input, output, reasoning?, cacheRead? }`, reasoning included in `output` — absent when the provider reports none; use it to meter calls instead of estimating from text length.
 
 ### Reasoning effort
 
@@ -446,7 +446,7 @@ const { text } = await tb.ai({
 
 ### Streaming
 
-`tb.ai.stream({ … })` is the streaming counterpart of `tb.ai()` — an async iterable of `{ kind: "text" | "reasoning", text }` deltas. `tb.ai()` (await the full text) is unchanged; reach for `.stream` only when a response is long enough to be worth showing as it arrives.
+`tb.ai.stream({ … })` is the streaming counterpart of `tb.ai()` — an async iterable of `{ kind: "text" | "reasoning", text }` deltas, closed by one `{ kind: "usage", usage }` chunk with the call's token counts. `tb.ai()` (await the full text) is unchanged; reach for `.stream` only when a response is long enough to be worth showing as it arrives.
 
 ```ts
 let answer = "";
@@ -455,7 +455,7 @@ for await (const c of tb.ai.stream({ messages })) {
 }
 ```
 
-Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-4` and a thinking-capable model**.
+Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoning"` chunks require `effort: 1-4` and a thinking-capable model**. Match `kind` positively as above — a bare `else` that assumes "not reasoning means text" misreads the usage chunk.
 
 ### AI access
 

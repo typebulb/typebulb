@@ -3,7 +3,8 @@
  * Shared between client, CLI, and any other consumer of provider SSE streams.
  */
 
-import type { ProviderProtocol, AiChunk, ChatStreamPieceDto } from './protocol.js'
+import type { ProviderProtocol, AiChunk, AiUsage, ChatStreamPieceDto } from './protocol.js'
+import { finalizeUsage, mergeUsage } from './protocol.js'
 import { getProvider } from './aiProviders.js'
 
 /** Find next SSE block separator (\n\n or \r\n\r\n), returning position and length */
@@ -135,14 +136,28 @@ export async function consumeStreamText(
   response: Response,
   protocol?: ProviderProtocol
 ): Promise<string> {
+  return (await consumeStreamResult(response, protocol)).text
+}
+
+/**
+ * Consume a provider SSE stream into the one-shot `tb.ai()` result: accumulated text plus the
+ * provider-reported token usage (absent when the provider reported none). Reasoning text is
+ * still discarded — reasoning reaches callers only via `tb.ai.stream()`.
+ */
+export async function consumeStreamResult(
+  response: Response,
+  protocol?: ProviderProtocol
+): Promise<{ text: string; usage?: AiUsage }> {
   if (!response.body) throw new Error('Response body is missing')
-  // The text projection of streamAiChunks: accumulate `text` deltas, drop reasoning. Protocol
-  // resolution, SSE framing, and error-event handling all live there, single-sourced.
-  let fullText = ''
+  // The buffered projection of streamAiChunks: accumulate `text` deltas, keep the final usage
+  // chunk. Protocol resolution, SSE framing, and error-event handling all live there, single-sourced.
+  let text = ''
+  let usage: AiUsage | undefined
   for await (const chunk of streamAiChunks(response, protocol)) {
-    if (chunk.kind === 'text') fullText += chunk.text
+    if (chunk.kind === 'text') text += chunk.text
+    else if (chunk.kind === 'usage') usage = chunk.usage
   }
-  return fullText
+  return { text, usage }
 }
 
 /**
@@ -151,6 +166,9 @@ export async function consumeStreamText(
  * bridge (each then wraps it in its own transport: NDJSON over HTTP / postMessage frames). Pure and
  * browser-safe: only a `Response` reader plus the already-shared parsing. Each internal
  * `{ text?, reasoning? }` piece becomes one or two discriminated chunks (reasoning before text).
+ * Usage is accumulated across pieces (providers report it in fragments — Anthropic input at
+ * message_start, cumulative output per message_delta) and emitted as ONE final `usage` chunk
+ * after the provider stream ends, when any event reported counts.
  * A provider error event throws `ProviderStreamError` out of `parseStreamChunk`, which the caller's
  * transport turns into a terminal error so the client iterator rejects.
  */
@@ -165,9 +183,13 @@ export async function* streamAiChunks(
   const spec = getProvider(p)
   if (!response.body) return
   const reader = response.body.getReader()
+  let usage: Partial<AiUsage> | undefined
   for await (const json of consumeSseStreamGen(reader)) {
     const piece = spec.parseStreamChunk(json) as ChatStreamPieceDto | null
     if (piece?.reasoning) yield { kind: 'reasoning', text: piece.reasoning }
     if (piece?.text) yield { kind: 'text', text: piece.text }
+    if (piece?.usage) usage = mergeUsage(usage, piece.usage)
   }
+  const settled = finalizeUsage(usage)
+  if (settled) yield { kind: 'usage', usage: settled }
 }
