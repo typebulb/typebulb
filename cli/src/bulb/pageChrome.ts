@@ -33,6 +33,10 @@ export { baseResetStyle, pageHeightStyle } from 'typebulb/format'
  * a bulb, whose sandboxed iframe can't read the host's localStorage) outranks the OS
  * but not an explicit in-iframe override, so the user can still toggle an inline bulb
  * independently. Ctrl/Cmd+Shift+L toggles the effective theme. See Specs/Theme.md.
+ *
+ * `apply` writes `data-theme` WITHOUT persisting — the transient half of the engine,
+ * used by the host's theme push (below) and by `tb:theme` in shim.ts. `set` is the
+ * durable one. Nothing else should write the attribute.
  */
 export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string {
   return `  <script>
@@ -61,7 +65,17 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
         apply(effective());
         var onOsChange = function() { if (!stored() && !FORCED) apply(os()); };
         mq.addEventListener ? mq.addEventListener('change', onOsChange) : mq.addListener(onOsChange);
-        window.__tbTheme = { get: stored, set: set, effective: effective };
+        window.__tbTheme = { get: stored, set: set, apply: apply, effective: effective };
+        /* The host pushes its theme when it flips (render.ts): a framed bulb's baseline is stamped
+           into its srcdoc at creation, so it would otherwise hold the theme it was born in. The
+           host owns the baseline, the bulb owns its override. */
+        if (window.parent !== window) {
+          window.addEventListener('message', function(e) {
+            if (e.source !== window.parent) return;
+            var d = e.data;
+            if (d && d.__typebulbEmbed === true && d.kind === 'theme' && (d.theme === 'dark' || d.theme === 'light')) apply(d.theme);
+          });
+        }
         window.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyL') {
             e.preventDefault();

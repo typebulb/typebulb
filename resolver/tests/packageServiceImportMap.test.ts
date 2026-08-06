@@ -63,6 +63,23 @@ async function setupCache() {
 }
 
 describe('PackageService.buildImportMap - subpath externalization', () => {
+  let svc: PackageService
+
+  beforeEach(async () => {
+    svc = createResolver(await setupCache(), new FailingHttp()).packageService
+  })
+
+  it('never treats a scheme specifier as a package', async () => {
+    // TSX defeats es-module-lexer, so code.tsx always lands on the regex fallback.
+    // A `node:` specifier surviving that reaches the dts emit as node_modules/node:fs/promises
+    // — a path with a colon, which crashed `typebulb check` on Windows.
+    const code = `import { readdir } from "node:fs/promises"\nimport React from "react"`
+    expect(svc.extractImportsSync(code)).toEqual(['react'])
+    expect(await svc.extractImports(code)).toEqual(['react'])
+  })
+})
+
+describe('PackageService.buildImportMap - subpath externalization', () => {
   let service: PackageService
 
   beforeEach(async () => {

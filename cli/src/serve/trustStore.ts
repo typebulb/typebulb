@@ -14,7 +14,7 @@
  * Written ONLY by explicit user/agent action; never by bulb code (a bulb can't grant itself trust).
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { typebulbHome, normalizeBulbPath } from './paths.js'
 
@@ -24,11 +24,20 @@ function trustPath(): string {
   return join(typebulbHome(), 'trust.json')
 }
 
+// Parse cache keyed by the store file's mtime: launcher hosts ask per-bulb per poll beat, so an
+// unchanged store answers from memory; a write from any process bumps the mtime and invalidates.
+let cached: { mtime: number; set: Set<string> } | undefined
 function readSet(): Set<string> {
   try {
-    const arr = JSON.parse(readFileSync(trustPath(), 'utf8'))
-    return new Set(Array.isArray(arr) ? (arr as string[]) : [])
+    const p = trustPath()
+    const mtime = statSync(p).mtimeMs
+    if (cached?.mtime !== mtime) {
+      const arr = JSON.parse(readFileSync(p, 'utf8'))
+      cached = { mtime, set: new Set(Array.isArray(arr) ? (arr as string[]) : []) }
+    }
+    return cached.set
   } catch {
+    cached = undefined
     return new Set() // absent / unreadable ⇒ nothing trusted
   }
 }
@@ -39,6 +48,7 @@ function writeSet(set: Set<string>): void {
   try {
     mkdirSync(typebulbHome(), { recursive: true })
     writeFileSync(trustPath(), JSON.stringify([...set]))
+    cached = undefined   // next read re-stats; a same-ms overwrite can't serve the old set
   } catch (e) {
     throw new Error(`can't write ${trustPath()} — trust not remembered (unwritable home; sandboxed shell?): ${(e as Error).message}`)
   }
@@ -51,7 +61,7 @@ export function isBulbTrusted(file: string): boolean {
 
 /** Set or clear a bulb's remembered trust. Idempotent; only ever called by a user/agent action. */
 export function setBulbTrusted(file: string, trust: boolean): void {
-  const set = readSet()
+  const set = new Set(readSet())   // copy: never mutate the cached set before the write commits
   const key = normalizeBulbPath(file)
   if (trust ? set.has(key) : !set.has(key)) return // no change
   if (trust) set.add(key); else set.delete(key)

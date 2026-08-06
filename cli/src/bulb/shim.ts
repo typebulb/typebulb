@@ -786,6 +786,23 @@ export const typebulbShim = `
     });
   };
 
+  // tb:theme (Specs/Theme.md) — flip the page's theme so an agent can read the other render back
+  // with tb:png / tb:snapshot. TRANSIENT by design, and the one place the durable rule is wrong:
+  // it calls apply(), never set(), so it never writes the per-bulb localStorage key and a reload
+  // restores whatever the user was looking at. The reply says so, because a probe with a visible
+  // after-effect has to state it.
+  const actTheme = (rest) => {
+    const m = /^\\s*(dark|light)?\\s*$/.exec(rest);
+    if (!m) throw new Error('usage: tb:theme [dark|light]  (bare clears the probe)');
+    const engine = window.__tbTheme;
+    if (!engine || !engine.apply) throw new Error('this page has no theme engine');
+    const resting = engine.effective();
+    const want = m[1] || resting;
+    engine.apply(want);
+    return postFrameSnapshot().then((s) =>
+      'theme: ' + want + ' — transient, not saved (a reload restores ' + resting + ')\\n' + s);
+  };
+
   // Events channel (dev server only): 'reload' drives hot reload (only emitted when watching),
   // 'message' delivers \`typebulb send\` pushes to tb.onMessage. Connect for a CLI-served page (http
   // origin, not an inline bulb); a srcdoc inline bulb or a file:// static export has no server, so onMessage just
@@ -820,7 +837,8 @@ ${reloadClientScript}
         if (p === 'tb:set' || p.indexOf('tb:set ') === 0) return actSet(p.slice(7));
         if (p === 'tb:rect' || p.indexOf('tb:rect ') === 0) return readRect(p.slice(8));
         if (p === 'tb:png' || p.indexOf('tb:png ') === 0) return readPng(p.slice(7));
-        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:rect, tb:png, tb:click, tb:set)');
+        if (p === 'tb:theme' || p.indexOf('tb:theme ') === 0) return actTheme(p.slice(9));
+        throw new Error('unknown reserved message: ' + p + ' (known: tb:snapshot, tb:rect, tb:png, tb:click, tb:set, tb:theme)');
       };
       const value = parseMsg(env.payload);
       const calls = typeof env.payload === 'string' && env.payload.indexOf('tb:') === 0

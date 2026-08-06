@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, stat, utimes } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { listBulbFiles } from '../src/serve/bulbFiles.js'
@@ -35,5 +35,25 @@ describe('listBulbFiles', () => {
     const byName = new Map(listBulbFiles(dir).map(f => [f.name, f.serverOnly]))
     expect(byName.get('Web')).toBe(false)
     expect(byName.get('Headless')).toBe(true)
+  })
+
+  it('re-parses only when mtime changes (the poll-beat cache)', async () => {
+    const file = path.join(dir, 'cached.bulb.md')
+    await writeFile(file, '---\nname: Before\n---\n')
+    // Pin a whole-ms mtime first: utimes can't restore NTFS's sub-ms fraction, and the cache
+    // compares mtimeMs exactly.
+    const { atime, mtime } = await stat(file)
+    const pinned = new Date(Math.floor(mtime.getTime()))
+    await utimes(file, atime, pinned)
+    expect(listBulbFiles(dir)[0].name).toBe('Before')
+
+    // Rewrite but restore the pinned mtime: the cache must serve the old parse (mtime is the key).
+    await writeFile(file, '---\nname: After\n---\n')
+    await utimes(file, atime, pinned)
+    expect(listBulbFiles(dir)[0].name).toBe('Before')
+
+    // A real mtime bump re-parses.
+    await utimes(file, atime, new Date(pinned.getTime() + 1000))
+    expect(listBulbFiles(dir)[0].name).toBe('After')
   })
 })

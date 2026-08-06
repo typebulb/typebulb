@@ -884,3 +884,39 @@ createRoot(document.getElementById("root")!).render(<App />)
     }
   }, 120_000)
 })
+
+/**
+ * tb:theme (Specs/Theme.md) — the one reserved verb that is deliberately NOT durable: it applies
+ * the theme and never persists it, so an agent probing the dark render can't leave the user's bulb
+ * pinned dark. Only a real page can establish that, since both halves (the flip and the untouched
+ * localStorage) live in the head script.
+ */
+describe('tb:theme (live browser)', () => {
+  const domTheme = () => tab.evaluate(() => document.documentElement.getAttribute('data-theme'))
+  const storedThemes = () => tab.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('tb-theme:')))
+
+  it('flips the page, says it is transient, and writes nothing', async () => {
+    const resting = await domTheme()
+    expect(resting).toBeTruthy()
+    const other = resting === 'dark' ? 'light' : 'dark'
+
+    const r = await sendCli(bulb, `tb:theme ${other}`)
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain(`theme: ${other}`)
+    expect(r.stdout).toContain('transient, not saved')
+    expect(await domTheme()).toBe(other)
+    // The whole point: the durable slot stays empty, so a reload restores what the user had.
+    expect(await storedThemes()).toEqual([])
+
+    const back = await sendCli(bulb, 'tb:theme')
+    expect(back.code).toBe(0)
+    expect(await domTheme()).toBe(resting)
+    expect(await storedThemes()).toEqual([])
+  }, 60_000)
+
+  it('refuses a theme it does not know, naming the usage', async () => {
+    const r = await sendCli(bulb, 'tb:theme mauve')
+    expect(r.code).not.toBe(0)
+    expect(r.stderr + r.stdout).toContain('usage: tb:theme')
+  }, 60_000)
+})

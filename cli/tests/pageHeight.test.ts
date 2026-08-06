@@ -61,3 +61,25 @@ describe('the served script speaks the bulb\'s coordinates', () => {
     expect(body).toContain('\n//# sourceURL=b.bulb.md')
   })
 })
+
+/**
+ * A single-theme bulb pins its look by overriding the host's own theme selectors from styles.css,
+ * which only works while the host's rules come FIRST — equal specificity, so source order decides
+ * (Specs/Theme.md). If the base styles ever move after the bulb's, every pinned bulb breaks at once
+ * and silently, which is exactly what a test is for.
+ */
+describe('the theme contract a bulb can beat', () => {
+  it('emits the base theme styles before the bulb\'s stylesheet', () => {
+    const html = renderHtml({ ...base, css: '.mine { color: red }' })
+    expect(html.indexOf('color-scheme: dark')).toBeGreaterThan(-1)
+    expect(html.indexOf('color-scheme: dark')).toBeLessThan(html.indexOf('.mine { color: red }'))
+  })
+
+  it('exposes the transient apply() the host push and tb:theme both write through', () => {
+    expect(renderHtml(base)).toContain('apply: apply')
+  })
+
+  it('lets a framed bulb follow a host theme flip, so an inline bulb does not hold its birth theme', () => {
+    expect(renderHtml({ ...base, inline: true })).toContain("d.kind === 'theme'")
+  })
+})

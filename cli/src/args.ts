@@ -386,6 +386,8 @@ Usage:
                                  the outline names; 'tb:set … = <value>' fills
                                  a form control. Both gestures reply with a
                                  fresh snapshot and need exactly one page open.
+                                 'tb:theme dark|light' flips the theme for a
+                                 probe (bare clears); transient, never saved.
   typebulb get <file> <kind>     Print one block's content to stdout (kind: code,
                                  css, html, data, infer, insight, config, notes).
                                  No content (absent or empty): exit 2;

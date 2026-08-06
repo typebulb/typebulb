@@ -85,8 +85,9 @@ export class PackageRef implements IPackageRef {
 
   static isBare(pkg: string) {
     if (!pkg || pkg.startsWith('.') || pkg.startsWith('/')) return false
-    const s = pkg.toLowerCase()
-    return !s.startsWith('http://') && !s.startsWith('https://')
+    // Any scheme is not a package — `node:` builtins as much as `http(s):`, `data:`, `blob:`.
+    // Same rule as the lint's importRoot, which this is meant to stay in step with.
+    return !/^[a-z][a-z0-9+.-]*:/i.test(pkg)
   }
 }
 

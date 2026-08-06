@@ -117,7 +117,8 @@ export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark
 }
 
 export interface BulbFrameOptions {
-  /** Force light/dark. Omit to inherit the host's `data-theme` automatically. */
+  /** Force light/dark, pinned for the frame's life. Omit to inherit the host's `data-theme`
+   *  and keep following it. */
   theme?: 'light' | 'dark'
   /** Height the frame shows before the inline bulb reports its content height — and the
    *  height a full-bleed (`height:100%`) bulb self-stabilises at, since its body tracks
@@ -143,6 +144,32 @@ export interface BulbFrameOptions {
 function hostTheme(): 'light' | 'dark' | undefined {
   const t = document.documentElement.getAttribute('data-theme')
   return t === 'dark' || t === 'light' ? t : undefined
+}
+
+// A frame's theme is stamped into its srcdoc at creation, so without a push every bulb already on
+// the page holds the theme it was born in. One observer serves all frames; the head script applies
+// what arrives without persisting it (pageChrome.ts). A frame given an explicit `theme` opted out
+// of inheritance and is never tracked.
+const themedFrames = new Set<HTMLIFrameElement>()
+let hostThemeObserver: MutationObserver | undefined
+
+function followHostTheme(frame: HTMLIFrameElement, signal?: AbortSignal) {
+  themedFrames.add(frame)
+  signal?.addEventListener('abort', () => themedFrames.delete(frame))
+  if (hostThemeObserver || typeof MutationObserver === 'undefined') return
+  hostThemeObserver = new MutationObserver(() => {
+    const theme = hostTheme()
+    if (!theme) return
+    // Opaque origin (sandbox without allow-same-origin), so '*' is the only reachable target.
+    // The payload is a theme name; the frame authenticates it as coming from its parent.
+    for (const f of themedFrames) {
+      // A host that passes no `signal` never unregisters (same lifetime as the frame's own message
+      // listener, documented on the option); dropping detached frames here keeps that bounded.
+      if (!f.isConnected) { themedFrames.delete(f); continue }
+      f.contentWindow?.postMessage({ __typebulbEmbed: true, kind: 'theme', theme }, '*')
+    }
+  })
+  hostThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 }
 
 /**
@@ -172,6 +199,7 @@ export async function createBulbFrame(source: string, opts: BulbFrameOptions = {
   // column (the inline bulb reports only height — see template.ts).
   frame.style.cssText = `display:block;width:100%;height:${initialHeight}px;border:0`
   frame.srcdoc = html
+  if (!opts.theme) followHostTheme(frame, opts.signal)
 
   // Opaque-origin inline bulbs post from a 'null' origin, so authenticate by window
   // identity (event.source), not origin. Treat the payload as UNTRUSTED: the

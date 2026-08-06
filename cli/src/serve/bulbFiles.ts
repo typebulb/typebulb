@@ -66,21 +66,34 @@ export function listBulbBatches(bulbPath: string): string[] {
     .map(b => b.name)
 }
 
-/** Every `*.bulb.md` under `cwd`, each with its frontmatter name (or filename stem),
- *  mtime, and headless (`serverOnly`) flag. Reads each file whole — small by nature, and the
- *  full parse is what tells a headless bulb from a launchable one. */
+// One bulb's parse-derived fields, read fresh: the frontmatter name (or filename stem) and the
+// headless flag (the full parse is what tells a headless bulb from a launchable one).
+function readInfo(path: string, mtime: number): { mtime: number; name: string; serverOnly: boolean } {
+  let name: string | undefined
+  let serverOnly = false
+  try {
+    const content = readFileSync(path, 'utf8')
+    name = bulbName(content.slice(0, 1024))
+    const parsed = parseBulb(content)
+    serverOnly = !!parsed && isServerOnly(toLocalBulb(parsed))
+  } catch { /* unreadable ⇒ filename, and not treated as headless */ }
+  return { mtime, name: name ?? basename(path).replace(/\.bulb\.md$/, ''), serverOnly }
+}
+
+/** Every `*.bulb.md` under `cwd`, each with its frontmatter name (or filename stem), mtime, and
+ *  headless (`serverOnly`) flag. Parses are cached by mtime — launcher hosts poll this over the
+ *  whole corpus every few seconds, so only a changed file re-reads. */
+let parsed = new Map<string, ReturnType<typeof readInfo>>()
 export function listBulbFiles(cwd: string): BulbFileInfo[] {
-  return walk(cwd, 0, []).map(path => {
+  const next: typeof parsed = new Map()
+  const out = walk(cwd, 0, []).map(path => {
     let mtime = 0
     try { mtime = statSync(path).mtimeMs } catch { /* vanished mid-walk ⇒ sorts last */ }
-    let name: string | undefined
-    let serverOnly = false
-    try {
-      const content = readFileSync(path, 'utf8')
-      name = bulbName(content.slice(0, 1024))
-      const parsed = parseBulb(content)
-      serverOnly = !!parsed && isServerOnly(toLocalBulb(parsed))
-    } catch { /* unreadable ⇒ filename, and not treated as headless */ }
-    return { path, name: name ?? basename(path).replace(/\.bulb\.md$/, ''), mtime, serverOnly }
+    const hit = mtime ? parsed.get(path) : undefined     // mtime 0 is never cached, so a stat failure retries
+    const entry = hit?.mtime === mtime ? hit : readInfo(path, mtime)
+    if (mtime) next.set(path, entry)
+    return { path, ...entry }
   })
+  parsed = next   // swap, not merge: entries for vanished files fall away here
+  return out
 }

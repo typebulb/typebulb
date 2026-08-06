@@ -47,6 +47,7 @@ typebulb send <file> tb:rect …    Print a named control's rect ('tb:rect butto
 typebulb send <file> tb:click …   Click a control by role+name ('tb:click button "Pass"'); the reply is a fresh snapshot
 typebulb send <file> tb:set …     Set a form control ('tb:set combobox "level" = hard'), firing input+change
 typebulb send <file> tb:png …     Save the live canvas as PNG, print its path (sole canvas needs no name; 'tb:png "<name>"' among several)
+typebulb send <file> tb:theme …   Flip the page's theme for a probe ('tb:theme dark'; bare clears) — transient, never saved
 typebulb get <file> <kind>     Print one block's content (data, insight, code, …) to stdout
 typebulb put <file> <k>=<src>  Write a file's (or stdin's) content into a block, surgically
 typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
@@ -301,6 +302,18 @@ The host owns a bulb's **width**; you own its **height**.
 .wrap { margin: 0 auto; padding: 24px 16px; }   /* not: margin: 24px auto */
 ```
 
+## Theming
+
+The host owns light/dark; you style for both.
+
+**Style off `html[data-theme]`.** The host sets that attribute — key your CSS off it (`html[data-theme="dark"] { … }`), off CSS variables, or off `currentColor`; don't read `tb.theme` to branch your rendering. `color-scheme` is set for you: the host always maps `html[data-theme="dark"] { color-scheme: dark }` (and light) on top of your `styles.css`.
+
+**Native dropdowns need system colors.** Style `select, option { background: Canvas; color: CanvasText }` — those track the host's `color-scheme`, and a `transparent` `<select>` otherwise opens an unthemed popup, white-on-white in dark mode.
+
+**A bulb with one correct look pins it with two rules, not one.** A daytime scene that would be nonsense in dark overrides the host's own selectors from `styles.css`: your colours **and** `html[data-theme="dark"] { color-scheme: light }`. Miss the second and the flip still swaps its scrollbars and form controls.
+
+**Check both themes without leaving the terminal.** `typebulb send <file> tb:theme dark`, then `tb:png` or `tb:snapshot`. The flip is transient — nothing is saved, and a reload restores what the user was looking at.
+
 ## Tips for Agents
 
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
@@ -314,16 +327,9 @@ The host owns a bulb's **width**; you own its **height**.
 - **Testing a `server.ts` export directly** — `typebulb call <file> <fn> [arg…]` boots `server.ts`, invokes one export, and prints its return as JSON to stdout (logs/errors to stderr, so `… | jq` works). Args after `<fn>` are JSON-or-string; `--args '<json-array>'` (or `--args -` for stdin) escapes tricky quoting. Needs `--trust`.
 - **Mount to the container your `index.html` declares.** The corpus convention is `<div id="root"></div>` with `createRoot(document.getElementById("root")!)`.
 - **All imports at the top of `code.tsx`, and every bare import declared in `config.json` `dependencies`.** Bare imports (`react`, `d3`, `three`, …) resolve from a CDN — no install step — but declaring them is **required, not optional**: an import missing from `dependencies` is a lint error that fails `npx typebulb check` *and* refuses to run. Declaring is also what pins versions and lets `check` fetch type defs (without it you get errors like `TS2875: react/jsx-runtime`). So a bulb with imports must carry a `config.json` with a matching `dependencies` entry for each.
-- **Theme-aware styling.** Style off CSS variables / `currentColor` so the bulb reads correctly in both light and dark; the host sets the theme.
-- **Native dropdowns.** Style `select, option { background: Canvas; color: CanvasText }` (system colors track the host's `color-scheme`) — a `transparent` `<select>` otherwise opens an unthemed popup, white-on-white in dark mode.
-- **`tb.ai()` takes more than the basics** — the full shape is `tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })` → `Promise<{ text }>`. `webSearch` defaults **off**; pass `webSearch: true` to give the model a web-search tool (searches bill to your key). For token-by-token output use `tb.ai.stream(...)` (see [`tb.ai()` § Streaming](#streaming)).
-- **Gate AI-heavy bulbs on `tb.aiAccess()`** — `'own'` / `'courtesy'` / `'none'`, never re-derived from `tb.mode` or the model list (see [AI access](#ai-access)).
-- **`tb.theme` drives the `html[data-theme]` attribute** — style off that selector (`html[data-theme="dark"] { … }`); don't read `tb.theme` to branch your rendering.
-- **`color-scheme` is set for you** — the host always applies `html[data-theme="dark"] { color-scheme: dark }` / `html[data-theme="light"] { color-scheme: light }` on top of your `styles.css`.
 - **Math (KaTeX) renders in your replies** — write inline `$…$` / display `$$…$$` (prefer `$y = x^2$` over inline-code or a Unicode `y = x²`). The mirror's KaTeX renders only in prose and doesn't reach inside a fenced block (bulb, mermaid, svg, code).
 - **Charts: prefer a bulb over mermaid's `xychart`** unless a static, unlabeled bar or line is enough — start from the [Charts](#charts) skeleton.
 - **`tb.json<T>(n)` is generic** — `tb.json<Album[]>(0)` returns typed parsed JSON; `tb.data(n)` returns the raw string.
-- **`tb.proxy()` is for same-origin Web Worker / WASM loads** — e.g. ffmpeg or tesseract: `tb.proxy("https://unpkg.com/...")` routes the CDN URL through the local server's origin.
 - **Prefer an `index.html` fragment** over a full HTML document — usually just the mount stub (`<div id="root"></div>`).
 - **`config.json` → `ts.jsxImportSource`** — the one supported `ts` option; defaults to `react`. Set it to use a different JSX runtime (e.g. `preact`).
 - **Never invent a connection string or API key** — a `server.ts` that needs a database or API reads it from `.env` (loaded from the directory you run in). Ask the user for the value; don't fabricate one or commit it.
@@ -413,9 +419,11 @@ Run `typebulb models` to list the models available for the providers specified.
 
 Trusted bulbs can call AI providers **from their own code** at runtime, billed to your API keys.
 
-You can call the provider and model explicitly like this: `tb.ai({ provider: "openai", model: "gpt-5.6-luna", ... })`.
+```ts
+tb.ai({ messages, system?, effort?, provider?, model?, webSearch? })   // → Promise<{ text }>
+```
 
-Or you can rely on the default provider and model if you set them in `.env`.
+Name the provider and model explicitly — `tb.ai({ provider: "openai", model: "gpt-5.6-luna", … })` — or rely on the defaults you set in `.env`. `webSearch` defaults **off**; pass `webSearch: true` to give the model a web-search tool (searches bill to your key).
 
 ### Reasoning effort
 
@@ -451,7 +459,7 @@ Breaking the loop stops the stream; same options as `tb.ai()`. **`kind: "reasoni
 
 ### AI access
 
-`tb.aiAccess()` reports what backs `tb.ai`, typed as the ambient `AiAccess`.
+`tb.aiAccess()` reports what backs `tb.ai`, typed as the ambient `AiAccess`. Gate an AI-heavy bulb on it, never on `tb.mode` or the model list.
 
 | Value | What it means | What a bulb does |
 |-------|---------------|------------------|
