@@ -52,6 +52,8 @@ const CSS = '\\n' +
 '.leftgrp { margin-right: auto; display: flex; gap: 8px; }\\n' +
 'button { font: inherit; padding: 6px 14px; border-radius: 6px; cursor: pointer;\\n' +
 '  border: 1px solid var(--border); background: transparent; color: inherit; }\\n' +
+'button.iconbtn { padding: 6px 9px; display: inline-flex; align-items: center; }\\n' +
+'button.iconbtn svg { display: block; }\\n' +
 'button.run { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }\\n' +
 'button.run:disabled { opacity: .5; cursor: default; }\\n' +
 '@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }\\n' +
@@ -209,15 +211,21 @@ export function runInference(ctx) {
     body.appendChild(model);
 
     // Fragment-driven actions (TB-Inference.md): the address bar holds the last completed run, so
-    // both appear exactly when one exists. Copy = share it; Save = promote it to the bulb's source.
+    // all three appear exactly when one exists. Copy = share it; Save = promote it to the bulb's
+    // source; Discard = drop it and land back on the file's own data + example.
     if (location.hash.indexOf('tb=') !== -1) {
       var grp = el('div', 'leftgrp');
-      var share = el('button', '', 'Copy share URL');
+      // Icon-only: the glyph reads as "copy link", the title carries the words, and the footer
+      // keeps room for three actions without wrapping.
+      var LINK_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+      var share = el('button', 'iconbtn');
+      share.innerHTML = LINK_SVG;
+      share.setAttribute('aria-label', 'Copy share URL');
       share.title = 'Copies this page URL with the #tb= result fragment \\u2014 paste the fragment onto the published bulb\\u2019s URL to share the last run';
       share.addEventListener('click', function () {
         navigator.clipboard.writeText(location.href).then(function () {
-          share.textContent = 'Copied \\u2713';
-          setTimeout(function () { share.textContent = 'Copy share URL'; }, 1500);
+          share.textContent = '\\u2713';
+          setTimeout(function () { share.innerHTML = LINK_SVG; }, 1500);
         });
       });
       grp.appendChild(share);
@@ -241,6 +249,15 @@ export function runInference(ctx) {
         });
       });
       grp.appendChild(save);
+      var discard = el('button', '', 'Discard run');
+      discard.title = 'Drop this run\\u2019s result \\u2014 back to the bulb\\u2019s own data and example insight';
+      discard.addEventListener('click', function () {
+        // The fragment IS the runtime state (TB-Inference.md Invariant 2): strip it and reload,
+        // and the page boots from the file's blocks. The file is never touched.
+        history.replaceState(null, '', location.pathname + location.search);
+        location.reload();
+      });
+      grp.appendChild(discard);
       foot.appendChild(grp);
     }
 
