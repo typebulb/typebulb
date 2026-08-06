@@ -204,22 +204,6 @@ const clientOnlyMembers = `
    */
   infer<T = unknown>(opts?: { data?: string | string[] }): Promise<T>;
   /**
-   * Get the current inference state.
-   *
-   * @returns 'idle' | 'running' | 'complete' | 'error'
-   */
-  inferenceState(): 'idle' | 'running' | 'complete' | 'error';
-  /**
-   * Set a data chunk for the next inference call.
-   *
-   * Use this to programmatically set data that will be sent when \`tb.infer()\` is called
-   * without the \`data\` option.
-   *
-   * @param index - The chunk index (0-based)
-   * @param content - The content for this chunk
-   */
-  setData(index: number, content: string): void;
-  /**
    * Proxy a CDN URL through the sandbox origin for Web Worker/WASM same-origin loading.
    *
    * In the sandbox, prepends \`/proxy/\` so the URL is served from the same origin.

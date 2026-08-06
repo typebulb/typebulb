@@ -146,7 +146,7 @@ export function runInference(ctx) {
     foot.appendChild(cancel);
 
     // Build the whole view once the seed arrives (a localhost roundtrip; the shimmer covers it).
-    // Seeding is explicit ctx.data (an arg / setData / a retry's edits) > the bulb's SOURCE
+    // Seeding is explicit ctx.data (an arg / a retry's edits) > the bulb's SOURCE
     // chunks from the server — never the page's post-run runtime data.
     fetch('/__infer-info').then(function (r) { return r.json(); })
       .catch(function () { return {}; })

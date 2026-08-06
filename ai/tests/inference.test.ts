@@ -129,13 +129,43 @@ Now I have all the context I need. Let me construct the JSON:
     it('fixes trailing comma in object', () => {
       const r = sanitizeJsonOutput('{"a": 1, "b": 2,}')
       expect(r.parsed).toEqual({ a: 1, b: 2 })
-      expect(r.fixesApplied).toContain('trailing comma in object')
+      expect(r.fixesApplied).toContain('trailing commas')
     })
 
     it('fixes trailing comma in array', () => {
       const r = sanitizeJsonOutput('[1, 2, 3,]')
       expect(r.parsed).toEqual([1, 2, 3])
-      expect(r.fixesApplied).toContain('trailing comma in array')
+      expect(r.fixesApplied).toContain('trailing commas')
+    })
+
+    it('fixes trailing commas inside nested objects (GPT-5.6 field failure, 2026-08)', () => {
+      const content = `{
+  "participants": {
+    "BEN": { "novelty": 5, "summary": "no case offered", },
+    "JOE": { "novelty": 5, "summary": "mirrors the claim", }
+  },
+  "headline": "JOE EDGES BEN!"
+}`
+      const r = sanitizeJsonOutput(content)
+      expect(r.parsed).toEqual({
+        participants: {
+          BEN: { novelty: 5, summary: 'no case offered' },
+          JOE: { novelty: 5, summary: 'mirrors the claim' },
+        },
+        headline: 'JOE EDGES BEN!',
+      })
+      expect(r.fixesApplied).toContain('trailing commas')
+    })
+
+    it('never touches a comma-before-brace inside a string literal', () => {
+      const r = sanitizeJsonOutput('{"snippet": "so I said, }", "n": [1, 2,], }')
+      expect(r.parsed).toEqual({ snippet: 'so I said, }', n: [1, 2] })
+    })
+
+    it('tracks string boundaries across escaped quotes when stripping trailing commas', () => {
+      const r = sanitizeJsonOutput('{"quote": "he said \\"done,\\" twice", "n": 1, }')
+      expect(r.parsed).toEqual({ quote: 'he said "done," twice', n: 1 })
+      expect(r.fixesApplied).toContain('trailing commas')
     })
   })
 
@@ -149,7 +179,7 @@ Now I have all the context I need. Let me construct the JSON:
       const r = sanitizeJsonOutput(content)
       expect(r.parsed).toEqual({ a: 1, b: 2 })
       expect(r.fixesApplied).toContain('preamble before fenced JSON')
-      expect(r.fixesApplied).toContain('trailing comma in object')
+      expect(r.fixesApplied).toContain('trailing commas')
     })
 
     it('handles preamble + bare JSON + trailing brace', () => {

@@ -212,19 +212,17 @@ export const typebulbShim = `
 
   // tb.infer() — the local inference layer (TB-Inference.md). The UI and network live in the
   // lazy-imported modal module (/__infer-ui.js — zero bytes here until the first call); the shim
-  // stays the state machine and globals writer. The promise settles once: a modal retry after a
+  // stays the concurrency guard and globals writer. The promise settles once: a modal retry after a
   // rejected promise still updates runtime state on success, for tb.insight() readers.
-  let inferState = 'idle';
-  let dataOverrides = null;
+  let inferRunning = false;
   const infer = (opts = {}) => {
     if (isFramed) return Promise.reject(inlineErr('tb.infer()'));
-    if (inferState === 'running') return Promise.reject(new Error('Inference already in progress'));
-    inferState = 'running';
-    // Data priority (matching the .com sandbox): explicit arg > setData overrides > undefined —
-    // the modal then seeds from the SOURCE chunks (/__infer-info), the local Data tab, exactly as
-    // .com's IDE modal reseeds from the Data tab rather than post-run runtime state.
+    if (inferRunning) return Promise.reject(new Error('Inference already in progress'));
+    inferRunning = true;
+    // Data to preview: the explicit arg, else undefined — the modal then seeds from the SOURCE
+    // chunks (/__infer-info), the local Data tab, exactly as .com's IDE modal reseeds from the
+    // Data tab rather than post-run runtime state.
     let data = opts.data;
-    if (data === undefined && dataOverrides) data = Object.values(dataOverrides);
     if (data !== undefined && !Array.isArray(data)) data = [data];
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -240,19 +238,19 @@ export const typebulbShim = `
             window.__TB_INSIGHT__ = final.insightJson;
             if (final.data && final.data.length) window.__TB_DATA__ = final.data;
             if (final.hash) history.replaceState(null, '', location.pathname + location.search + final.hash);
-            inferState = 'complete';
+            inferRunning = false;
             settle(resolve, final.insight);
           },
           onError: (err) => {
-            inferState = 'error';
+            inferRunning = false;
             const e = new Error(err.message); e.code = err.code; e.retryable = !!err.retryable;
             settle(reject, e);
           },
           onCancel: () => {
-            if (!settled) { inferState = 'idle'; settle(resolve, undefined); }
+            if (!settled) { inferRunning = false; settle(resolve, undefined); }
           }
         });
-      }).catch((e) => { inferState = 'error'; settle(reject, e); });
+      }).catch((e) => { inferRunning = false; settle(reject, e); });
     });
   };
 
@@ -301,9 +299,6 @@ export const typebulbShim = `
 
     // Inference (TB-Inference.md) — modal-hosted one-shot LLM call over the bulb's own blocks
     infer,
-    inferenceState: () => inferState,
-    setData: (index, content) => { if (!dataOverrides) dataOverrides = {}; dataOverrides[index] = content; },
-    resetInferenceState: () => { inferState = 'idle'; dataOverrides = null; },
 
     // AI - tb.ai() proxies to the provider via the local server; tb.ai.stream() streams AiChunks.
     ai,

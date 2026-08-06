@@ -85,8 +85,7 @@ const strategies: Array<[string, (s: string) => string | null]> = [
   ['trailing ]', (s) => s.endsWith(']]') ? s.slice(0, -1) : null],
   ['trailing },', (s) => s.endsWith('},') ? s.slice(0, -1) : null],
   ['trailing ],', (s) => s.endsWith('],') ? s.slice(0, -1) : null],
-  ['trailing comma in object', (s) => s.match(/,\s*\}$/) ? s.replace(/,\s*\}$/, '}') : null],
-  ['trailing comma in array', (s) => s.match(/,\s*\]$/) ? s.replace(/,\s*\]$/, ']') : null],
+  ['trailing commas', stripTrailingCommas],
   ['arithmetic constants', foldArithmeticConstants],
 ]
 
@@ -108,6 +107,15 @@ function mapOutsideStrings(text: string, fn: (seg: string) => string): string {
   }
   out += inString ? text.slice(segStart) : fn(text.slice(segStart))
   return out
+}
+
+/** Strip trailing commas before a closing } or ] — anywhere in the document, not just at its end.
+ *  GPT-5.6 emits JSON5-style trailing commas inside nested objects, so deeply structured insights
+ *  (one comma per closing) fail far more often than flat ones. String contents are never touched:
+ *  a quoted snippet ending ",\n}" stays verbatim. */
+function stripTrailingCommas(s: string): string | null {
+  const fixed = mapOutsideStrings(s, (seg) => seg.replace(/,(\s*[}\]])/g, '$1'))
+  return fixed !== s ? fixed : null
 }
 
 /** Fold constant arithmetic in value position — "range": [0, 4 * pi] — into JSON number literals.
