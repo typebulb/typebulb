@@ -4,6 +4,12 @@ import { Component, div, span, button, inputText, type VElement } from 'domeleon
 export const stuckToBottom = (el: Element, px: number) =>
   el.scrollHeight - (el.scrollTop + el.clientHeight) < px
 
+/** The working treatment for a word pill (the token chip, the summarize pill): the shared sweep plus
+ *  the knobs an opaque pill needs, in `.pill-busy` (styles.css). One call, so a new busy pill can't
+ *  land at its own cadence — drop it in the pill's class list and leave the label alone, since a
+ *  label that changes with the state resizes the pill mid-work. */
+export const busyPill = (busy: boolean) => busy ? 'pill-busy shimmer shimmer-slow' : ''
+
 // Shared filter input + clear (×) for the bulb launcher and the session picker — one copy of the
 // filter chrome (the bulb-local analogue of client's uiHelpers/searchBox; the bulb can't import
 // that). The host owns the value (it drives the filtered list + highlight) and the key handling

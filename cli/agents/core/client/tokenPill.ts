@@ -1,5 +1,6 @@
 import { Component, span } from 'domeleon'
 import { formatTokens } from './util.js'
+import { busyPill } from './ui.js'
 import type { IRoot } from './types.js'
 
 // Context + cost chip (parity #5). Every number is the HARNESS's own: driving, it shows the driver's
@@ -28,6 +29,6 @@ export class TokenPill extends Component {
     // (no separate statusbar element): the chip shimmers while CC is mid-turn, the count
     // frozen until the flush; a fresh session has no count yet, so the word stands in.
     return span({ class: 'token-wrap' },
-      span({ class: ['token', busy ? 'busy shimmer shimmer-slow' : ''] }, label))
+      span({ class: ['token', busyPill(busy)] }, label))
   }
 }

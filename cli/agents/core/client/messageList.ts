@@ -3,6 +3,7 @@ import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
 import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
 import { CopyButton } from './copyButton.js'
+import { SummarizeButton } from './summarizeButton.js'
 import { InlineBulb } from './inlineBulb.js'
 import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
@@ -139,6 +140,7 @@ export class MessageList extends Component {
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
+  summarizeButtons: SummarizeButton[] = []         // ditto — one per turn, beside that turn's shared copy pill
   inlineBulbs: InlineBulb[] = []                      // ditto — one per ````bulb```` inline bulb across the transcript
   scrollEl?: HTMLElement
 
@@ -166,6 +168,7 @@ export class MessageList extends Component {
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
     this.copyButtons = []
+    this.summarizeButtons = []
     this.inlineBulbs = []
   }
 
@@ -174,6 +177,15 @@ export class MessageList extends Component {
     const copy = new CopyButton(text)
     this.copyButtons.push(copy)
     return copy
+  }
+
+  // Ditto for a turn's summarize pill. Its onChange is a plain update: the pill sits on the prompt
+  // bubble, above everything the flip resizes, so its offset is identical before and after and no
+  // scroll correction is wanted (a shrink past the end clamps to the same place either way).
+  #makeSummarize(): SummarizeButton {
+    const s = new SummarizeButton(() => this.update())
+    this.summarizeButtons.push(s)
+    return s
   }
 
   // Build a Msg with its own copy button (when there's text to copy).
@@ -236,8 +248,13 @@ export class MessageList extends Component {
     // messages (reuse the previous one's when same-turn, else start fresh) and keep its text current
     // as the turn grows; bubble() renders it on the turn's last prose bubble.
     const prev = this.messages[this.messages.length - 2]
+    const prose = this.#turnProseText()
     msg.turnCopy = (prev?.role === 'assistant' && prev.turnCopy) || this.#makeCopy('')
-    msg.turnCopy.setText(this.#turnProseText())
+    msg.turnCopy.setText(prose)
+    // The summarize pill shares the turn the same way, and setText drops a summary the turn has since
+    // outgrown — what's on screen must be what was summarized.
+    msg.turnSummarize = (prev?.role === 'assistant' && prev.turnSummarize) || this.#makeSummarize()
+    msg.turnSummarize.setText(prose)
     this.#attachInlineBulbs(msg, e.text)
     this.#recomputeChains()
     // Auto-expand live edits; leave historical (replayed) ones collapsed.
@@ -528,11 +545,23 @@ export class MessageList extends Component {
       // Fork stubs are said content too — keep them visible in prose mode.
       const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
       const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && !!m.text)
-      return visible.map(m => {
-        if (m.role === 'fork') return this.forkStub(m, turnIdx)
+      const turnSum = lastProse?.turnSummarize
+      // Summarized (the reader clicked): the turn's assistant bubbles give way to the one summary
+      // bubble in place. The prompt and any fork stub stay — neither is what read long.
+      const summaryText = turnSum?.summary
+      // The action rides the turn's USER bubble, above the prose it replaces (see SummarizeButton).
+      // A transcript opening mid-conversation has an assistant-only first group (renderMessages'
+      // orphan clamp) and so gets no action — one rule beats a second placement for one edge turn.
+      const prompt = visible.find(m => m.role === 'user')
+      // No length floor: a hover-revealed pill costs nothing on a short turn, and tightening a short
+      // reply is a use of its own. `lastProse` already withholds it from a turn with no prose at all.
+      const summarizer = this.parent.canSummarize ? turnSum : undefined
+      return visible.flatMap(m => {
+        if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
+        if (summaryText && m.role === 'assistant') return m === lastProse ? [this.#summaryBubble(m, turnIdx, summaryText)] : []
         // User bubbles keep their own pill; the turn's assistant prose gets one, on its last prose bubble.
         const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
-        return this.bubble(m, turnIdx, copy ?? null)
+        return [this.bubble(m, turnIdx, copy ?? null, true, m === prompt ? summarizer : undefined)]
       })
     }
     const assistants = msgs.filter(m => m.role === 'assistant')
@@ -586,7 +615,7 @@ export class MessageList extends Component {
   // turn-level copy on the last prose bubble and `null` on the rest, so a turn shows a single pill.
   // `stripe` is the left turn-color bar; orphan-branch sub-bubbles pass false — they're already grouped
   // by .fork-body's own rule, so repeating the parent turn's stripe inside it reads as recursive nesting.
-  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true) {
+  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true, summarize?: SummarizeButton) {
     const prose = this.parent.prose
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
@@ -596,7 +625,26 @@ export class MessageList extends Component {
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       prose ? null : msg.tools.map(t => this.tool(t)),
-      copy ? copy.view() : null,
+      this.#controls(summarize, copy),
+    )
+  }
+
+  // The bubble's hover-revealed pill row. A row, not two absolutely-positioned pills: an overlay pill
+  // anchors itself to its container's bottom-right corner, so a second one would land on the first.
+  #controls(summarize: SummarizeButton | undefined, copy: CopyButton | null | undefined) {
+    if (!summarize && !copy) return null
+    return div({ class: 'bubble-controls' }, summarize ? summarize.view() : null, copy ? copy.view() : null)
+  }
+
+  // A summarized turn renders as this one bubble: the model's compression of the turn's prose, with
+  // the action on the prompt above it flipped to `show full reply`. Nothing is written anywhere —
+  // dropping the summary is one click.
+  #summaryBubble(msg: Msg, turnIdx: number, text: string) {
+    return div({ class: ['bubble', 'assistant', 'summarized', turnClassFor(turnIdx)], key: `summary-${msg.id}` },
+      this.#mdDiv(`md-summary-${msg.id}-${text.length}`, renderMarkdown(text)),
+      // The summary's own copy pill, in the same corner an ordinary reply's sits: copy copies what's
+      // on screen, and the turn's own turnCopy isn't rendered while the summary stands in for it.
+      this.#controls(undefined, msg.turnSummarize?.copy),
     )
   }
 

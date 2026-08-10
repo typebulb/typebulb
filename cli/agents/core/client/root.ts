@@ -31,6 +31,7 @@ export class Root extends Component implements IRoot {
   driverModel: string | null = null         // the driver's configured model (poll composer.model); null when not driving
   busy: string[] = []                       // sessionIds with a driven turn streaming (poll busy); picker badges
   prose = false                             // prose mode: hide tool/thinking rows (per-mirror, never persisted)
+  canSummarize = false                      // info().summarize: a provider key exists for the summarize pill
   ownPid = 0                                // this host server's pid; the bulbs pill excludes it
   // Injected agent-specific status pills (Claude's model switcher; none for Pi). MUST be a DIRECT
   // public array-of-Components field: domeleon discovers child components only through direct Component
@@ -89,6 +90,7 @@ export class Root extends Component implements IRoot {
     this.cwd = i.cwd
     this.ownPid = i.pid ?? 0
     this.#elsewhere = i.elsewhere ?? null
+    this.canSummarize = !!i.summarize
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.ready = true
     this.updateTitle()

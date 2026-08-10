@@ -326,13 +326,13 @@ body {
   .shimmer-text { animation: none !important; background: none !important; -webkit-text-fill-color: currentColor; }
 }
 
-/* CC mid-turn: the token pill doubles as the working indicator — an accent shimmer
-   over the chip, the count frozen until the turn flushes. Passive — driven by the
-   live-chain leaf, not a live token stream (the JSONL is flushed in batches, so this
-   can sit lit through a multi-minute buffering window — hence shimmer-slow). The sweep
-   blends with --panel, not transparent like the launch buttons': statusbar pills must
-   stay opaque over the message text the strip lets through. */
-.token.busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
+/* THE WORKING STATE for a word pill — the token chip mid-turn, the summarize pill mid-call. Only
+   the shimmer's knobs live here; the sweep itself is the shared .shimmer above, composed by
+   `busyPill()` (ui.ts) so a new busy pill can't land at its own speed or its own base colour. The
+   sweep blends with --panel, not transparent like the launch buttons': a word pill sits over message
+   text and must keep covering it. shimmer-slow because these can sit lit for minutes (the JSONL
+   flushes in batches, so the token chip rides a whole buffering window). */
+.pill-busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
 
 /* ── The composer (TB-Agent-Composer.md): the prompt panel under the transcript. In flow (not
    overlaid like the statusbar) — it owns real height and must never cover content. ── */
@@ -1870,8 +1870,21 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    (#draftThinkingPre). Durable rows stay uncapped: finished thinking IS reading material. */
 .draft .thinking pre { max-height: 220px; overflow-y: auto; }
 
-/* Copy button: an .overlay-pill revealed on bubble-hover. */
-.bubble:hover .copy { opacity: 1; }
+/* The bubble's pill row (summarize, then copy), revealed on bubble-hover. The row does the corner
+   anchoring so the pills inside can sit side by side — each .overlay-pill anchors itself to its
+   container's bottom-right otherwise, and the second would land on the first. Same shape as the
+   inline bulb's .bulb-controls. The reveal is scoped to a DIRECT child row, so an inline bulb's own
+   controls keep their own (bulb-hover) reveal instead of firing on the whole bubble. */
+.bubble-controls {
+  position: absolute;
+  bottom: .5rem;
+  right: 0;              /* flush with the content column's right edge (prose / statusbar pills) */
+  display: flex;
+  gap: .4rem;
+}
+.bubble-controls .overlay-pill { position: static; }
+.bubble:hover > .bubble-controls .overlay-pill,
+.bubble-controls .overlay-pill:focus-visible { opacity: 1; }
 /* "copied" flash: eases into accent on click (CopyButton is a Component, so its
    node persists across re-renders and the transition actually runs). The color
    transition lives only on .done, not the base pill, so hover stays instant — the
@@ -1884,4 +1897,15 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 }
 /* Assistant bubbles carry no padding, so the shared .5rem bottom would float the
    pill above the last line — pin it to the text's bottom edge. */
-.bubble.assistant .copy { bottom: 0; }
+.bubble.assistant > .bubble-controls { bottom: 0; }
+
+/* The summarize action, riding the PROMPT bubble beside its copy pill (summarizeButton.ts): above
+   the prose, so the flip resizes only what's below it, and over text the reader already knows rather
+   than the reply they came to read. min-width fits its two labels — near-identical in length by
+   design, so the pill never changes width; the working state doesn't enter into it, since the label
+   holds still and .pill-busy shimmers it. Three states outlive the pointer — working, showing,
+   failed — so each holds the pill visible. */
+.summarize { min-width: 7.6rem; }
+.summarize.on, .summarize.err, .summarize.pill-busy { opacity: 1; }
+.summarize.on { color: var(--accent); border-color: var(--accent); }
+.summarize.err { color: var(--err); border-color: var(--err); }

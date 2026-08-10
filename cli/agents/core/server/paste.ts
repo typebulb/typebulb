@@ -5,25 +5,18 @@
  * #3). A path costs ~10 tokens until the agent chooses to read it, stays re-referenceable across
  * turns, and keeps the session JSONL (which the mirror re-parses constantly) free of blobs.
  *
- * Text pastes get a descriptive kebab-case name from a cheap model when a provider key is in the
- * env cascade (OPENROUTER_API_KEY, then GOOGLE_API_KEY); no key, a timeout, or any error falls back
- * to a timestamp name. Naming is a nicety — it must never block or fail a paste.
+ * Text pastes get a descriptive kebab-case name from the shared cheap-model ladder (cheapAi.ts); no
+ * key, a timeout, or any error falls back to a timestamp name. Naming is a nicety — it must never
+ * block or fail a paste.
  */
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { consumeStreamText } from 'typebulb/ai'
-import { resolveLocalProvider, sendTbAi } from '../../../src/servers.js'
+import { cheapAi } from './cheapAi.js'
 import { errorMessage } from './context.js'
 import { PASTE_DIR, PASTE_IMAGE_MIME } from '../events.js'
 
 const NAME_TIMEOUT_MS = 4000
 const NAME_SNIPPET_CHARS = 4000
-
-// Provider ladder for the naming call: whichever key the env cascade has, cheapest Gemini tier.
-const NAMING_MODELS: [string, string][] = [
-  ['openrouter', 'google/gemini-3.1-flash-lite-preview'],
-  ['gemini', 'gemini-3.1-flash-lite'],
-]
 
 export interface PasteRequest { kind: 'image' | 'text'; data: string; mime?: string }
 
@@ -44,29 +37,12 @@ export function slugifyPasteName(reply: string): string {
 }
 
 // One cheap completion → a filename stem, or undefined on any failure (the caller timestamps).
-// One deadline covers the whole ladder — a slow first rung must not double the paste's wait.
 async function nameText(text: string): Promise<string | undefined> {
-  const deadline = AbortSignal.timeout(NAME_TIMEOUT_MS)
-  for (const [provider, model] of NAMING_MODELS) {
-    const resolved = resolveLocalProvider(provider, model)
-    if (typeof resolved === 'string') continue                   // no key for this provider
-    try {
-      const resp = await sendTbAi(resolved, {
-        messages: [{
-          role: 'user',
-          content: `Reply with ONLY a short kebab-case filename (2-5 words, lowercase, no extension) describing this text:\n\n${text.slice(0, NAME_SNIPPET_CHARS)}`,
-        }],
-        effort: 0,
-        webSearch: false,
-        signal: deadline,
-      })
-      if (!resp.ok) continue
-      const slug = slugifyPasteName(await consumeStreamText(resp, resolved.protocol))
-      if (slug) return slug
-    } catch { /* timeout / network / parse — try the next rung, else timestamp */ }
-    if (deadline.aborted) return undefined
-  }
-  return undefined
+  const reply = await cheapAi(
+    `Reply with ONLY a short kebab-case filename (2-5 words, lowercase, no extension) describing this text:\n\n${text.slice(0, NAME_SNIPPET_CHARS)}`,
+    NAME_TIMEOUT_MS,
+  )
+  return reply ? (slugifyPasteName(reply) || undefined) : undefined
 }
 
 /** Write one captured clipboard payload under `.typebulb/paste/` and return its project-relative

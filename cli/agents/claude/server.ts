@@ -17,9 +17,10 @@ const adapter = new ClaudeAdapter()
 // The mirror's display name (page title, the startup log line), read by serve.ts off the imported
 // module — one source of truth with the adapter. The RPC surface is the engine's, re-exported by name.
 export const displayName = adapter.displayName
-// composerPasteRead (read-only, paste-dir-scoped) rides along composer-less: any mirror renders a
-// paste-mention thumbnail it encounters in a transcript.
-export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead } = createMirror(adapter)
+// composerPasteRead (read-only, paste-dir-scoped) and summarizeTurn (render-only) ride along
+// composer-less: any mirror renders a paste-mention thumbnail it encounters in a transcript, and
+// every content view carries the summarize pill.
+export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead, summarizeTurn } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'
