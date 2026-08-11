@@ -5,7 +5,7 @@ import { CodexModelPill } from './modelPill.js'
 // Codex's agent mirror client entry: the neutral Root plus a read-only model pill — Codex switches
 // models natively (no switcher proxy or watchdog overlay, unlike Claude) and has no driver (no
 // composer, unlike Pi): a read-only mirror (TB-Agent-Codex.md). Everything else (transcript, inline bulbs,
-// session picker, token chip, bulb launcher, prose toggle) is the shared neutral UI.
+// session picker, token chip, bulb launcher, per-turn representation selectors) is the shared neutral UI.
 document.title = 'Codex Mirror'
 
 new App({

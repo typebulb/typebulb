@@ -7,7 +7,6 @@ import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import { summarizeProse } from './summarize.js'
-import { cheapAiReady } from './cheapAi.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
 import type { ComposerPoll, Event, SessionFile, TokenCounts } from '../events.js'
@@ -517,9 +516,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // `composer` is the capability flag the client gates the panel on — static per adapter
     // (TB-Agent-Composer.md): a missing binary surfaces as a first-send error, not a probe here.
     // `elsewhere` is the wrong-cwd diagnosis for the client's empty state.
-    // `summarize` is the same shape of flag for the content view's summarize pill — no provider key
-    // in the env cascade, no pill, rather than one that fails on click.
-    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, summarize: cheapAiReady(), elsewhere: await sessionsElsewhere() }
+    // Summary is advertised on every settled prose turn. Its click checks the cheap-model ladder
+    // and, when no supported key is present, explains the small project-.env setup.
+    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, elsewhere: await sessionsElsewhere() }
   }
 
   // Wrong-cwd diagnosis (TB-Agent-Mirror.md): zero sessions for this cwd while an ancestor INSIDE
@@ -759,11 +758,11 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return readPaste(state.cwd, String(name ?? ''))
   }
 
-  // The content view's summarize pill (TB-Agent-Mirror.md): one cheap-model call over a turn's prose,
-  // on the reader's click. Like composerPasteRead, NOT composer-gated — every harness's content view
-  // carries the pill; and render-only, so nothing here touches the transcript.
-  async function summarizeTurn(text: string) {
-    return summarizeProse(String(text ?? ''))
+  // A prose turn's local Summary tab (TB-Agent-Mirror.md): one cheap-model call over its prose on the
+  // reader's click. Like composerPasteRead, NOT composer-gated — every harness can expose the tab;
+  // and render-only, so nothing here touches the transcript.
+  async function summarizeTurn(text: string, userPrompt?: string) {
+    return summarizeProse(String(text ?? ''), String(userPrompt ?? ''))
   }
 
   // ── session picker ──

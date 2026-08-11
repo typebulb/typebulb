@@ -161,13 +161,10 @@ body {
 /* `.on` latches the hover accent — the bar's only persistent state cue (every other
    pill accents on hover alone). */
 .pill:hover, .pill.on { border-color: var(--accent); color: var(--accent); }
-/* Square glyph pill (the prose-mode toggle): width pinned to the pill height rather than
-   padding-driven — the bar's first non-word pill. The emoji can't take currentColor, so it
-   carries state itself: grayscale at rest, color while hovered or on — filtered on the
-   inner span, never the button, or it would wash the accent border too.
-   Glyph content (emoji span / the Anthropic SVG) is vertically symmetric, so plain flex
-   centering is exact for it — and cap/alphabetic trim mis-seats a replaced SVG (it trims to
-   TEXT metrics), so opt glyph pills back out of the word-pill recipe. */
+/* Square glyph pill: width pinned to the pill height rather than padding-driven. Glyph content
+   (emoji span / the Anthropic SVG) is vertically symmetric, so plain flex centering is exact for it
+   — and cap/alphabetic trim mis-seats a replaced SVG (it trims to TEXT metrics), so opt glyph pills
+   back out of the word-pill recipe. */
 .pill.glyph {
   display: inline-flex;
   align-items: center;
@@ -320,18 +317,24 @@ body {
   -webkit-text-fill-color: transparent;
 }
 .shimmer-slow { --shimmer-speed: 7s; }
+/* Summary's text-only working cue sits on a white surface in the light theme. Widen and deepen its
+   blue sweep there so the seven-second motion remains plainly visible; dark's calibrated treatment
+   stays untouched. */
+html:not([data-theme="dark"]) .turn-view > .shimmer-text {
+  background-image: linear-gradient(100deg, currentColor 20%, var(--accent) 40%, color-mix(in srgb, var(--accent) 70%, var(--fg)) 50%, var(--accent) 60%, currentColor 80%) !important;
+}
 @keyframes bulb-shimmer { from { background-position: 250% 0; } to { background-position: -250% 0; } }
 @media (prefers-reduced-motion: reduce) {
   .shimmer { animation: none !important; background: color-mix(in srgb, var(--accent) 15%, var(--shimmer-base, transparent)) !important; }
   .shimmer-text { animation: none !important; background: none !important; -webkit-text-fill-color: currentColor; }
 }
 
-/* THE WORKING STATE for a word pill — the token chip mid-turn, the summarize pill mid-call. Only
-   the shimmer's knobs live here; the sweep itself is the shared .shimmer above, composed by
-   `busyPill()` (ui.ts) so a new busy pill can't land at its own speed or its own base colour. The
-   sweep blends with --panel, not transparent like the launch buttons': a word pill sits over message
-   text and must keep covering it. shimmer-slow because these can sit lit for minutes (the JSONL
-   flushes in batches, so the token chip rides a whole buffering window). */
+/* THE WORKING STATE for an opaque word pill — the token chip mid-turn. Only the shimmer's knobs live
+   here; the sweep itself is the shared .shimmer above, composed by `busyPill()` (ui.ts) so a new busy
+   pill cannot land at its own speed or its own base colour. The sweep blends with --panel, not
+   transparent like the launch buttons': a word pill sits over message text and must keep covering it.
+   shimmer-slow because these can sit lit for minutes (the JSONL flushes in batches, so the token chip
+   rides a whole buffering window). */
 .pill-busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
 
 /* ── The composer (TB-Agent-Composer.md): the prompt panel under the transcript. In flow (not
@@ -701,8 +704,8 @@ body {
 .reasoning-select:hover { border-color: var(--accent); }
 .reasoning-select:focus { outline: none; border-color: var(--accent); }
 
-/* The Anthropic brand glyph stands in for the word on the default pill (same square footprint as the
-   prose toggle). currentColor tracks the pill's muted→accent state; grayscale at rest like the monkey. */
+/* The Anthropic brand glyph stands in for the word on the default pill. currentColor tracks the
+   pill's muted→accent state; grayscale at rest like the other compact glyph controls. */
 .anthropic-glyph { display: block; }
 .pill.glyph .anthropic-glyph { filter: grayscale(1); opacity: .8; }
 .pill.glyph:hover .anthropic-glyph { filter: none; opacity: 1; }
@@ -1013,6 +1016,19 @@ a.server-port:hover { text-decoration: underline; }
 .trust-modal-h { font-size: 1rem; font-weight: 600; color: var(--fg); }
 .trust-modal-b { font-size: .85rem; color: var(--fg); line-height: 1.45; }
 .trust-modal-warn { font-size: .78rem; color: var(--muted); line-height: 1.4; }
+/* Summary’s first-use setup is deliberately informational: the normal interruption chrome makes
+   the compact .env recipe legible without pretending the reader made a risky choice. */
+.summary-setup { width: min(390px, 100%); }
+.summary-setup-keys {
+  padding: .55rem .65rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: .78rem/1.6 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-line;
+  user-select: text;
+}
 .trust-modal-acts { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .2rem; }
 .trust-no, .trust-yes {
   font: inherit; font-size: .82rem; appearance: none; margin: 0; cursor: pointer;
@@ -1100,10 +1116,10 @@ a.server-port:hover { text-decoration: underline; }
 .gitdiff-close { flex: none; display: inline-flex; padding: 0 .15rem; color: var(--muted); }
 .gitdiff-close .icon { width: 10px; height: 10px; }
 .gitdiff-close:hover { color: var(--accent); }
-/* Doc open ⇒ the transcript-scoped pills hide: prose toggle, model switcher, session picker all act
-   on the conversation, which isn't on screen (the token pill stays — its shimmer says the live diff
-   may still grow). display only, never unmount — the model pill's superSelect must keep its mount. */
-.statusbar-actions.doc-open :is(.prose-pill, .model-wrap, .sid-wrap) { display: none; }
+/* Doc open ⇒ transcript-scoped pills hide: model switcher and session picker act on a conversation
+   that is not on screen (the token pill stays — its shimmer says the live diff may still grow).
+   Display only, never unmount — the model pill's superSelect must keep its mount. */
+.statusbar-actions.doc-open :is(.model-wrap, .sid-wrap) { display: none; }
 
 /* The diff doc — takes the transcript's slot in .chat (same flex geometry as .messages). Full-bleed
    like a code surface (no --content-max column: diff lines want the width); the body is the scroll
@@ -1870,11 +1886,8 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    (#draftThinkingPre). Durable rows stay uncapped: finished thinking IS reading material. */
 .draft .thinking pre { max-height: 220px; overflow-y: auto; }
 
-/* The bubble's pill row (summarize, then copy), revealed on bubble-hover. The row does the corner
-   anchoring so the pills inside can sit side by side — each .overlay-pill anchors itself to its
-   container's bottom-right otherwise, and the second would land on the first. Same shape as the
-   inline bulb's .bulb-controls. The reveal is scoped to a DIRECT child row, so an inline bulb's own
-   controls keep their own (bulb-hover) reveal instead of firing on the whole bubble. */
+/* The bubble's hover-revealed copy-pill row. The direct-child reveal avoids firing an inline bulb's
+   own controls when the reader merely hovers the outer assistant bubble. */
 .bubble-controls {
   position: absolute;
   bottom: .5rem;
@@ -1899,13 +1912,31 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    pill above the last line — pin it to the text's bottom edge. */
 .bubble.assistant > .bubble-controls { bottom: 0; }
 
-/* The summarize action, riding the PROMPT bubble beside its copy pill (summarizeButton.ts): above
-   the prose, so the flip resizes only what's below it, and over text the reader already knows rather
-   than the reply they came to read. min-width fits its two labels — near-identical in length by
-   design, so the pill never changes width; the working state doesn't enter into it, since the label
-   holds still and .pill-busy shimmers it. Three states outlive the pointer — working, showing,
-   failed — so each holds the pill visible. */
-.summarize { min-width: 7.6rem; }
-.summarize.on, .summarize.err, .summarize.pill-busy { opacity: 1; }
-.summarize.on { color: var(--accent); border-color: var(--accent); }
-.summarize.err { color: var(--err); border-color: var(--err); }
+/* A turn's local representation selector (turnView.ts). It is a tab bar made of restrained
+   hyperlink-like buttons, not pills: Raw is the full chronological trace for one turn, Reply is its
+   exact prose, and Summary is the generated compression. Normal flow above the selected body means
+   every switch resizes only below itself. */
+.turn-views-row {
+  display: flex;
+  align-items: baseline;
+  gap: .35rem;
+  margin: 0 0 .35rem;
+  font-size: .8rem;
+  line-height: 1.3;
+}
+.turn-view {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.turn-view:hover, .turn-view.on { color: var(--accent); }
+.turn-view.on { border-bottom-color: var(--accent); }
+.turn-view.err { color: var(--err); }
+.turn-view:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.turn-view-sep { color: var(--border); user-select: none; }

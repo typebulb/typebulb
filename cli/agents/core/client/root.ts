@@ -2,7 +2,6 @@ import { Component, div, span, type VElement } from 'domeleon'
 import { SessionPicker } from './sessionPicker.js'
 import { TokenPill } from './tokenPill.js'
 import { BulbsPill } from './bulbsPill.js'
-import { ProsePill } from './prosePill.js'
 import { DiffPill } from './diffPill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
@@ -20,7 +19,6 @@ export class Root extends Component implements IRoot {
   sessionPicker = new SessionPicker()
   tokenPill = new TokenPill()
   bulbsPill = new BulbsPill()
-  prosePill = new ProsePill()
   diffPill = new DiffPill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
@@ -30,8 +28,6 @@ export class Root extends Component implements IRoot {
   latestModel: string | null = null         // model the last assistant turn resolved to; drives the switcher watchdog
   driverModel: string | null = null         // the driver's configured model (poll composer.model); null when not driving
   busy: string[] = []                       // sessionIds with a driven turn streaming (poll busy); picker badges
-  prose = false                             // prose mode: hide tool/thinking rows (per-mirror, never persisted)
-  canSummarize = false                      // info().summarize: a provider key exists for the summarize pill
   ownPid = 0                                // this host server's pid; the bulbs pill excludes it
   // Injected agent-specific status pills (Claude's model switcher; none for Pi). MUST be a DIRECT
   // public array-of-Components field: domeleon discovers child components only through direct Component
@@ -90,7 +86,6 @@ export class Root extends Component implements IRoot {
     this.cwd = i.cwd
     this.ownPid = i.pid ?? 0
     this.#elsewhere = i.elsewhere ?? null
-    this.canSummarize = !!i.summarize
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.ready = true
     this.updateTitle()
@@ -187,8 +182,8 @@ export class Root extends Component implements IRoot {
       // the composer below sits in flow under them — without it the absolute statusbar would anchor to
       // the app box and land on top of the panel. Identical geometry when there is no composer.
       div({ class: 'chat' },
-        // An open git-diff doc takes the transcript's slot — render-only, like prose mode; the
-        // transcript keeps draining underneath and returns intact on close.
+        // An open git-diff doc takes the transcript's slot — render-only; the transcript keeps
+        // draining underneath and returns intact on close.
         this.diffPill.viewing ? this.diffPill.docView() : this.messageList.view(),
         this.#cwdHint(),
         // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.
@@ -213,23 +208,21 @@ export class Root extends Component implements IRoot {
     )
   }
 
-  // Bottom strip: a right-aligned cluster. Left→right: the git-diff pill, the prose-mode toggle,
-  // then any injected pills (Claude's model switcher — its default state is a glyph the size of the
-  // prose toggle, so the square glyph pills group at the left). Width-changers sit leftmost — growth
-  // in a right-aligned cluster pushes left — so the diff pill's viewing form (its widest state, and
-  // first so a doc toggle moves the least) shifts nothing, and the model switcher's glyph-vs-name
-  // toggle only shifts the glyph pills, leaving token/session/bulbs anchored to the right edge. Then
-  // the agent info (token count — which carries the working shimmer while the agent is mid-turn —
-  // and session picker), then the bulbs pill set apart on the right — it's about this project's bulbs.
-  // While a diff doc is open, the transcript-scoped pills (prose toggle, model switcher, session
-  // picker) hide via `doc-open` — CSS display, never unmounting, so the model pill's superSelect
-  // keeps its mount across doc open/close. Token pill stays: its working shimmer is the cue that
-  // the live diff may still be growing.
+  // Bottom strip: a right-aligned cluster. Left→right: the git-diff pill, then any injected pills
+  // (Claude's model switcher — its default state is a compact glyph). Width-changers sit leftmost —
+  // growth in a right-aligned cluster pushes left — so the diff pill's viewing form (its widest state,
+  // and first so a doc toggle moves the least) shifts nothing, and the model switcher's glyph-vs-name
+  // toggle only shifts the injected pill, leaving token/session/bulbs anchored to the right edge.
+  // Then the agent info (token count — which carries the working shimmer while the agent is mid-turn
+  // — and session picker), then the bulbs pill set apart on the right — it's about this project's bulbs.
+  // While a diff doc is open, transcript-scoped pills (model switcher, session picker) hide via
+  // `doc-open` — CSS display, never unmounting, so the model pill's superSelect keeps its mount
+  // across doc open/close. Token pill stays: its working shimmer is the cue that the live diff may
+  // still be growing.
   statusbar() {
     return div({ class: 'statusbar' },
       div({ class: ['statusbar-actions', this.diffPill.viewing ? 'doc-open' : ''] },
         this.diffPill.view(),
-        this.prosePill.view(),
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
         this.sessionPicker.view(),

@@ -3,7 +3,7 @@ import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
 import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
 import { CopyButton } from './copyButton.js'
-import { SummarizeButton } from './summarizeButton.js'
+import { TurnView, DraftTurnView } from './turnView.js'
 import { InlineBulb } from './inlineBulb.js'
 import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
@@ -114,16 +114,6 @@ function todoDigest(todos: TodoItem[]): string {
   return `${done}/${todos.length} done${active ? ` · ◼ ${active.activeForm ?? active.content ?? ''}` : ''}`
 }
 
-// One-line summary of a turn's collapsed (intermediate) bubbles: step count +
-// tool tally, e.g. "5 steps · Read, Edit ×2, Bash". Pure data, no inference.
-function summarizeSteps(msgs: Msg[]): string {
-  const counts = new Map<string, number>()
-  for (const m of msgs) for (const t of m.tools) counts.set(toolDisplayName(t.name), (counts.get(toolDisplayName(t.name)) ?? 0) + 1)
-  const tally = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ')
-  const n = msgs.length
-  return `${n} step${n === 1 ? '' : 's'}${tally ? ` · ${tally}` : ''}`
-}
-
 // Flip membership of a key in an expand/open Set. The mirror's collapsibles (tools, turns, inline bulbs,
 // forks) all toggle this way; callers add their own follow-up (update / recomputeChains).
 function toggleInSet<T>(set: Set<T>, key: T): void {
@@ -136,11 +126,11 @@ function toggleInSet<T>(set: Set<T>, key: T): void {
 export class MessageList extends Component {
   messages: Msg[] = []
   openTools = new Set<string>()                    // tool ids whose body is expanded
-  expandedTurns = new Set<number>()                // turn indices the user expanded past the collapsed summary
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
-  summarizeButtons: SummarizeButton[] = []         // ditto — one per turn, beside that turn's shared copy pill
+  summarizeButtons: TurnView[] = []         // ditto — one per prose turn, owning its Raw | Reply | Summary selector
+  liveTurnView = new DraftTurnView(() => this.update()) // the ephemeral tail's Raw | Reply selector
   inlineBulbs: InlineBulb[] = []                      // ditto — one per ````bulb```` inline bulb across the transcript
   scrollEl?: HTMLElement
 
@@ -162,13 +152,13 @@ export class MessageList extends Component {
   clear() {
     for (const e of this.inlineBulbs) e.dispose()
     this.messages = []
-    this.expandedTurns.clear()
     this.expandedForks.clear()
     this.expandedInlineBulbs.clear()
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
     this.copyButtons = []
     this.summarizeButtons = []
+    this.liveTurnView.reset()
     this.inlineBulbs = []
   }
 
@@ -179,11 +169,11 @@ export class MessageList extends Component {
     return copy
   }
 
-  // Ditto for a turn's summarize pill. Its onChange is a plain update: the pill sits on the prompt
-  // bubble, above everything the flip resizes, so its offset is identical before and after and no
-  // scroll correction is wanted (a shrink past the end clamps to the same place either way).
-  #makeSummarize(): SummarizeButton {
-    const s = new SummarizeButton(() => this.update())
+  // Ditto for a turn's Raw | Reply | Summary selector. Its onChange is a plain update: the selector
+  // sits at the start of the assistant portion, above every body it switches, so no scroll correction
+  // is wanted (a shrink past the end clamps to the same place either way).
+  #makeSummarize(): TurnView {
+    const s = new TurnView(() => this.update())
     this.summarizeButtons.push(s)
     return s
   }
@@ -195,16 +185,18 @@ export class MessageList extends Component {
     return msg
   }
 
-  // The current turn's assistant prose, joined: walk back from the newest message to the last user
-  // message, collecting assistant text. Feeds the shared turn-level copy in prose mode.
-  #turnProseText(): string {
-    const out: string[] = []
+  // The current turn's context in one backward pass to its last user message: the joined assistant
+  // prose (feeds the shared turn-level copy in Reply view) and the user message itself (feeds the
+  // Summary tab, which sends it as context with the prose, TB-Summarize-Eval.md; '' when the turn
+  // has no user message, so the tab then degrades to the prose alone).
+  #turnContext(): { prose: string; user: string } {
+    const prose: string[] = []
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i]!
-      if (m.role === 'user') break
-      if (m.text) out.unshift(m.text)
+      if (m.role === 'user') return { prose: prose.join('\n\n'), user: m.text }
+      if (m.text) prose.unshift(m.text)
     }
-    return out.join('\n\n')
+    return { prose: prose.join('\n\n'), user: '' }
   }
 
   // Set right before navigating to a new chat (session-switch) so the
@@ -236,6 +228,7 @@ export class MessageList extends Component {
   }
 
   applyAssistant(e: Extract<ServerEvent, { type: 'assistant' }>) {
+    const startsTurn = this.messages[this.messages.length - 1]?.role !== 'assistant'
     const msg = this.#addMessage({
       id: ++this.#idSeq,
       role: 'assistant',
@@ -248,13 +241,16 @@ export class MessageList extends Component {
     // messages (reuse the previous one's when same-turn, else start fresh) and keep its text current
     // as the turn grows; bubble() renders it on the turn's last prose bubble.
     const prev = this.messages[this.messages.length - 2]
-    const prose = this.#turnProseText()
+    const ctx = this.#turnContext()
     msg.turnCopy = (prev?.role === 'assistant' && prev.turnCopy) || this.#makeCopy('')
-    msg.turnCopy.setText(prose)
-    // The summarize pill shares the turn the same way, and setText drops a summary the turn has since
-    // outgrown — what's on screen must be what was summarized.
+    msg.turnCopy.setText(ctx.prose)
+    // The per-turn Raw | Reply | Summary selector shares the turn the same way. setText drops a
+    // summary the turn has since outgrown — what's on screen must be what was summarized.
     msg.turnSummarize = (prev?.role === 'assistant' && prev.turnSummarize) || this.#makeSummarize()
-    msg.turnSummarize.setText(prose)
+    // The ephemeral draft owns Raw/Reply until its first durable assistant row lands; carry an
+    // explicit click across that handoff, while an untouched live tail falls back to Raw by default.
+    if (startsTurn) msg.turnSummarize.adoptLiveOverride(this.liveTurnView.takeOverride())
+    msg.turnSummarize.setText(ctx.prose, ctx.user)
     this.#attachInlineBulbs(msg, e.text)
     this.#recomputeChains()
     // Auto-expand live edits; leave historical (replayed) ones collapsed.
@@ -385,28 +381,41 @@ export class MessageList extends Component {
         groups[groups.length - 1]!.msgs.push(msg)
       }
     }
-    const out = groups.flatMap((g, gi) => this.renderTurn(g.msgs, g.idx, gi === groups.length - 1))
+    // The echo belongs to a new, not-yet-durable turn, so it makes the last durable group settled
+    // even while the mirror is working. Without an echo, the durable tail itself is the live turn.
+    const echo = this.parent.echo
+    const draft = this.parent.draft
+    const durableLive = this.parent.working && !echo
+    const out = groups.flatMap((g, gi) => this.renderTurn(g.msgs, g.idx, durableLive && gi === groups.length - 1))
     // A little branding at the top of every conversation — synthetic content that scrolls with the
     // transcript (fills the emptiness of a fresh chat, sits above the history on a long one). Not a
-    // Msg: it stays out of turn-grouping, search, and prose/trace filtering.
+    // Msg: it stays out of turn-grouping, search, and turn-representation selection.
     out.unshift(this.#masthead())
     // The composer driver's in-flight assistant message (TB-Agent-Composer.md): one ephemeral bubble
     // after the transcript, continuing the current turn's stripe. NOT a Msg — it never joins
-    // `messages`, search, or turn collapse (Invariant C1); the durable row replaces it when the
-    // entry lands off the tail.
-    // The echo (the just-sent prompt awaiting its durable row) renders above the draft with the
-    // stripe index its landed row will get, so the handoff never shifts colors.
-    const echo = this.parent.echo
-    const draft = this.parent.draft
+    // `messages`, search, or collapse (Invariant C1); the durable row replaces it when the entry lands.
+    // The echo (the just-sent prompt awaiting its durable row) renders above the draft with the stripe
+    // index its landed row will get, so the handoff never shifts colors.
     const tailTurn = echo ? turn + 1 : Math.max(0, turn)
+    const tailAssistant = durableLive
+      ? [...(groups[groups.length - 1]?.msgs ?? [])].reverse().find(m => m.role === 'assistant')
+      : undefined
+    // A tool-only newest row still owns the live controller. The draft carries the one Raw/Reply row
+    // only until any durable assistant prose bubble in this turn can host it (not merely until the
+    // newest row has prose — a tool step can follow an already-rendered answer fragment).
+    const tailSelector = tailAssistant?.turnSummarize
+    const tailSelectorShown = !!groups[groups.length - 1]?.msgs.some(m => m.role === 'assistant' && (!!m.text || !!m.body))
     if (echo) out.push(this.#echoBubble(echo, tailTurn))
-    if (draft) out.push(this.#draftBubble(draft, tailTurn))
+    // Once durable assistant prose exists, its selector remains the one row for the turn; the draft
+    // shares its state but does not repeat the chrome beneath it.
+    if (draft) out.push(this.#draftBubble(draft, tailTurn, tailSelector, !tailSelectorShown))
     else {
       this.#draftScroll.clear(); this.#draftThinkingOpen = false
       // A live turn with nothing streaming into a draft — between two messages, or any turn the
       // mirror only watches (a terminal session has no driver to stream from). The draft's own wait
       // line covers it, so the shimmer tracks the TURN rather than the draft's shorter lifetime.
-      if (this.parent.working) out.push(this.#draftBubble({ text: '', thinking: '', tool: this.#activeVerb() }, tailTurn))
+      if (this.parent.working) out.push(this.#draftBubble({ text: '', thinking: '', tool: this.#activeVerb() }, tailTurn, tailSelector, !tailSelectorShown))
+      else this.liveTurnView.reset()
     }
     return out
   }
@@ -443,20 +452,21 @@ export class MessageList extends Component {
   }
 
   // Keyed by content length so growth remounts the node and re-renders the markdown — onMounted
-  // fires only on mount, and a draft is the one place bubble text changes after creation. An empty
-  // draft names its live tail (the token pill's rule — the cue rides the thing being generated):
-  // the thinking summary shimmers while thinking streams, a streaming toolCall shows its name, and
-  // 'working…' covers the nameless gaps (first-token latency, prose mode's hidden thinking/tools).
-  #draftBubble(draft: { text: string; thinking: string; tool?: string }, turnIdx: number) {
+  // fires only on mount, and a draft is the one place bubble text changes after creation. Its local
+  // selector defaults to Raw: thinking/tool activity is the useful live representation; Reply hides
+  // that chrome but keeps any emitted prose. A durable tail shares its own selector with the draft.
+  #draftBubble(draft: { text: string; thinking: string; tool?: string }, turnIdx: number, turnView?: TurnView, showSelector = true) {
     const key = `draft-${draft.text.length}-${draft.thinking.length}`
     if (draft.text.length < this.#draftLen) this.#draftScroll.clear()
     this.#draftLen = draft.text.length
-    const showThinking = !this.parent.prose && !!draft.thinking
-    const tool = this.parent.prose ? undefined : draft.tool   // prose mode shows no tool chrome
+    const raw = turnView ? turnView.raw(true) : this.liveTurnView.raw
+    const showThinking = raw && !!draft.thinking
+    const tool = raw ? draft.tool : undefined
     const liveThinking = !draft.text.trim() && !tool          // thinking is still the streaming tail
-    const wait = tool ? `${toolDisplayName(tool)}…`
-      : draft.text.trim() || showThinking ? null : 'working…'
+    const wait = raw && (tool ? `${toolDisplayName(tool)}…`
+      : draft.text.trim() || showThinking ? null : 'working…')
     return div({ class: ['bubble', 'assistant', 'draft', turnClassFor(turnIdx)], key },
+      showSelector ? (turnView ? turnView.view(true) : this.liveTurnView.view()) : null,
       showThinking
         ? details({
             class: 'thinking',
@@ -530,60 +540,63 @@ export class MessageList extends Component {
         })))
   }
 
-  // A completed turn collapses its intermediate assistant bubbles (everything
-  // but the final answer) under a one-line summary; the user prompt and the last
-  // assistant message stay expanded. The in-flight (last) turn never collapses —
-  // you're watching it stream — and a turn the user clicked open expands fully.
-  // Rationale: the agent's final message already IS its own summary of the turn,
-  // so surfacing it (free, exact) beats any generated paraphrase. See the spec.
-  renderTurn(msgs: Msg[], turnIdx: number, isLast: boolean) {
-    // Prose mode: only what the agent said. Tool-only bubbles drop with no summary stub,
-    // and turn-collapse is moot — its tally counts exactly the steps the mode hides. One copy per
-    // turn (the per-message split is tool timing, not authorship): the shared turnCopy renders on the
-    // last assistant prose bubble; user bubbles keep their own (a deliberate merged-send is one copy too).
-    if (this.parent.prose) {
-      // Fork stubs are said content too — keep them visible in prose mode.
-      const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
-      const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && !!m.text)
-      const turnSum = lastProse?.turnSummarize
-      // Summarized (the reader clicked): the turn's assistant bubbles give way to the one summary
-      // bubble in place. The prompt and any fork stub stay — neither is what read long.
-      const summaryText = turnSum?.summary
-      // The action rides the turn's USER bubble, above the prose it replaces (see SummarizeButton).
-      // A transcript opening mid-conversation has an assistant-only first group (renderMessages'
-      // orphan clamp) and so gets no action — one rule beats a second placement for one edge turn.
-      const prompt = visible.find(m => m.role === 'user')
-      // No length floor: a hover-revealed pill costs nothing on a short turn, and tightening a short
-      // reply is a use of its own. `lastProse` already withholds it from a turn with no prose at all.
-      const summarizer = this.parent.canSummarize ? turnSum : undefined
-      return visible.flatMap(m => {
-        if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
-        if (summaryText && m.role === 'assistant') return m === lastProse ? [this.#summaryBubble(m, turnIdx, summaryText)] : []
-        // User bubbles keep their own pill; the turn's assistant prose gets one, on its last prose bubble.
-        const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
-        return [this.bubble(m, turnIdx, copy ?? null, true, m === prompt ? summarizer : undefined)]
-      })
-    }
+  // Every turn is locally represented rather than globally mode-switched. Settled prose turns default
+  // to Reply; the one live durable turn defaults to Raw. A selector's optional explicit override
+  // survives the default changing at completion, while a never-touched tail naturally settles Reply.
+  renderTurn(msgs: Msg[], turnIdx: number, live: boolean) {
     const assistants = msgs.filter(m => m.role === 'assistant')
-    if (isLast || assistants.length < 2) return msgs.map(m => m.role === 'fork' ? this.forkStub(m, turnIdx) : this.bubble(m, turnIdx))
+    const firstAssistant = assistants[0]
+    const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
+    const firstProse = visible.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
+    const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && (!!m.text || !!m.body))
+    const turnView = lastProse?.turnSummarize
 
-    // Collapsed turn: user prompt(s) and any fork stub(s) stay shown (a fork is its own collapsed
-    // marker); only the intermediate assistant bubbles fold under the summary.
-    const expanded = this.expandedTurns.has(turnIdx)
-    const hidden = assistants.slice(0, -1)
-    const last = assistants[assistants.length - 1]!
-    const out = msgs.filter(m => m.role === 'user').map(m => this.bubble(m, turnIdx))
-    for (const m of msgs) if (m.role === 'fork') out.push(this.forkStub(m, turnIdx))
-    out.push(this.turnSummary(hidden, turnIdx))
-    if (expanded) for (const m of hidden) out.push(this.bubble(m, turnIdx))
-    out.push(this.bubble(last, turnIdx))
-    return out
+    // Tool-only turns have no selector; render as plain bubbles.
+    if (!turnView) return this.#renderToolOnlyTurn(msgs, turnIdx)
+
+    // The selector's display mode determines how the turn is rendered. `turnView` is read off
+    // lastProse, so its truthiness above already guarantees both prose messages exist.
+    if (turnView.raw(live)) return this.#renderRawTurn(msgs, turnIdx, firstAssistant, turnView, live)
+    if (turnView.summary) return this.#renderSummaryTurn(msgs, turnIdx, visible, lastProse!, turnView, live)
+    return this.#renderReplyTurn(msgs, turnIdx, visible, firstProse!, lastProse!, turnView, live)
   }
 
-  // Shared shell for the mirror's two collapsed-row stubs — the turn-collapse summary and the
-  // abandoned-branch fork. Both are a .bubble carrying the turn stripe (color continuous with the turn)
-  // and a clickable .turn-summary header (caret + label) that toggles `set`/`key`; the fork additionally
-  // shows `body` beneath when open. They differ only in those four inputs.
+  // Tool-only turns have no prose to represent — render every message as a plain bubble.
+  #renderToolOnlyTurn(msgs: Msg[], turnIdx: number) {
+    return msgs.map(m => m.role === 'fork' ? this.forkStub(m, turnIdx) : this.bubble(m, turnIdx))
+  }
+
+  // Raw: the full chronological trace — every assistant row, thinking, tools, and per-message copy.
+  #renderRawTurn(msgs: Msg[], turnIdx: number, firstAssistant: Msg, turnView: TurnView, live: boolean) {
+    return msgs.map(m =>
+      m.role === 'fork'
+        ? this.forkStub(m, turnIdx)
+        : this.bubble(m, turnIdx, undefined, true, m === firstAssistant ? turnView : undefined, true, live))
+  }
+
+  // Reply: exact authored prose — user messages and the last assistant bubble, no chrome, turn-level copy.
+  #renderReplyTurn(msgs: Msg[], turnIdx: number, visible: Msg[], firstProse: Msg, lastProse: Msg, turnView: TurnView, live: boolean) {
+    return visible.flatMap(m => {
+      if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
+      const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
+      return [this.bubble(m, turnIdx, copy ?? null, true, m === firstProse ? turnView : undefined, false, live)]
+    })
+  }
+
+  // Summary: one compressed bubble in place of all assistant prose — user/fork messages stay visible.
+  #renderSummaryTurn(msgs: Msg[], turnIdx: number, visible: Msg[], lastProse: Msg, turnView: TurnView, live: boolean) {
+    return visible.flatMap(m => {
+      if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
+      if (m.role === 'assistant') return m === lastProse
+        ? [this.#summaryBubble(m, turnIdx, turnView.summary, turnView)] : []
+      const copy = m.role === 'user' ? m.copy : undefined
+      return [this.bubble(m, turnIdx, copy ?? null, true, undefined, false, live)]
+    })
+  }
+
+  // Shared shell for the mirror's collapsed fork rows: a .bubble carrying the turn stripe (color
+  // continuous with the turn) and a clickable .turn-summary header (caret + label) that toggles its
+  // open set; the fork additionally shows its orphan body beneath when open.
   #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, body?: ReturnType<typeof div>) {
     const expanded = set.has(id)
     return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key },
@@ -606,45 +619,38 @@ export class MessageList extends Component {
     return this.#collapsibleRow(`fork-${msg.id}`, turnIdx, this.expandedForks, msg.id, label, body)
   }
 
-  // Collapsed-turn header: caret + data-derived step tally, click to toggle.
-  turnSummary(hidden: Msg[], turnIdx: number) {
-    return this.#collapsibleRow(`summary-${turnIdx}`, turnIdx, this.expandedTurns, turnIdx, summarizeSteps(hidden))
-  }
-
-  // `copy` is the pill to render (defaults to the message's own). Prose mode passes the shared
-  // turn-level copy on the last prose bubble and `null` on the rest, so a turn shows a single pill.
-  // `stripe` is the left turn-color bar; orphan-branch sub-bubbles pass false — they're already grouped
-  // by .fork-body's own rule, so repeating the parent turn's stripe inside it reads as recursive nesting.
-  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true, summarize?: SummarizeButton) {
-    const prose = this.parent.prose
+  // `copy` is the pill to render (defaults to the message's own). Reply passes the shared turn-level
+  // copy on its last prose bubble; Raw keeps each individual trace message's ordinary copy. `stripe`
+  // is the left turn-color bar; orphan-branch sub-bubbles pass false to avoid recursive nesting.
+  // `raw` says whether this bubble renders trace chrome; `live` lets the selector omit Summary.
+  bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true, turnView?: TurnView, raw = true, live = false) {
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
     return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
-      !prose && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
+      turnView ? turnView.view(live) : null,
+      raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
-      prose ? null : msg.tools.map(t => this.tool(t)),
-      this.#controls(summarize, copy),
+      raw ? msg.tools.map(t => this.tool(t)) : null,
+      this.#controls(copy),
     )
   }
 
-  // The bubble's hover-revealed pill row. A row, not two absolutely-positioned pills: an overlay pill
-  // anchors itself to its container's bottom-right corner, so a second one would land on the first.
-  #controls(summarize: SummarizeButton | undefined, copy: CopyButton | null | undefined) {
-    if (!summarize && !copy) return null
-    return div({ class: 'bubble-controls' }, summarize ? summarize.view() : null, copy ? copy.view() : null)
+  // The bubble's hover-revealed copy pill. A row preserves the container geometry for the action;
+  // the Raw | Reply | Summary selector is in normal flow at the assistant portion's start instead.
+  #controls(copy: CopyButton | null | undefined) {
+    return copy ? div({ class: 'bubble-controls' }, copy.view()) : null
   }
 
-  // A summarized turn renders as this one bubble: the model's compression of the turn's prose, with
-  // the action on the prompt above it flipped to `show full reply`. Nothing is written anywhere —
-  // dropping the summary is one click.
-  #summaryBubble(msg: Msg, turnIdx: number, text: string) {
+  // Summary is one assistant bubble in place of the turn's exact prose. Its selector is the heading:
+  // selecting Reply or Raw returns to a non-inferred view; nothing is written to the transcript.
+  #summaryBubble(msg: Msg, turnIdx: number, text: string, turnView?: TurnView) {
     return div({ class: ['bubble', 'assistant', 'summarized', turnClassFor(turnIdx)], key: `summary-${msg.id}` },
+      turnView ? turnView.view(false) : null,
       this.#mdDiv(`md-summary-${msg.id}-${text.length}`, renderMarkdown(text)),
-      // The summary's own copy pill, in the same corner an ordinary reply's sits: copy copies what's
-      // on screen, and the turn's own turnCopy isn't rendered while the summary stands in for it.
-      this.#controls(undefined, msg.turnSummarize?.copy),
+      // The summary's own copy pill: copy follows the visible representation, never the hidden reply.
+      this.#controls(turnView?.copy),
     )
   }
 

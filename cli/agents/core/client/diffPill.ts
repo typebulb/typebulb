@@ -70,7 +70,7 @@ function buildDoc(text: string, untracked: boolean, path: string): { kinds: Diff
 // Status-bar git-diff pill (TB-Agent-Mirror.md): lists the working tree's changed files; picking one
 // swaps the transcript for a full-context unified diff of that file — every unchanged line shown,
 // deletions red, insertions green, one column (the same udiff classes the tool cards use). Render-only,
-// the same move as prose mode: a view over `git status`/`git diff` reads — no writes, no inference
+// the same move as a turn representation: a view over `git status`/`git diff` reads — no writes, no inference
 // (Invariant 1). The chip is `± N` (glyph + changed-file count) and hides entirely outside a git repo
 // or on a clean tree — its appearing IS the "there are changes" signal, so the glyph stays colored;
 // the accent border stays reserved for latched (menu or doc open), like every other pill.
