@@ -3,7 +3,7 @@ import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
 import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
 import { CopyButton } from './copyButton.js'
-import { TurnView, DraftTurnView } from './turnView.js'
+import { TurnView } from './turnView.js'
 import { InlineBulb } from './inlineBulb.js'
 import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
@@ -120,6 +120,17 @@ function toggleInSet<T>(set: Set<T>, key: T): void {
   if (set.has(key)) set.delete(key); else set.add(key)
 }
 
+// What a turn did when it said nothing: step count + tool tally, e.g.
+// "no reply text · 14 steps · Read, Grep ×3, Bash ×8". Pure data, never an inference call.
+function noProseDigest(msgs: Msg[]): string {
+  const counts = new Map<string, number>()
+  for (const m of msgs) for (const t of m.tools) counts.set(toolDisplayName(t.name), (counts.get(toolDisplayName(t.name)) ?? 0) + 1)
+  const steps = [...counts.values()].reduce((a, b) => a + b, 0)
+  if (!steps) return 'no reply text'
+  const tally = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ')
+  return `no reply text · ${steps} step${steps === 1 ? '' : 's'} · ${tally}`
+}
+
 // Messages panel: scrolling area, bubbles, expanded-tool set, sticky-bottom.
 // No optimistic render — the bulb drives nothing; turns appear only once CC
 // writes them to the JSONL.
@@ -129,8 +140,8 @@ export class MessageList extends Component {
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
-  summarizeButtons: TurnView[] = []         // ditto — one per prose turn, owning its Raw | Reply | Summary selector
-  liveTurnView = new DraftTurnView(() => this.update()) // the ephemeral tail's Raw | Reply selector
+  turnViews: TurnView[] = []                       // ditto — one per turn, owning its Raw | Reply | Summary selector
+  liveTurnView = new TurnView(() => this.update()) // the live tail's own, until a durable row of its turn lands
   inlineBulbs: InlineBulb[] = []                      // ditto — one per ````bulb```` inline bulb across the transcript
   scrollEl?: HTMLElement
 
@@ -157,7 +168,7 @@ export class MessageList extends Component {
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
     this.copyButtons = []
-    this.summarizeButtons = []
+    this.turnViews = []
     this.liveTurnView.reset()
     this.inlineBulbs = []
   }
@@ -172,9 +183,9 @@ export class MessageList extends Component {
   // Ditto for a turn's Raw | Reply | Summary selector. Its onChange is a plain update: the selector
   // sits at the start of the assistant portion, above every body it switches, so no scroll correction
   // is wanted (a shrink past the end clamps to the same place either way).
-  #makeSummarize(): TurnView {
+  #makeTurnView(): TurnView {
     const s = new TurnView(() => this.update())
-    this.summarizeButtons.push(s)
+    this.turnViews.push(s)
     return s
   }
 
@@ -246,11 +257,11 @@ export class MessageList extends Component {
     msg.turnCopy.setText(ctx.prose)
     // The per-turn Raw | Reply | Summary selector shares the turn the same way. setText drops a
     // summary the turn has since outgrown — what's on screen must be what was summarized.
-    msg.turnSummarize = (prev?.role === 'assistant' && prev.turnSummarize) || this.#makeSummarize()
-    // The ephemeral draft owns Raw/Reply until its first durable assistant row lands; carry an
-    // explicit click across that handoff, while an untouched live tail falls back to Raw by default.
-    if (startsTurn) msg.turnSummarize.adoptLiveOverride(this.liveTurnView.takeOverride())
-    msg.turnSummarize.setText(ctx.prose, ctx.user)
+    msg.turnView = (prev?.role === 'assistant' && prev.turnView) || this.#makeTurnView()
+    // The live tail's own row owns Raw/Reply until this turn's first durable assistant row lands; carry
+    // an explicit click across that handoff, while an untouched live tail falls back to Raw by default.
+    if (startsTurn) msg.turnView.adoptLiveOverride(this.liveTurnView.takeOverride())
+    msg.turnView.setText(ctx.prose, ctx.user)
     this.#attachInlineBulbs(msg, e.text)
     this.#recomputeChains()
     // Auto-expand live edits; leave historical (replayed) ones collapsed.
@@ -397,24 +408,22 @@ export class MessageList extends Component {
     // The echo (the just-sent prompt awaiting its durable row) renders above the draft with the stripe
     // index its landed row will get, so the handoff never shifts colors.
     const tailTurn = echo ? turn + 1 : Math.max(0, turn)
-    const tailAssistant = durableLive
-      ? [...(groups[groups.length - 1]?.msgs ?? [])].reverse().find(m => m.role === 'assistant')
-      : undefined
-    // A tool-only newest row still owns the live controller. The draft carries the one Raw/Reply row
-    // only until any durable assistant prose bubble in this turn can host it (not merely until the
-    // newest row has prose — a tool step can follow an already-rendered answer fragment).
-    const tailSelector = tailAssistant?.turnSummarize
-    const tailSelectorShown = !!groups[groups.length - 1]?.msgs.some(m => m.role === 'assistant' && (!!m.text || !!m.body))
+    // The live turn's own selector, shared with the draft so a selection cannot jump as a row lands.
+    // Only ever the live turn's: while an echo stands, the last durable group is the PREVIOUS turn,
+    // whose selector says nothing about where this one's row goes.
+    const tailMsgs = durableLive ? groups[groups.length - 1]?.msgs ?? [] : []
+    const tailSelector = [...tailMsgs].reverse().find(m => m.role === 'assistant')?.turnView
+    // The draft carries the row only while no durable bubble hosts it — #selectorHost, the same rule
+    // renderTurn just used, so exactly one row exists and it is above everything it switches.
+    const tailHosted = !!tailSelector && !!this.#selectorHost(tailMsgs, tailSelector, true)
     if (echo) out.push(this.#echoBubble(echo, tailTurn))
-    // Once durable assistant prose exists, its selector remains the one row for the turn; the draft
-    // shares its state but does not repeat the chrome beneath it.
-    if (draft) out.push(this.#draftBubble(draft, tailTurn, tailSelector, !tailSelectorShown))
+    if (draft) out.push(this.#draftBubble(draft, tailTurn, tailSelector, !tailHosted))
     else {
       this.#draftScroll.clear(); this.#draftThinkingOpen = false
       // A live turn with nothing streaming into a draft — between two messages, or any turn the
       // mirror only watches (a terminal session has no driver to stream from). The draft's own wait
       // line covers it, so the shimmer tracks the TURN rather than the draft's shorter lifetime.
-      if (this.parent.working) out.push(this.#draftBubble({ text: '', thinking: '', tool: this.#activeVerb() }, tailTurn, tailSelector, !tailSelectorShown))
+      if (this.parent.working) out.push(this.#draftBubble({ text: '', thinking: '', tool: this.#activeVerb() }, tailTurn, tailSelector, !tailHosted))
       else this.liveTurnView.reset()
     }
     return out
@@ -459,14 +468,15 @@ export class MessageList extends Component {
     const key = `draft-${draft.text.length}-${draft.thinking.length}`
     if (draft.text.length < this.#draftLen) this.#draftScroll.clear()
     this.#draftLen = draft.text.length
-    const raw = turnView ? turnView.raw(true) : this.liveTurnView.raw
+    const view = turnView ?? this.liveTurnView
+    const raw = view.raw(true)
     const showThinking = raw && !!draft.thinking
     const tool = raw ? draft.tool : undefined
     const liveThinking = !draft.text.trim() && !tool          // thinking is still the streaming tail
     const wait = raw && (tool ? `${toolDisplayName(tool)}…`
       : draft.text.trim() || showThinking ? null : 'working…')
     return div({ class: ['bubble', 'assistant', 'draft', turnClassFor(turnIdx)], key },
-      showSelector ? (turnView ? turnView.view(true) : this.liveTurnView.view()) : null,
+      showSelector ? view.view(true) : null,
       showThinking
         ? details({
             class: 'thinking',
@@ -544,54 +554,88 @@ export class MessageList extends Component {
   // to Reply; the one live durable turn defaults to Raw. A selector's optional explicit override
   // survives the default changing at completion, while a never-touched tail naturally settles Reply.
   renderTurn(msgs: Msg[], turnIdx: number, live: boolean) {
-    const assistants = msgs.filter(m => m.role === 'assistant')
-    const firstAssistant = assistants[0]
     const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
     const firstProse = visible.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
     const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && (!!m.text || !!m.body))
-    const turnView = lastProse?.turnSummarize
+    // A turn selects off its newest assistant row rather than its newest PROSE row — every row of a
+    // turn shares one selector — so a turn of pure tool work has tabs like any other, hosted on its
+    // placeholder in Reply. Only a turn with no assistant row at all (a prompt awaiting its reply)
+    // has nothing to switch.
+    const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
+    const turnView = (lastProse ?? lastAssistant)?.turnView
+    if (!turnView) return this.#renderPromptOnlyTurn(msgs, turnIdx)
 
-    // Tool-only turns have no selector; render as plain bubbles.
-    if (!turnView) return this.#renderToolOnlyTurn(msgs, turnIdx)
-
-    // The selector's display mode determines how the turn is rendered. `turnView` is read off
-    // lastProse, so its truthiness above already guarantees both prose messages exist.
-    if (turnView.raw(live)) return this.#renderRawTurn(msgs, turnIdx, firstAssistant, turnView, live)
-    if (turnView.summary) return this.#renderSummaryTurn(msgs, turnIdx, visible, lastProse!, turnView, live)
-    return this.#renderReplyTurn(msgs, turnIdx, visible, firstProse!, lastProse!, turnView, live)
+    // The selector's display mode determines how the turn is rendered. A non-empty summary is only
+    // ever set from this turn's prose, so `firstProse` exists wherever it is read.
+    const host = this.#selectorHost(msgs, turnView, live)
+    if (turnView.raw(live)) return this.#renderRawTurn(msgs, turnIdx, host, turnView, live)
+    if (turnView.summary) return this.#renderSummaryTurn(turnIdx, visible, firstProse!, turnView, live)
+    return this.#renderReplyTurn(msgs, turnIdx, visible, host, lastProse, turnView, live)
   }
 
-  // Tool-only turns have no prose to represent — render every message as a plain bubble.
-  #renderToolOnlyTurn(msgs: Msg[], turnIdx: number) {
+  // The one rule for which bubble carries a turn's selector, so the row is always above every body it
+  // switches: Raw renders every assistant row, so the turn's FIRST one hosts it — not its first prose,
+  // which would leave the row under the thinking and tool steps that opened the turn. Reply and Summary
+  // render prose alone, so its first prose bubble hosts. Undefined ⇒ nothing in the turn hosts it yet,
+  // and the draft beneath carries it, which is that view's assistant portion start.
+  #selectorHost(msgs: Msg[], turnView: TurnView, live: boolean): Msg | undefined {
+    const assistants = msgs.filter(m => m.role === 'assistant')
+    return turnView.raw(live) ? assistants[0] : assistants.find(m => !!m.text || !!m.body)
+  }
+
+  // A turn with no assistant row at all — a prompt whose reply hasn't landed. Nothing to switch
+  // between, so no selector; render every message as a plain bubble.
+  #renderPromptOnlyTurn(msgs: Msg[], turnIdx: number) {
     return msgs.map(m => m.role === 'fork' ? this.forkStub(m, turnIdx) : this.bubble(m, turnIdx))
   }
 
   // Raw: the full chronological trace — every assistant row, thinking, tools, and per-message copy.
-  #renderRawTurn(msgs: Msg[], turnIdx: number, firstAssistant: Msg, turnView: TurnView, live: boolean) {
+  #renderRawTurn(msgs: Msg[], turnIdx: number, host: Msg | undefined, turnView: TurnView, live: boolean) {
     return msgs.map(m =>
       m.role === 'fork'
         ? this.forkStub(m, turnIdx)
-        : this.bubble(m, turnIdx, undefined, true, m === firstAssistant ? turnView : undefined, true, live))
+        : this.bubble(m, turnIdx, undefined, true, m === host ? turnView : undefined, true, live))
   }
 
-  // Reply: exact authored prose — user messages and the last assistant bubble, no chrome, turn-level copy.
-  #renderReplyTurn(msgs: Msg[], turnIdx: number, visible: Msg[], firstProse: Msg, lastProse: Msg, turnView: TurnView, live: boolean) {
-    return visible.flatMap(m => {
+  // Reply: exact authored prose — user messages and the last assistant bubble, no chrome, turn-level
+  // copy. A settled turn that said nothing renders a placeholder in the prose's slot (what it did
+  // instead), and that placeholder hosts the row: every view then has an assistant portion, so the
+  // selector always has a home. A LIVE turn's reply is still arriving, so the draft carries the row
+  // and a "no reply text" line would be contradicting the text streaming under it.
+  #renderReplyTurn(msgs: Msg[], turnIdx: number, visible: Msg[], host: Msg | undefined, lastProse: Msg | undefined, turnView: TurnView, live: boolean) {
+    const out = visible.flatMap(m => {
       if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
       const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
-      return [this.bubble(m, turnIdx, copy ?? null, true, m === firstProse ? turnView : undefined, false, live)]
+      return [this.bubble(m, turnIdx, copy ?? null, true, m === host ? turnView : undefined, false, live)]
     })
+    if (host || live) return out
+    // The prose slot is right after the prompt: a turn's user messages merge into one bubble, and any
+    // fork stub was raised during the work the placeholder stands for, so it belongs below it.
+    out.splice(visible[0]?.role === 'user' ? 1 : 0, 0, this.#noProseBubble(msgs, turnIdx, turnView))
+    return out
   }
 
   // Summary: one compressed bubble in place of all assistant prose — user/fork messages stay visible.
-  #renderSummaryTurn(msgs: Msg[], turnIdx: number, visible: Msg[], lastProse: Msg, turnView: TurnView, live: boolean) {
+  // It takes the FIRST prose slot, the same one Reply hosts the row in, so the row does not move as
+  // the reader flips between them (a fork stub raised mid-turn would otherwise sit above it).
+  #renderSummaryTurn(turnIdx: number, visible: Msg[], firstProse: Msg, turnView: TurnView, live: boolean) {
     return visible.flatMap(m => {
       if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
-      if (m.role === 'assistant') return m === lastProse
+      if (m.role === 'assistant') return m === firstProse
         ? [this.#summaryBubble(m, turnIdx, turnView.summary, turnView)] : []
       const copy = m.role === 'user' ? m.copy : undefined
       return [this.bubble(m, turnIdx, copy ?? null, true, undefined, false, live)]
     })
+  }
+
+  // A turn that said nothing still shows what it did, in the collapsed-stub voice: the tally reads
+  // without expanding, which is the point of Reply on ninety tool calls. Carries the turn's selector,
+  // so the trace is one click away.
+  #noProseBubble(msgs: Msg[], turnIdx: number, turnView: TurnView) {
+    return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key: `no-prose-${turnIdx}` },
+      turnView.view(false),
+      div({ class: 'no-prose' }, noProseDigest(msgs)),
+    )
   }
 
   // Shared shell for the mirror's collapsed fork rows: a .bubble carrying the turn stripe (color
@@ -645,12 +689,12 @@ export class MessageList extends Component {
 
   // Summary is one assistant bubble in place of the turn's exact prose. Its selector is the heading:
   // selecting Reply or Raw returns to a non-inferred view; nothing is written to the transcript.
-  #summaryBubble(msg: Msg, turnIdx: number, text: string, turnView?: TurnView) {
-    return div({ class: ['bubble', 'assistant', 'summarized', turnClassFor(turnIdx)], key: `summary-${msg.id}` },
-      turnView ? turnView.view(false) : null,
+  #summaryBubble(msg: Msg, turnIdx: number, text: string, turnView: TurnView) {
+    return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key: `summary-${msg.id}` },
+      turnView.view(false),
       this.#mdDiv(`md-summary-${msg.id}-${text.length}`, renderMarkdown(text)),
       // The summary's own copy pill: copy follows the visible representation, never the hidden reply.
-      this.#controls(turnView?.copy),
+      this.#controls(turnView.copy),
     )
   }
 

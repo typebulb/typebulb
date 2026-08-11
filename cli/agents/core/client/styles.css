@@ -1709,6 +1709,9 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .turn-summary-text { font-style: italic; }
 .fork-icon { width: 11px; height: 11px; vertical-align: -1px; margin-right: .15rem; }
 .turn-summary:hover .turn-summary-text { color: var(--fg); }
+/* Reply's stand-in for a turn that said nothing (messageList #noProseBubble). Same voice as the stub
+   above, minus its row shape and cursor — this one is a label, not a toggle. */
+.no-prose { color: var(--muted); font-size: .85rem; font-style: italic; padding: .15rem 0; }
 
 /* An expanded abandoned-branch (fork) stub renders its orphan messages here — set apart from the live
    transcript with a left rule and slight fade, signalling "this is not the active conversation"

@@ -124,10 +124,10 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // chunks (string) and InlineBulb components, rendered in order in place of the single markdown div.
 // `turnCopy` is the Reply copy shared across a turn's assistant messages — one pill over the joined
 // turn prose, rendered on the turn's last Reply bubble (see MessageList.renderTurn).
-// `turnSummarize` owns that turn's local Raw | Reply | Summary state and on-demand summary.
+// `turnView` owns that turn's local Raw | Reply | Summary state and on-demand summary.
 // `fork` is set only on a `role: 'fork'` pseudo-message — a collapsed stub for an abandoned branch
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnSummarize?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] } }
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] } }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; batch?: string; predicted?: string; denied?: string }
 // `batches` = the bulb's named batch scopes (TB-Batch.md), newest first — what the stopped row's

@@ -14,17 +14,17 @@ const key = (prose: string, userPrompt: string) => userPrompt + '\n\n---\n\n' + 
 // override: its effective default is Reply once settled and Raw while it is the live tail. That keeps a
 // user-selected Raw/Reply view through completion without storing an accidental default as a choice.
 type ViewChoice = 'raw' | 'reply' | 'summary'
-type LiveChoice = Exclude<ViewChoice, 'summary'>
 
-// One turn-representation tab (Raw | Reply | Summary), shared by the durable per-turn selector and the
-// ephemeral draft row — the class / shimmer / stopPropagation rules are the same in both.
-const turnView = (t: { which: string; selected: string; label: string; title: string; shimmer?: boolean; err?: boolean; onClick: () => void }) =>
+// One turn-representation tab (Raw | Reply | Summary): the class / shimmer / stopPropagation rules.
+const tab = (t: { which: string; selected: string; label: string; title: string; shimmer?: boolean; err?: boolean; onClick: () => void }) =>
   button({
     class: ['turn-view', t.which === t.selected ? 'on' : '', t.err ? 'err' : ''],
     title: t.title,
     onClick: (e: MouseEvent) => { e.stopPropagation(); t.onClick() },
   }, t.shimmer ? span({ class: 'shimmer-text shimmer-slow' }, t.label) : t.label)
 
+// One class serves both the durable per-turn selector and the live tail's own: `live` already governs
+// every difference between them (Raw default, no Summary tab), so a second class could only restate it.
 export class TurnView extends Component {
   #override: ViewChoice | undefined
   // The summary's own copy pill, rendered on the summary bubble where an ordinary reply's sits.
@@ -76,8 +76,19 @@ export class TurnView extends Component {
   /** The summary to render in place of the turn's exact reply, or '' for Raw/Reply. */
   get summary() { return this.#override === 'summary' ? this.#summary : '' }
 
-  /** Adopt the Raw/Reply choice made in the ephemeral draft as its first durable row lands. */
-  adoptLiveOverride(override: LiveChoice | undefined) { if (override) this.#override = override }
+  /** Adopt the choice made on the live tail's own row as this turn's first durable row lands. */
+  adoptLiveOverride(override: ViewChoice | undefined) { if (override) this.#override = override }
+
+  /** Surrender that choice, for the durable row taking over. Never Summary: its tab is not rendered
+   *  while live, so the tail's row can only hold Raw or Reply. */
+  takeOverride() {
+    const override = this.#override
+    this.#override = undefined
+    return override
+  }
+
+  /** Back to the effective default — the live tail's row outlives no turn. */
+  reset() { this.#override = undefined }
 
   async #run() {
     // Snapshot the inputs: a durable assistant row can land while the request runs. Its result is
@@ -130,14 +141,15 @@ export class TurnView extends Component {
 
   // A compact local tab row. Standard tab bar: a continuous bottom line under all tabs, the
   // selected tab's thicker line indicating the active view. Summary is unavailable for the live
-  // tail even if it has emitted prose — it is still changing.
+  // tail even if it has emitted prose (it is still changing), and for a turn that emitted none at
+  // all: there is nothing to compress, and the tab would only ever answer "nothing to summarize".
   view(live: boolean) {
     const selected = this.#selected(live)
     return div({ class: 'turn-views-row' },
-      turnView({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
-      turnView({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
-      !live
-        ? turnView({ which: 'summary', selected, label: 'Summary', err: !!this.#error,
+      tab({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
+      tab({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
+      !live && !!this.#source.trim()
+        ? tab({ which: 'summary', selected, label: 'Summary', err: !!this.#error,
             title: this.#busy ? 'Summarizing…' : this.#error || 'Summarize this reply (one cheap model call)',
             shimmer: this.#busy, onClick: () => this.#select('summary') })
         : null,
@@ -163,39 +175,6 @@ export class TurnView extends Component {
           button({ class: 'trust-yes', type: 'button', onClick: close }, 'OK'),
         ),
       ),
-    )
-  }
-}
-
-// The in-flight draft has no stable complete text to summarize, but it otherwise needs the same local
-// Raw/Reply choice. Its explicit choice is transferred to the first durable turn selector on landing.
-export class DraftTurnView extends Component {
-  #override: LiveChoice | undefined
-  #onChange: () => void
-
-  constructor(onChange: () => void) {
-    super()
-    this.#onChange = onChange
-  }
-
-  get raw() { return (this.#override ?? 'raw') === 'raw' }
-  takeOverride() {
-    const override = this.#override
-    this.#override = undefined
-    return override
-  }
-  reset() { this.#override = undefined }
-
-  #select(next: LiveChoice) {
-    this.#override = next
-    this.#onChange()
-  }
-
-  view() {
-    const selected = this.#override ?? 'raw'
-    return div({ class: 'turn-views-row' },
-      turnView({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
-      turnView({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
     )
   }
 }
