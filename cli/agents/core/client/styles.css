@@ -1912,31 +1912,33 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    pill above the last line — pin it to the text's bottom edge. */
 .bubble.assistant > .bubble-controls { bottom: 0; }
 
-/* A turn's local representation selector (turnView.ts). It is a tab bar made of restrained
-   hyperlink-like buttons, not pills: Raw is the full chronological trace for one turn, Reply is its
-   exact prose, and Summary is the generated compression. Normal flow above the selected body means
-   every switch resizes only below itself. */
+/* A turn's local representation selector (turnView.ts). A standard tab bar: a continuous bottom
+   line under all tabs, the selected tab's thicker line indicating the active view. Raw is the full
+   chronological trace for one turn, Reply is its exact prose, and Summary is the generated
+   compression. Normal flow above the selected body means every switch resizes only below itself. */
 .turn-views-row {
   display: flex;
   align-items: baseline;
-  gap: .35rem;
-  margin: 0 0 .35rem;
+  gap: 0;
+  width: fit-content;
+  margin: .7rem auto;
   font-size: .8rem;
   line-height: 1.3;
+  border-bottom: 1px solid var(--border);
 }
 .turn-view {
   appearance: none;
-  margin: 0;
-  padding: 0;
+  margin: 0 0 -1px 0;
+  padding: 0 .5rem .1rem;
   border: 0;
-  border-bottom: 1px solid transparent;
+  border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
   font: inherit;
   cursor: pointer;
+  text-align: center;
 }
 .turn-view:hover, .turn-view.on { color: var(--accent); }
 .turn-view.on { border-bottom-color: var(--accent); }
 .turn-view.err { color: var(--err); }
 .turn-view:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-.turn-view-sep { color: var(--border); user-select: none; }

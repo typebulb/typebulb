@@ -128,19 +128,18 @@ export class TurnView extends Component {
     this.#onChange()
   }
 
-  // A compact local tab row. They are buttons (state changes, not navigation) styled as hyperlinks;
-  // Summary is unavailable for the live tail even if it has emitted prose — it is still changing.
+  // A compact local tab row. Standard tab bar: a continuous bottom line under all tabs, the
+  // selected tab's thicker line indicating the active view. Summary is unavailable for the live
+  // tail even if it has emitted prose — it is still changing.
   view(live: boolean) {
     const selected = this.#selected(live)
     return div({ class: 'turn-views-row' },
       turnView({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
-      span({ class: 'turn-view-sep' }, '|'),
       turnView({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
       !live
-        ? [span({ class: 'turn-view-sep' }, '|'),
-          turnView({ which: 'summary', selected, label: 'Summary', err: !!this.#error,
+        ? turnView({ which: 'summary', selected, label: 'Summary', err: !!this.#error,
             title: this.#busy ? 'Summarizing…' : this.#error || 'Summarize this reply (one cheap model call)',
-            shimmer: this.#busy, onClick: () => this.#select('summary') })]
+            shimmer: this.#busy, onClick: () => this.#select('summary') })
         : null,
       this.#setup ? this.#setupDialog() : null,
     )
@@ -196,7 +195,6 @@ export class DraftTurnView extends Component {
     const selected = this.#override ?? 'raw'
     return div({ class: 'turn-views-row' },
       turnView({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
-      span({ class: 'turn-view-sep' }, '|'),
       turnView({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
     )
   }
