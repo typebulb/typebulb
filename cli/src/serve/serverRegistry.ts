@@ -388,8 +388,9 @@ function spawnDetached(command: string, args: string[], cwd: string): void {
   proc.unref()
 }
 
-/** This package's `bin` (`dist/index.js`), the sibling of this module (`dist/servers.js`). */
-function binPath(): string {
+/** This package's `bin` (`dist/index.js`), the sibling of this module (`dist/servers.js`). Public
+ *  (through `servers.ts`) because pi's extension spawns its session watcher off it — TB-Wait.md. */
+export function typebulbBinPath(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.js')
 }
 
@@ -409,7 +410,7 @@ export function bulbServerCommand(
   return {
     command: process.execPath,
     args: [
-      binPath(),
+      typebulbBinPath(),
       ...(opts.trust ? ['--trust'] : []),
       ...(opts.batch ? ['--batch', opts.batch] : []),
       ...(opts.mode ? ['--mode', opts.mode] : []),
@@ -426,7 +427,7 @@ export function bulbServerCommand(
  * or user — to open.
  */
 export function agentViewerCommand(name: string): { command: string; args: string[] } {
-  return { command: process.execPath, args: [binPath(), `agent:${name}`, '--no-open'] }
+  return { command: process.execPath, args: [typebulbBinPath(), `agent:${name}`, '--no-open'] }
 }
 
 /**

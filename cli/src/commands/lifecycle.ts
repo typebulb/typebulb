@@ -184,7 +184,12 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // it prevented (missed wakes fatal, spurious cheap — TB-Wait.md).
   const isMirror = server.agent != null
   const shimBackgrounded = process.env.TYPEBULB_WAIT_SHIM === '1'
-  const noDeadline = shimBackgrounded            // a shim-backgrounded wait is a non-blocking subscription
+  // FOLLOW mode (pi's session watcher, TB-Wait.md): a CONTINUOUS consumer — it never exits on a
+  // match, so it needs none of the intermittent consumer's machinery below (no stored offset, no
+  // linger, no from-0 default). Env-marked, not a flag: `wait`'s agent-facing grammar is unchanged,
+  // and a following wait is useless on the agent-armed path, where the exit IS the wake.
+  const following = process.env.TYPEBULB_WAIT_FOLLOW === '1'
+  const noDeadline = shimBackgrounded || following
   const timeoutSec = opts.timeoutSec ?? 1800     // housekeeping give-up cap, used only when !noDeadline
 
   // Resume from this `--match`'s own offset; the first time a pattern runs it has none, so fall back to
@@ -201,8 +206,10 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // absorbs (missed wakes fatal, spurious cheap). A bare wait keeps EOF: unfiltered-from-0 dumps history.
   const match = opts.match ?? ''
   const end = readServerLog(server.pid).offset
-  const stored = readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
-  let cursor = stored !== undefined && stored <= end ? stored : (match ? 0 : end)
+  const stored = following ? undefined : readWaitCursor(server.pid, match) ?? (match ? readWaitCursor(server.pid) : undefined)
+  // Following starts at the log's current end: a session owns nothing emitted before it started, and
+  // a shared `--match` key across concurrent sessions is exactly the cursor collision it avoids.
+  let cursor = following ? end : stored !== undefined && stored <= end ? stored : match ? 0 : end
   const deadline = Date.now() + timeoutSec * 1000
   // After the first match, linger so a burst lands in one wake. An inline bulb's `ok`/`malformed` can be chased
   // by a runtime error trailing first paint, so a mirror wait lingers 10s (the window that error can land
@@ -229,6 +236,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
         if (!line.trim()) continue
         if (opts.match && !line.includes(opts.match)) continue
         console.log(line)
+        if (following) continue                  // a tail has no burst to gather: the reader is already attached
         settleUntil ??= Date.now() + SETTLE_MS
         // Anchored on the `]`-delimited verdict so a name/message can't false-positive (a false hit only
         // shortens a working bulb's linger, harmless). Clamp, never extend, so a noisy error stream can't
@@ -252,8 +260,9 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
     await delay(400)
   }
   // Every survived exit is a sync point — a timeout too: everything read was seen. Written under this
-  // wait's own `--match`, so it never moves another pattern's offset.
-  writeWaitCursor(server.pid, cursor, match)
+  // wait's own `--match`, so it never moves another pattern's offset. A follower writes none: it holds
+  // no consumer offset to persist, and its `--match` key is shared with every other session's watcher.
+  if (!following) writeWaitCursor(server.pid, cursor, match)
   process.exit(exitCode)
 }
 

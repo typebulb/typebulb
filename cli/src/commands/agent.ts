@@ -16,6 +16,17 @@ function palette(tty: boolean) {
   return { lit: sgr('38;5;70'), litLink: sgr('4;38;5;70'), brand: sgr('38;5;135') }
 }
 
+/** Past this, the launch reports its own phase breakdown (below). */
+const SLOW_LAUNCH_MS = 5000
+
+/** Phase clocks for the slow-launch line. `boot` is everything before the launch — node's own startup,
+ *  `ensureHarnessSupport`, harness resolution — which `performance.now()`'s process origin captures
+ *  without a timer at any of those sites; `from` restarts the clock after the picker, so a human
+ *  deliberating there is never counted as a stall. */
+type LaunchClock = { boot: number; from: number }
+const since = () => Math.round(performance.now())
+const ms = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`)
+
 /**
  * `typebulb agent` (no `:target`) — the first command an agent runs. It prints (TB-Skill.md) a status
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
@@ -46,6 +57,7 @@ function palette(tty: boolean) {
  */
 export async function runAgent(version: string): Promise<void> {
   const choice = resolveAgent(process.cwd())
+  const boot = since()
   if ('ambiguous' in choice) {
     // A human in a multi-harness project. On an interactive terminal, ask — then launch like any
     // resolved run (same detached spawn, same async exit-0 report), which restores the bare-`agent`
@@ -54,9 +66,9 @@ export async function runAgent(version: string): Promise<void> {
     // at step 1), so this prompt is human-only by construction; the isTTY gate is a second guard.
     const picked = await promptHarness(version, choice.ambiguous)
     if (!picked) return printAmbiguous(version, choice.ambiguous)
-    return launchAndReport(version, picked)
+    return launchAndReport(version, picked, { boot, from: since() })
   }
-  return launchAndReport(version, choice.name)
+  return launchAndReport(version, choice.name, { boot, from: since() })
 }
 
 /**
@@ -64,7 +76,7 @@ export async function runAgent(version: string): Promise<void> {
  * path and the post-prompt path, so an interactively-picked harness gets the identical detached launch
  * and async exit-0 report as an env-marker-resolved one.
  */
-async function launchAndReport(version: string, name: string): Promise<void> {
+async function launchAndReport(version: string, name: string, t: LaunchClock): Promise<void> {
   let viewer: BulbServer | undefined
   let failed: string | undefined
   try {
@@ -72,6 +84,7 @@ async function launchAndReport(version: string, name: string): Promise<void> {
   } catch (e) {
     failed = e instanceof Error ? e.message : String(e)
   }
+  const mirror = since() - t.from
 
   const { lit, litLink, brand } = palette(process.stdout.isTTY === true)
 
@@ -119,7 +132,14 @@ async function launchAndReport(version: string, name: string): Promise<void> {
       ]
   // A quiet version banner heads the entry-point command: npx may serve a cached build, so it
   // disambiguates which typebulb is actually running (TB-CLI build hygiene).
-  const lines = [`  ${brand(`typebulb v${version}`)}`, ...body, '']
+  // A stalling launch is a rare event nobody can reproduce on demand (field case: a ~55s pi boot), so
+  // past the threshold the launch names its own slow phase rather than leaving the next occurrence to
+  // guesswork. No flag gates it: a diagnostic you must remember to enable is never on when the rare
+  // thing happens, and under the threshold the banner is unchanged.
+  const slow = t.boot + mirror > SLOW_LAUNCH_MS
+    ? [`  slow launch: boot ${ms(t.boot)} · mirror ${ms(mirror)}`]
+    : []
+  const lines = [`  ${brand(`typebulb v${version}`)}`, ...slow, ...body, '']
   process.stdout.write(lines.join('\n') + '\n')
 }
 

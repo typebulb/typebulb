@@ -5,6 +5,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises'
 import { readFileSync, realpathSync, unwatchFile } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, dirname } from 'path'
+import { pathToFileURL } from 'url'
 import type { ChildProcess } from 'child_process'
 import { PiRpcDriver } from '../agents/pi/server/driver.js'
 import { trustNotice } from '../agents/pi/server/trust.js'
@@ -33,17 +34,28 @@ class FakeChild extends EventEmitter {
 }
 
 // Driver + its fake, with the command lines the driver writes captured as parsed JSON.
-function makeDriver(sessionFile?: string) {
+// Real pi always answers `get_state`, and the driver closes its boot window on that answer (driver.ts),
+// so the fake completes the handshake for you. `manualBoot` holds the window open: for a test that
+// answers get_state itself, and for the slow-boot cases the window exists for.
+function makeDriver(sessionFile?: string, opts?: { manualBoot?: boolean }) {
   const child = new FakeChild()
   const sent: Record<string, unknown>[] = []
   let buf = ''
+  let handshook = false                       // the BOOT get_state only; a later one (fork) is the test's
+  const emit = (e: Record<string, unknown>) => { child.stdout.write(JSON.stringify(e) + '\n') }
   child.stdin.on('data', (b: Buffer) => {
     buf += b.toString()
     let nl: number
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl)
       buf = buf.slice(nl + 1)
-      if (line.trim()) sent.push(JSON.parse(line))
+      if (!line.trim()) continue
+      const cmd = JSON.parse(line) as Record<string, unknown>
+      sent.push(cmd)
+      if (!opts?.manualBoot && !handshook && cmd.type === 'get_state') {
+        handshook = true
+        emit({ type: 'response', id: cmd.id, success: true, data: {} })
+      }
     }
   })
   let command = ''
@@ -51,8 +63,9 @@ function makeDriver(sessionFile?: string) {
     command = cmd
     return child as unknown as ChildProcess
   })
-  const emit = (e: Record<string, unknown>) => { child.stdout.write(JSON.stringify(e) + '\n') }
-  const settle = () => new Promise<void>(res => setTimeout(res, 0))
+  // Two turns, because the boot handshake is a round trip: the driver writes get_state, the fake
+  // answers on the stdin data event, and the response comes back through stdout.
+  const settle = () => new Promise<void>(res => setTimeout(() => setTimeout(res, 0), 0))
   return { driver, child, sent, emit, settle, getCommand: () => command }
 }
 
@@ -60,7 +73,7 @@ describe('PiRpcDriver', () => {
   it('spawns with --session for a bound file, without for a sessionless one, and resolves get_state', async () => {
     const bound = makeDriver('C:\\Users\\t\\.pi\\agent\\sessions\\--C--proj--\\2026_abc.jsonl')
     expect(bound.getCommand()).toBe('pi --mode rpc --session "C:\\Users\\t\\.pi\\agent\\sessions\\--C--proj--\\2026_abc.jsonl"')
-    const blank = makeDriver()
+    const blank = makeDriver(undefined, { manualBoot: true })
     expect(blank.getCommand()).toBe('pi --mode rpc')
     await blank.settle()
     // Boot issues get_state; answering it resolves the created session file.
@@ -155,6 +168,7 @@ describe('PiRpcDriver', () => {
 
   it('surfaces a rejected prompt as the send result, not a driver error', async () => {
     const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl')
+    await settle()                                            // past the boot window: a send now round-trips
     const p = driver.send('hi')
     await settle()
     const prompt = sent.find(c => c.type === 'prompt')!
@@ -163,8 +177,44 @@ describe('PiRpcDriver', () => {
     expect(driver.error).toBeUndefined()
   })
 
+  it('accepts a send issued during a slow pi boot, and holds streaming across it', async () => {
+    const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl', { manualBoot: true })
+    // pi has not answered get_state, so it is not reading stdin yet. The write still lands in the pipe,
+    // so the message IS delivered: reporting it as failed is what let a delivered prompt read as un-sent
+    // and froze the composer against the turn it had just started (driver.ts, the boot window).
+    expect(await driver.send('hi')).toEqual({ ok: true })
+    await settle()
+    expect(sent.find(c => c.type === 'prompt')!.message).toBe('hi')
+    expect(driver.streaming).toBe(true)                       // Stop stays live for the whole boot
+    expect(driver.echo).toBe('hi')
+    expect(driver.status).toMatchObject({ text: 'starting pi…' })
+    const gs = sent.find(c => c.type === 'get_state')!
+    emit({ type: 'response', id: gs.id, success: true, data: {} })
+    await settle()
+    expect(driver.status).toBeNull()                          // the banner clears once pi answers
+    expect(driver.streaming).toBe(true)                       // still inside the ordinary optimistic window
+  })
+
+  it('a user message_end never becomes the assistant draft', async () => {
+    const { driver, emit, settle } = makeDriver('C:\\s.jsonl')
+    await settle()
+    emit({ type: 'agent_start' })
+    // pi records the user turn as a message of its own, so message_start/message_end fire for it too.
+    // Adopting that one put the user's prompt into the ASSISTANT draft: it rendered a second time
+    // under the turn selector, vanishing only when the assistant's own message_start reset the assembly.
+    emit({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'what is 2+2?' }] } })
+    emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'what is 2+2?' }] } })
+    await settle()
+    expect(driver.draft).toBeNull()
+    emit({ type: 'message_start', message: { role: 'assistant', content: [] } })
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '4' } })
+    await settle()
+    expect(driver.draft).toEqual({ text: '4', thinking: '' })
+  })
+
   it('accumulates the draft from partials, retains it past message_end, clears only when completed', async () => {
     const { driver, emit, settle } = makeDriver('C:\\s.jsonl')
+    // Drives the pre-0.81 cumulative `message` shape; the delta shape is the test below.
     emit({ type: 'agent_start' })
     emit({ type: 'message_start', message: { role: 'assistant', content: [] } })
     emit({ type: 'message_update', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'Hel' }] } })
@@ -179,6 +229,35 @@ describe('PiRpcDriver', () => {
     expect(driver.draft).toEqual({ text: 'Hello', thinking: '' })   // retained until the tail emits it
     driver.clearCompletedDraft()
     expect(driver.draft).toBeNull()
+  })
+
+  it('assembles the draft from streaming deltas keyed by contentIndex (pi 0.84.1)', async () => {
+    const { driver, emit, settle } = makeDriver('C:\\s.jsonl')
+    await settle()
+    emit({ type: 'agent_start' })
+    emit({ type: 'message_start', message: { role: 'assistant', content: [] } })
+    // No cumulative `message` rides these (docs/rpc.md strips it). Reading one anyway emptied the draft
+    // on every tick, so nothing streamed and the turn appeared whole when the tail flushed it.
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 } })
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'weigh' } })
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'ing it' } })
+    await settle()
+    expect(driver.draft).toEqual({ text: '', thinking: 'weighing it' })          // live, mid-thought
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'weighing it up' } })
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'Here' } })
+    await settle()
+    expect(driver.draft).toEqual({ text: 'Here', thinking: 'weighing it up' })   // a *_end block is authoritative
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_start', contentIndex: 2 } })
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_delta', contentIndex: 2, delta: '{"cmd":' } })
+    await settle()
+    expect(driver.draft).toEqual({ text: 'Here', thinking: 'weighing it up' })   // args are not display text
+    // The name lands only at toolcall_end: it lived in the snapshot pi now strips.
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', contentIndex: 2, toolCall: { name: 'bash' } } })
+    await settle()
+    expect(driver.draft!.tool).toBe('bash')
+    emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'weighing it up' }, { type: 'text', text: 'Here we go' }] } })
+    await settle()
+    expect(driver.draft).toEqual({ text: 'Here we go', thinking: 'weighing it up' })   // message_end wins
   })
 
   it('echoes an idle prompt until clearEcho; not steers, not slash commands', async () => {
@@ -233,6 +312,7 @@ describe('PiRpcDriver', () => {
 
   it('composes ambient status: retry/compaction operations, notify notices, setStatus entries', async () => {
     const { driver, emit, settle } = makeDriver('C:\\s.jsonl')
+    await settle()                                            // the boot banner owns the line until pi answers
     expect(driver.status).toBeNull()
     emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: '529 overloaded' })
     await settle()
@@ -294,7 +374,7 @@ describe('PiRpcDriver', () => {
   })
 
   it('resolves the configured model at boot and updates it on set_model (model pill)', async () => {
-    const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl')
+    const { driver, sent, emit, settle } = makeDriver('C:\\s.jsonl', { manualBoot: true })
     await settle()
     expect(driver.model).toBeNull()
     const gs = sent.find(c => c.type === 'get_state')!
@@ -392,8 +472,9 @@ describe('trustNotice', () => {
     expect(trustNotice(proj, { agentDir, home })).toBeNull()
   })
 
-  it('the adapter-facing notice() rides the status line', () => {
-    const { driver } = makeDriver('C:\\s.jsonl')
+  it('the adapter-facing notice() rides the status line', async () => {
+    const { driver, settle } = makeDriver('C:\\s.jsonl')
+    await settle()                                            // the boot banner outranks a notice while it shows
     driver.notice('pi has no trust decision for this project', 'warning')
     expect(driver.status).toEqual({ text: 'pi has no trust decision for this project', kind: 'warning' })
   })
@@ -703,16 +784,24 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     for (const wording of [
       'Reusable app/tool → write a ',            // trailed by lit('.bulb.md') in agent.ts
       'Show something inline → emit an inline bulb',
-      'arm a wait for its render verdict — run it plainly:',
-      'typebulb wait agent --match "[inline <name>"',
       'Read the authoring skill before writing a bulb:',
     ]) {
       expect(agentSrc, `agent.ts no longer says: ${wording}`).toContain(wording)
       expect(src, `the pi block no longer says: ${wording}`).toContain(wording)
     }
+    // The arming lines are the one deliberate divergence: agent.ts keeps them (terminal pi arms its
+    // own waits), the mirror block drops them because the session watcher holds that wait, and
+    // deleting an instruction is the only prose fix in this loop's history that has held (TB-Wait.md).
+    for (const armed of [
+      'arm a wait for its render verdict — run it plainly:',
+      'typebulb wait agent --match "[inline <name>"',
+    ]) {
+      expect(agentSrc, `agent.ts no longer says: ${armed}`).toContain(armed)
+      expect(src, `the mirror block still tells a watched session to arm: ${armed}`).not.toContain(armed)
+    }
   })
 
-  it('suppresses the wake on a clean inline bulb-ok verdict — silence is the ok; errors still wake', () => {
+  it('suppresses the wake on a clean inline-ok verdict — silence is the ok; errors still wake', () => {
     const src = piExtensionSource()
     // The per-line predicate, as written into the extension.
     const m = src.match(/return (\/.+\/)\.test\(l\);/)
@@ -780,6 +869,78 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     // Exit 0 with empty stdout = the verdict was redirected away; the wake points at the mirror log.
     expect(src).toContain('code === 0 && !text')
     expect(src).toContain('typebulb logs agent')
+  })
+
+  // The extension is a String.raw blob pi loads by itself, so its pure fragments are lifted out of
+  // the source and tested here rather than re-implemented (the pattern the tests above use).
+  const lift = (src: string, names: string[]) => {
+    const body = names.map(n => {
+      const m = src.match(new RegExp(`^function ${n}\\([\\s\\S]*?\\n\\}`, 'm'))
+      expect(m, `${n} is no longer a top-level function in the shim source`).not.toBeNull()
+      return m![0]
+    }).join('\n')
+    return new Function(`${body}\nreturn { ${names.join(', ')} };`)() as Record<string, Function>
+  }
+
+  it('the written extension parses as a module — a raw template nothing else type-checks', async () => {
+    // The one failure mode this catches cheaply: a backtick or ${ in the String.raw body ends the
+    // template early. pi loads the file itself, so a parse error is invisible until a session starts,
+    // and the per-handler try/catch cannot save it.
+    const dir = await mkdtemp(join(tmpdir(), 'tb-piext-'))
+    const file = join(dir, 'typebulb.mjs')
+    await writeFile(file, piExtensionSource())
+    const mod = await import(pathToFileURL(file).href)
+    expect(typeof mod.default).toBe('function')
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('spawns ONE standing follow-watcher per session, on its own pinned bin, argv-direct', () => {
+    const src = piExtensionSource()
+    // Not a shell and not npx: the command is ours, so the bracketed match needs no quoting, and an
+    // unpinned typebulb could be a different install sharing this disk state (TB-Wait.md).
+    expect(src).toContain('spawn(process.execPath, [TB_BIN, "wait", "agent", "--match", "[inline "]')
+    expect(src).toMatch(/var TB_BIN = "(.+index\.js)";/)
+    expect(src).not.toContain('__TB_BIN_PATH__')
+    // Follow mode is what makes it a continuous consumer: no cursor to share with a concurrent
+    // session's watcher, no linger, no re-arm.
+    expect(src).toContain('TYPEBULB_WAIT_FOLLOW: "1"')
+    expect(src).toContain('if (watcher || stopping || process.env.TYPEBULB_MIRROR !== "1") return;')
+    // Started at session_start and (idempotently) at before_agent_start — never from the exit
+    // handler, where a respawn would hot-loop on a watcher that dies instantly.
+    expect(src.match(/startWatcher\(\);/g)).toHaveLength(2)
+    expect(src).toContain('stopping = true;')
+  })
+
+  it('wakes only for this session\'s own bulb names, only while broken, capped at three', () => {
+    const { wakeFor } = lift(piExtensionSource(), ['parseInline', 'isBroken', 'wakeFor'])
+    const own = new Set(['Japan', 'Chess'])
+    const seen = new Map()
+    const w = (line: string) => wakeFor(line, own, seen)
+    expect(w('[inline Japan v1] ok')).toBeNull()                          // silence on ok falls out of the mechanism
+    expect(w('[inline Atlas v1] runtime error: boom')).toBeNull()         // another session's bulb, in the same mirror log
+    expect(w('[inline Chess Pro v1] runtime error: boom')).toBeNull()     // parsed, not contained: not our "Chess"
+    // The driver echoes extension notifies into this same log; the ^ anchor is what keeps a quoted
+    // tag from reading as a status line (the second stop on that loop, after the notify defang).
+    expect(w('[composer] pi extension: [inline Japan v1] runtime error: boom')).toBeNull()
+    expect(w('[inline Japan v2] runtime error: boom')).toMatchObject({ name: 'Japan', count: 1 })
+    expect(w('[inline Japan v2] runtime error: boom')).toBeNull()         // the mirror re-rendering v2 costs nothing
+    expect(w('[inline Japan v3] malformed: unterminated fence')).toMatchObject({ count: 2 })
+    expect(w('[inline Japan v4] compile error: x is not defined')).toMatchObject({ count: 3 })
+    expect(w('[inline Japan v5] runtime error: still broken')).toBeNull() // the fourth is dropped: it's a venue error
+    expect(w('[inline Chess v1] runtime error: boom')).toMatchObject({ count: 1 })   // the cap is per name
+  })
+
+  it('folds a manual inline arm into the watcher, never a local bulb wait', () => {
+    const { isInlineWait } = lift(piExtensionSource(), ['isWaitCommand', 'isInlineWait'])
+    expect(isInlineWait('npx typebulb wait agent --match "[inline Japan"')).toBe(true)
+    // The local tier keeps the agent-armed shim path untouched, in this very same session.
+    expect(isInlineWait('typebulb wait ./chess.bulb.md --match "[chess]"')).toBe(false)
+    expect(isInlineWait('typebulb logs agent')).toBe(false)
+    const src = piExtensionSource()
+    // Mutated into a green echo, not blocked: pi renders a blocked call as an error result.
+    expect(src).toContain('if (watcher && isInlineWait(command))')
+    expect(src).toContain('event.input.command = "echo \'" + WATCHED_NOTE + "\'";')
+    expect(src).not.toMatch(/var WATCHED_NOTE = ".*'/)      // apostrophe-free: it rides in single quotes
   })
 })
 

@@ -1,6 +1,6 @@
 // PiRpcDriver — the pi realization of the composer's AgentDriver (TB-Agent-Composer.md).
-// Spawns the USER'S installed `pi` in RPC mode (JSONL over stdio — pi's docs/rpc.md, verified
-// 0.80.3): `prompt` when idle, `steer` mid-turn, `abort` for Stop. Never a bundled pi — version,
+// Spawns the USER'S installed `pi` in RPC mode (JSONL over stdio — pi's docs/rpc.md, verified 0.80.3,
+// streaming re-verified 0.84.1): `prompt` when idle, `steer` mid-turn, `abort` for Stop. Never a bundled pi — version,
 // config, and billing stay the user's (what makes driving pi allowed where driving Claude wasn't).
 // The driver renders nothing (Invariant C1): pi appends to the session file and the mirror's tail
 // renders it; this class exposes only ephemeral state (draft, streaming, …) riding the poll.
@@ -16,12 +16,27 @@ interface RpcResponse { type: 'response'; id?: string; success?: boolean; error?
 // The slice of pi's AgentMessage the draft needs: content blocks carrying text / thinking / a toolCall's name.
 interface PiPartialMessage { role?: string; content?: { type?: string; text?: string; thinking?: string; name?: string }[] }
 
+// One `assistantMessageEvent` off message_update: pi's streaming delta (docs/rpc.md, verified 0.84.1).
+// The cumulative `partial` snapshot is stripped on the wire, so `contentIndex` is the only way to know
+// which block a chunk belongs to. `content` rides the `*_end` events and is authoritative for that
+// block; `toolCall` rides `toolcall_end` and is the FIRST place a tool's name appears (it lived in the
+// stripped snapshot before), so a mid-generation tool call is nameless by protocol, not by omission.
+interface PiDelta { type: string; contentIndex?: number; delta?: string; content?: string; toolCall?: { name?: string } }
+
+// One assembled content block of the in-flight assistant message, its index its `contentIndex`.
+interface PiPart { kind: 'text' | 'thinking' | 'tool'; text: string; name?: string }
+
 // A queued blocking extension dialog. `until` is its expiry; `ownTimeout` says pi carried its own
 // `timeout` (pi auto-resolves those itself — expiry drops silently) vs our fallback clock (expiry
 // must answer cancelled so the extension unblocks — T3, TB-Agent-Composer-Toolkit.md).
 interface PendingDialog { req: ComposerDialogRequest; until: number; ownTimeout: boolean }
 
 const RESPONSE_TIMEOUT_MS = 30_000
+// The clock for a request issued before pi reads stdin. pi blocks its own startup on a model-catalog
+// refresh (0.84.1 fetches pi.dev per provider with NO timeout, revalidated every 4h), measured at ~55s
+// against a ~2s norm — so RESPONSE_TIMEOUT_MS does not bound a boot (TB-Agent-Composer.md).
+const BOOT_TIMEOUT_MS = 180_000
+const BOOT_STATUS = 'starting pi…'
 // prompt acceptance → agent_start is near-instant; this only covers an extension command that runs
 // no agent turn at all, so the optimistic shimmer can't stick forever.
 const OPTIMISTIC_STREAM_MS = 5000
@@ -67,8 +82,11 @@ export class PiRpcDriver {
   #child: ChildProcess | undefined
   #streaming = false
   #optimisticUntil = 0                       // send accepted, agent_start not yet seen
+  #booting = false                           // spawned, first get_state unanswered: pi isn't reading stdin yet
+  #bootDeadline = 0
   #open = false                              // an assistant message is mid-accumulation
   #draft: { text: string; thinking: string; tool?: string } | null = null
+  #parts: PiPart[] = []                      // the in-flight message's blocks, indexed by contentIndex
   #echo: string | null = null                // the just-sent idle prompt, held until its durable row lands
   // Ambient status (TB-Agent-Composer-Toolkit.md Piece 2): an agent operation in progress (retry,
   // compaction — wins priority), a transient notice, and keyed extension setStatus entries.
@@ -112,6 +130,9 @@ export class PiRpcDriver {
     }
     this.#child = child
     this.#sessionFile = sessionFile
+    this.#booting = true
+    this.#bootDeadline = Date.now() + BOOT_TIMEOUT_MS
+    this.#op = { text: BOOT_STATUS, kind: 'info' }
     liveChildren.add(child)
     if (child.stdout) attachJsonlReader(child.stdout, line => this.#onLine(line))
     if (child.stderr) child.stderr.on('data', (b: Buffer) => { this.#stderrTail = (this.#stderrTail + b.toString()).slice(-STDERR_TAIL) })
@@ -124,13 +145,25 @@ export class PiRpcDriver {
     })
     // Resolve the session file pi actually opened/created (the sessionless spawn's whole point;
     // for a --session spawn it confirms the path) and the configured model — the pill shows it
-    // before any turn lands on disk. Best-effort: a timeout leaves both undefined/null.
+    // before any turn lands on disk. Doubles as the boot handshake: pi answering this is what closes
+    // the boot window. Best-effort: a timeout leaves both undefined/null.
     void this.#request({ type: 'get_state' }).then(r => {
       const f = r.data?.sessionFile
       if (typeof f === 'string' && f) this.#sessionFile = f
       const m = r.data?.model as { id?: unknown } | null | undefined
       if (m && typeof m.id === 'string' && m.id) this.#model = m.id
-    }).catch(() => { /* stays undefined; the engine keeps its own binding */ })
+    }).catch(() => { /* stays undefined; the engine keeps its own binding */ }).finally(() => this.#bootDone())
+  }
+
+  /** pi answered its first request, or the boot clock ran out. A notice set at spawn (the trust
+   *  warning) would have expired unseen behind the banner, so its clock restarts here. */
+  #bootDone() {
+    if (!this.#booting) return
+    this.#booting = false
+    if (this.#op?.text === BOOT_STATUS) this.#op = null
+    if (this.#notice) this.#notice.until = Date.now() + NOTICE_ALERT_MS
+    // A window stretched across the boot goes back to the ordinary rule.
+    if (!this.#streaming && Date.now() < this.#optimisticUntil) this.#optimisticUntil = Date.now() + OPTIMISTIC_STREAM_MS
     this.#refreshStats()                       // boot baseline (an existing session already has spend)
   }
 
@@ -219,25 +252,43 @@ export class PiRpcDriver {
    *  anything else exactly like steer/follow_up — rpc.md, Prompting). */
   async send(text: string, opts?: { followUp?: boolean }): Promise<{ ok: boolean; error?: string }> {
     const wasStreaming = this.streaming
+    const slash = text.trimStart().startsWith('/')
     const cmd = wasStreaming
-      ? (text.trimStart().startsWith('/')
+      ? (slash
           ? { type: 'prompt', message: text, streamingBehavior: opts?.followUp ? 'followUp' : 'steer' }
           : { type: opts?.followUp ? 'follow_up' : 'steer', message: text })
       : { type: 'prompt', message: text }
+    // pi took the message: hold the optimistic window until `until` (so Stop stays live and the turn
+    // cannot read as foreign), and echo an idle prompt until its durable row lands — pi flushes the
+    // user entry at message_end, so the draft would otherwise render before the message that caused it.
+    // Mid-turn sends are in the queue strip already; a slash command may run no turn and land no entry.
+    const accept = (until: number) => {
+      if (wasStreaming) return
+      this.#optimisticUntil = until
+      if (!slash) this.#echo = text
+    }
+    // Still booting: the write reaches pi's stdin pipe now and pi reads it when it starts reading, so
+    // the message IS sent and must be reported as sent (TB-Agent-Composer.md, the boot window). The
+    // window it holds spans the boot, since agent_start cannot arrive before pi is running.
+    if (this.#booting) {
+      void this.#request(cmd).catch(() => { /* a boot-window death surfaces via #die */ })
+      accept(this.#bootDeadline + OPTIMISTIC_STREAM_MS)
+      return { ok: true }
+    }
     let r: RpcResponse
     try { r = await this.#request(cmd) } catch (err) {
       return { ok: false, error: errorMessage(err) }
     }
-    if (r.success && !wasStreaming) this.#optimisticUntil = Date.now() + OPTIMISTIC_STREAM_MS
-    // Hold the prompt for the mirror to render now — pi flushes the user entry at message_end, so
-    // the draft would otherwise render before the message that caused it. Mid-turn sends are in the
-    // queue strip already; slash commands may run no turn and land no user entry to hand off to.
-    if (r.success && !wasStreaming && !text.trimStart().startsWith('/')) this.#echo = text
+    if (r.success) accept(Date.now() + OPTIMISTIC_STREAM_MS)
     return r.success ? { ok: true } : { ok: false, error: r.error ?? 'pi rejected the message' }
   }
 
   async stop(): Promise<void> {
     if (!this.#child) return
+    // Booting: no turn has started and no response can come inside the window, so write the abort (pi
+    // honours it once it reads stdin) and drop the optimistic window, rather than holding the Stop
+    // RPC open for the whole boot.
+    if (this.#booting) { this.#writeLine({ type: 'abort' }); this.#optimisticUntil = 0; return }
     try { await this.#request({ type: 'abort' }) } catch { /* dying/hung — dispose is the backstop */ }
   }
 
@@ -257,6 +308,7 @@ export class PiRpcDriver {
     const child = this.#child
     if (!child) return
     this.#child = undefined                    // exit handler now treats the exit as clean
+    this.#booting = false                      // no process left to be waiting on stdin
     if (this.#streaming) {
       try { child.stdin?.write(JSON.stringify({ type: 'abort' }) + '\n') } catch { /* pipe gone */ }
       await Promise.race([this.#exited, delay(DISPOSE_GRACE_MS)])
@@ -279,6 +331,29 @@ export class PiRpcDriver {
 
   #writeLine(payload: Record<string, unknown>) {
     try { this.#child?.stdin?.write(JSON.stringify(payload) + '\n') } catch { /* pipe gone */ }
+  }
+
+  // The client-facing draft, assembled from `#parts`: text joined, thinking joined, and the tail
+  // block's tool name when the tail is a tool call (that is the one being generated).
+  #renderDraft() {
+    const last = this.#parts[this.#parts.length - 1]
+    this.#draft = {
+      text: this.#parts.filter(p => p?.kind === 'text').map(p => p.text).join(''),
+      thinking: this.#parts.filter(p => p?.kind === 'thinking').map(p => p.text).join('\n'),
+      tool: last?.kind === 'tool' ? last.name : undefined,
+    }
+  }
+
+  // Take a whole AgentMessage's blocks as the assembly: message_start's seed, message_end's
+  // authoritative correction, and an older pi's cumulative message_update all land here.
+  #adopt(m: PiPartialMessage | undefined) {
+    const blocks = Array.isArray(m?.content) ? m.content : []
+    this.#parts = blocks.map((b): PiPart => ({
+      kind: b.type === 'thinking' ? 'thinking' : b.type === 'toolCall' ? 'tool' : 'text',
+      text: (b.type === 'thinking' ? b.thinking : b.text) ?? '',
+      name: b.name,
+    }))
+    this.#renderDraft()
   }
 
   #setNotice(text: string, kind: ComposerStatus['kind']) {
@@ -304,12 +379,14 @@ export class PiRpcDriver {
   #request(cmd: Record<string, unknown>): Promise<RpcResponse> {
     const child = this.#child
     if (!child?.stdin?.writable) return Promise.reject(new Error(this.#error ?? 'pi is not running'))
+    // A request issued before pi reads stdin rides the boot clock, not the 30s one (above).
+    const timeoutMs = this.#booting ? BOOT_TIMEOUT_MS : RESPONSE_TIMEOUT_MS
     const id = `tb-${this.#nextId++}`
     return new Promise<RpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id)
-        reject(new Error('pi did not respond (30s)'))
-      }, RESPONSE_TIMEOUT_MS)
+        reject(new Error(`pi did not respond (${Math.round(timeoutMs / 1000)}s)`))
+      }, timeoutMs)
       timer.unref?.()
       this.#pending.set(id, { resolve, timer })
       try {
@@ -346,24 +423,37 @@ export class PiRpcDriver {
         return
       case 'message_start': {
         const m = e.message as PiPartialMessage | undefined
-        if (m?.role === 'assistant') { this.#open = true; this.#draft = { text: '', thinking: '' } }
+        if (m?.role !== 'assistant') return
+        this.#open = true
+        this.#adopt(m)                                        // normally empty; the deltas fill it
         return
       }
       case 'message_update': {
         if (!this.#open) return
-        // Rebuild from the partial message (not the deltas): replacement can't drift or double-append.
-        const m = e.message as PiPartialMessage | undefined
-        const blocks = Array.isArray(m?.content) ? m.content : []
-        // The streaming tail is always the last block; a toolCall there is mid-argument-generation.
-        const last = blocks[blocks.length - 1]
-        this.#draft = {
-          text: blocks.filter(b => b?.type === 'text').map(b => b.text ?? '').join(''),
-          thinking: blocks.filter(b => b?.type === 'thinking').map(b => b.thinking ?? '').join('\n'),
-          tool: last?.type === 'toolCall' ? last.name : undefined,
-        }
+        // pi streams DELTAS keyed by contentIndex with no cumulative snapshot (docs/rpc.md), so the
+        // draft is ASSEMBLED here, not replaced (TB-Agent-Composer.md). A pi old enough to still send
+        // the whole message is taken wholesale: cheaper, and immune to a dropped delta.
+        if (e.message) { this.#adopt(e.message as PiPartialMessage); return }
+        const d = e.assistantMessageEvent as PiDelta | undefined
+        if (!d || typeof d.contentIndex !== 'number') return
+        const kind = d.type.startsWith('thinking') ? 'thinking' : d.type.startsWith('toolcall') ? 'tool' : 'text'
+        const part = (this.#parts[d.contentIndex] ??= { kind, text: '' })
+        part.kind = kind
+        // A toolcall_delta is an argument chunk, not display text; the call's name lands at toolcall_end.
+        if (typeof d.delta === 'string' && kind !== 'tool') part.text += d.delta
+        if (typeof d.content === 'string') part.text = d.content   // a *_end block's authoritative text
+        if (d.toolCall?.name) part.name = d.toolCall.name
+        this.#renderDraft()
         return
       }
       case 'message_end':
+        // Only a message we opened, i.e. an assistant one. pi emits message_start/message_end for the
+        // USER turn it records too, and adopting that put the user's own prompt into the assistant
+        // draft, rendering it a second time under the turn selector.
+        if (!this.#open) return
+        // message_end.message is authoritative (docs/rpc.md), so adopt it: a delta the assembly missed
+        // is corrected before the bubble hands off to its durable transcript row.
+        if (e.message) this.#adopt(e.message as PiPartialMessage)
         this.#open = false                                    // completed; cleared when the tail emits it
         return
       case 'auto_retry_start':
@@ -434,10 +524,12 @@ export class PiRpcDriver {
   // replaces the driver on the user's next send.
   #die(message: string) {
     this.#error = message
+    this.#booting = false
     this.#streaming = false
     this.#optimisticUntil = 0
     this.#open = false
     this.#draft = null
+    this.#parts = []
     this.#echo = null
     this.#op = null
     this.#notice = null

@@ -82,7 +82,8 @@ async function main(): Promise<void> {
   // agents/ import. Runs on every invocation so the file is present across a session boundary well
   // before any inline bulb/turn wait (closing the activation gap — a just-placed shim isn't active until pi's
   // next session start). Gated on the harness being present (Claude-Code-only users get nothing
-  // written) and never throws — at worst two stats on the hot path.
+  // written), idempotent by content (nothing is written when the file already matches) and never
+  // throws — at worst a compare-read and two stats on the hot path.
   ensureHarnessSupport()
 
   // Lifecycle / policy commands don't need a resolved (existing) bulb file — dispatch before file

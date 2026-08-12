@@ -34,6 +34,9 @@ export { resolveLocalProvider, sendTbAi } from './serve/localProvider.js'
 // (agents/pi/server/piExtension.ts) points at the same artifact `typebulb agent` prints —
 // through this public entry, per the agent-boundary rule.
 export { bundledSkillPath } from './skill.js'
+// This package's own bin, so the pi extension's session watcher (TB-Wait.md) spawns THIS typebulb
+// rather than an unpinned `npx typebulb` — a different install skews the disk state they share.
+export { typebulbBinPath } from './serve/serverRegistry.js'
 // One-bulb transfer from a typebulb host (TB-Push-Pull.md) — the mirror's sample download is a
 // pull with force on, so it shares this instead of its own fetch-and-write.
 export { pullBulb, bulbRelPath, parsePullTarget, type PullTarget, type PullOutcome } from './commands/pull.js'

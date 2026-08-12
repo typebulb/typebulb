@@ -20,6 +20,7 @@ function rankFilter<T>(items: T[], rank: (item: T) => number, limit?: number): T
 export class Composer extends Component {
   enabled = false                 // info().composer — the adapter implements createDriver
   streaming = false               // the driver is mid-turn (from poll; set optimistically on send)
+  foreign = false                 // off the poll (events.ts): watch-only, a process we don't own is mid-turn
   driverError?: string            // fatal driver error off the poll (pi died / not found)
   sendError?: string              // last send rejection (foreign turn, pi refused) — cleared on typing
   input = ''
@@ -70,8 +71,9 @@ export class Composer extends Component {
 
   /** Root feeds each poll's composer slice; returns whether anything visible changed. */
   syncFromPoll(c: ComposerPoll): boolean {
-    let changed = c.streaming !== this.streaming || c.error !== this.driverError
+    let changed = c.streaming !== this.streaming || c.foreign !== this.foreign || c.error !== this.driverError
     this.streaming = c.streaming
+    this.foreign = c.foreign
     this.driverError = c.error
     // draft/stats live on IRoot (MessageList and the token pill read them there), but their
     // field-wise change detection belongs here with the rest of the slice.
@@ -103,13 +105,9 @@ export class Composer extends Component {
 
   #queueKey(q: ComposerQueue | null) { return q ? JSON.stringify(q) : '' }
 
-  // A foreign process (a terminal pi) owns the in-flight turn: `working` covers both, so it's
-  // foreign exactly when it isn't ours. Watch only — driving now would fork its turn.
-  #foreignTurn(): boolean { return this.parent.working && !this.streaming }
-
   async send(followUp = false) {
     const text = this.input.trim()
-    if (!text || this.#sending || this.#foreignTurn()) return
+    if (!text || this.#sending || this.foreign) return
     if (text.startsWith('!')) return this.runBash(text.slice(1).trim())
     this.atQuery = null
     await this.#withSending('send failed — mirror unreachable', async () => {
@@ -538,13 +536,12 @@ export class Composer extends Component {
   }
 
   view() {
-    const foreign = this.#foreignTurn()
-    const disabled = foreign || this.#sending ? { disabled: true } : {}
+    const disabled = this.foreign || this.#sending ? { disabled: true } : {}
     const err = this.sendError ?? this.driverError
     const stat = this.localNotice && Date.now() < this.localNotice.until
       ? { text: this.localNotice.text, kind: 'info' as const }
       : this.status
-    const placeholder = foreign
+    const placeholder = this.foreign
       ? 'the agent is working in a terminal — watch only'
       : this.streaming
         ? 'Steer — Enter queues for after this step, Alt+Enter for after the turn'

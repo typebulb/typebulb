@@ -604,9 +604,15 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // picker can badge background work — a pending one under its own id, since the adapter has no
     // row to key it by. Nothing else about a background driver leaves its conversation.
     const busy = recConversations().filter(c => c.rec.d.streaming).map(c => c.sessionId)
+    // One evaluation, two readers: `working` (any in-flight turn) and `foreign` (one we don't own).
+    const turnLive = terminalTurnLive()
     const composer: ComposerPoll | undefined = adapter.createDriver
       ? {
           streaming: !!rec?.d.streaming,
+          // The absence of a driver of ours, the same predicate `ensureDriver` refuses on. Decided
+          // HERE because only this side knows that; the client's `working && !streaming` reading
+          // inverted while one of our own accepted sends waited on a slow pi boot.
+          foreign: !rec && turnLive,
           draft: rec?.d.draft ?? null,
           echo: rec?.d.echo ?? null,
           status: rec?.d.status ?? null,
@@ -624,7 +630,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       // The driver's own streaming flag (when its session is the viewed one) covers the long
       // single-message stream where the harness writes nothing to disk and the mtime fallback
       // alone would flicker the shimmer off mid-turn (TB-Agent-Composer.md).
-      working: !!rec?.d.streaming || terminalTurnLive(),
+      working: !!rec?.d.streaming || turnLive,
       latestModel: s.latestModel,
       composer,
       busy,

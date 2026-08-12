@@ -59,6 +59,10 @@ export interface ComposerDialogRequest {
  *  deliberately. */
 export interface ComposerPoll {
   streaming: boolean
+  // The in-flight turn belongs to a process the mirror does NOT own (a terminal pi), so the composer
+  // is watch-only: driving now would fork that turn. Server-decided, because only the mirror knows
+  // which conversations it holds a driver for.
+  foreign: boolean
   // `tool` names a streaming toolCall block — the live tail the text/thinking fields can't show.
   draft: { text: string; thinking: string; tool?: string } | null
   // The just-sent user prompt awaiting its durable row — an ephemeral user bubble above the draft

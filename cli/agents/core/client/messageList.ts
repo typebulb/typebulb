@@ -151,7 +151,7 @@ export class MessageList extends Component {
   #stuckToBottom = true
   #draftScroll = new Map<number, { top: number; stuck: boolean }>()  // per-card scroll state across draft remounts (see #draftBulbCard; the thinking pre parks under -1)
   #draftLen = 0                                    // shrink detector: a new in-flight message resets the card scroll state
-  #draftThinkingOpen = false                       // the draft's <details> recreates on every growth tick; this carries its open state across
+  #draftThinkingOpen?: boolean                     // the draft's <details> recreates on every growth tick; this carries an EXPLICIT toggle across (undefined ⇒ the live default)
   // Pasted-image thumbnails (TB-Agent-Composer-Toolkit.md Piece 6): data-URLs by filename, fetched
   // once via composerPasteRead; dropped on clear() so a long-lived tab doesn't hoard image payloads.
   #pasteThumbs = new Map<string, string | 'pending' | 'failed'>()
@@ -419,7 +419,7 @@ export class MessageList extends Component {
     if (echo) out.push(this.#echoBubble(echo, tailTurn))
     if (draft) out.push(this.#draftBubble(draft, tailTurn, tailSelector, !tailHosted))
     else {
-      this.#draftScroll.clear(); this.#draftThinkingOpen = false
+      this.#draftScroll.clear(); this.#draftThinkingOpen = undefined
       // A live turn with nothing streaming into a draft — between two messages, or any turn the
       // mirror only watches (a terminal session has no driver to stream from). The draft's own wait
       // line covers it, so the shimmer tracks the TURN rather than the draft's shorter lifetime.
@@ -480,7 +480,10 @@ export class MessageList extends Component {
       showThinking
         ? details({
             class: 'thinking',
-            open: this.#draftThinkingOpen,
+            // Live thinking is OPEN (this bubble IS the live turn; the durable row that replaces it
+            // collapses it again). Unconditional, not keyed to `liveThinking`: the box must not slam
+            // shut mid-message when prose starts. A default is not a choice, so a toggle overrides.
+            open: this.#draftThinkingOpen ?? true,
             // Track state ONLY — never touch scroll from here. <details> queues a toggle task every
             // time the per-tick remount re-adds `open` (measured: one per remount, not per click), so
             // any scroll write in this handler yanks the reader to the bottom on every delta.
