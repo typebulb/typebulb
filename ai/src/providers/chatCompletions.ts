@@ -75,8 +75,8 @@ export abstract class ChatCompletionsProvider extends AIProvider {
     return { text, reasoning, usage: this.mapUsage(resp.usage) }
   }
 
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
-    if (!this.hasChoices(json)) return null
+  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined {
+    if (!this.hasChoices(json)) return undefined
 
     const event = json as ChatCompletionsStreamEventDto
     const usage = this.mapUsage(event.usage)
@@ -84,7 +84,7 @@ export abstract class ChatCompletionsProvider extends AIProvider {
     const text = delta?.content || undefined
     const reasoning = delta?.reasoning || delta?.reasoning_content || undefined
 
-    if (!text && !reasoning && !usage) return null
+    if (!text && !reasoning && !usage) return undefined
 
     return { text, reasoning, usage }
   }

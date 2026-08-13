@@ -44,14 +44,42 @@ export interface ParsedBulb {
 /** Structured per-block content, keyed by kind. */
 export type BulbData = { name: string } & Record<SubscriptKind, string>
 
-/** Parse a `.bulb.md` file into frontmatter and file contents, or null if malformed. */
-export function parseBulb(content: string): ParsedBulb | null {
+/**
+ * Parse a `.bulb.md` file, or throw naming what is wrong with it. `parse` throws by the convention
+ * every neighbouring one follows (`JSON.parse`, `new URL`), and the callers that must have a bulb are
+ * exactly the ones that have to explain a bad file to whoever wrote it, so the reason rides the
+ * message rather than a return shape they would each have to unpack.
+ */
+export function parseBulb(content: string): ParsedBulb {
+  const result = walkBulb(content)
+  if ('reason' in result) throw new Error(`Invalid .bulb.md file format: ${result.reason}`)
+  return result.bulb
+}
+
+/**
+ * `parseBulb` without the throw: `undefined` when the content is not a bulb (C#'s `TryParse`).
+ * For the scanners, listings and predicates that meet non-bulbs as ordinary input and discard the
+ * reason — `findUnfencedBulbs` calls this once per `---` line, where an exception would be neither
+ * cheap nor true.
+ */
+export function tryParseBulb(content: string): ParsedBulb | undefined {
+  const result = walkBulb(content)
+  return 'bulb' in result ? result.bulb : undefined
+}
+
+/**
+ * The single walk both wrap, private so no caller ever narrows a union. Every rejection comes from
+ * the frontmatter prologue below: the block loop tolerates what it meets and reports through
+ * `warnings` instead, so anything that clears the prologue yields a bulb and the reasons are a
+ * closed set of four.
+ */
+function walkBulb(content: string): { bulb: ParsedBulb } | { reason: string } {
   try {
     const lines = content.split('\n')
     let i = 0
 
     // Parse frontmatter
-    if (lines[i]?.trim() !== '---') return null
+    if (lines[i]?.trim() !== '---') return { reason: noOpeningFenceReason(content, lines) }
     i++
 
     const frontmatterLines: string[] = []
@@ -59,11 +87,17 @@ export function parseBulb(content: string): ParsedBulb | null {
       frontmatterLines.push(lines[i])
       i++
     }
-    if (lines[i]?.trim() !== '---') return null
+    if (lines[i]?.trim() !== '---') return { reason: "the frontmatter opened on line 1 but never closed (no second '---')" }
     i++
 
-    const frontmatter = parseFrontmatter(frontmatterLines)
-    if (!frontmatter) return null
+    const fm = parseFrontmatter(frontmatterLines)
+    if (!isBulbFormat(fm.format)) return {
+      reason: fm.format
+        ? `frontmatter 'format: ${fm.format}' is not a typebulb format (expected 'format: typebulb/v1')`
+        : "frontmatter has no 'format:' (expected 'format: typebulb/v1')",
+    }
+    if (!fm.name) return { reason: "frontmatter has no 'name:'" }
+    const frontmatter = fm as BulbFrontmatter
 
     // Parse file sections
     const files = new Map<string, string>()
@@ -113,10 +147,24 @@ export function parseBulb(content: string): ParsedBulb | null {
       }
     }
 
-    return { frontmatter, files, warnings, bodyEndLine, starts }
-  } catch {
-    return null
+    return { bulb: { frontmatter, files, warnings, bodyEndLine, starts } }
+  } catch (e) {
+    return { reason: `unexpected parse error: ${e instanceof Error ? e.message : String(e)}` }
   }
+}
+
+// The missing-opening-`---`, which an agent patch applied at the wrong offset now causes routinely:
+// content lands above the frontmatter and the whole file stops being a bulb. When a real bulb starts
+// further down, say so — `findUnfencedBulbs` already knows how to find one, so the diagnosis reuses it
+// rather than inventing a second scan.
+function noOpeningFenceReason(content: string, lines: string[]): string {
+  const below = findUnfencedBulbs(content)[0]
+  if (below && below.start > 0) {
+    return `expected '---' on line 1; the frontmatter starts on line ${below.start + 1} instead. Is there content above it?`
+  }
+  const first = lines.find(l => l.trim())?.trim() ?? ''
+  if (!first) return "expected '---' on line 1, found an empty file"
+  return `expected '---' on line 1, found '${first.length > 40 ? `${first.slice(0, 40)}…` : first}'`
 }
 
 // Structural defects an unterminated fence causes, reported per block: it either swallows a later block
@@ -142,7 +190,8 @@ function fenceFollows(body: string[], headerIdx: number): boolean {
   return !!body[k]?.match(FENCE_OPEN_RE)
 }
 
-function parseFrontmatter(lines: string[]): BulbFrontmatter | null {
+/** The `key: value` scan alone. Validation is the caller's, so it can say which half is missing. */
+function parseFrontmatter(lines: string[]): Partial<BulbFrontmatter> {
   const fm: Partial<BulbFrontmatter> = {}
 
   for (const line of lines) {
@@ -158,8 +207,7 @@ function parseFrontmatter(lines: string[]): BulbFrontmatter | null {
     }
   }
 
-  if (!isBulbFormat(fm.format) || !fm.name) return null
-  return fm as BulbFrontmatter
+  return fm
 }
 
 /**
@@ -167,10 +215,10 @@ function parseFrontmatter(lines: string[]): BulbFrontmatter | null {
  * the blocks below it fall *inside* the open one. parseBulb still "succeeds" (it just produces wrong
  * blocks), so on its own a malformed bulb compiles and renders as if clean — the gap a caller needs
  * flagged. A thin read over parseBulb's own structural pass (same single walk, so the two can't drift);
- * `null` (not a bulb at all) has no fence warnings to report. Empty when well-formed; never throws.
+ * Not a bulb at all means no fence warnings to report. Empty when well-formed; never throws.
  */
 export function validateBulbStructure(content: string): string[] {
-  return parseBulb(content)?.warnings ?? []
+  return tryParseBulb(content)?.warnings ?? []
 }
 
 /** A bulb found sitting "naked" in prose — frontmatter and blocks dumped straight into the text with no
@@ -201,7 +249,7 @@ export function findUnfencedBulbs(content: string): UnfencedBulb[] {
   let i = 0
   while (i < lines.length) {
     if (lines[i]?.trim() !== '---') { i++; continue }
-    const parsed = parseBulb(lines.slice(i).join('\n'))
+    const parsed = tryParseBulb(lines.slice(i).join('\n'))
     // Require at least one captured block: a lone `---…---` frontmatter region with no blocks isn't a
     // renderable bulb (and `bodyEndLine` would be the frontmatter end — an empty slice).
     if (parsed && parsed.files.size > 0) {

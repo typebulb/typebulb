@@ -5,6 +5,7 @@ import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
 import { canvasPngPath } from '../serve/paths.js'
 import { lastRunTimes } from '../serve/portBlocks.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
+import { readStdin, normalizeContent } from '../payload.js'
 
 /**
  * `typebulb send <file> [message]` — push a value from the terminal into a running bulb's page, where
@@ -64,6 +65,9 @@ const relAgo = (t: number) => {
 }
 
 export async function runSend(file: string, message: string | undefined, waitMs = 0): Promise<void> {
+  // `-` is the payload-from-stdin token `call --args -` and `put <kind>=-` already speak. Normalized
+  // like theirs, so a piped message and the same text passed positionally deliver the same value.
+  if (message === '-') message = normalizeContent(await readStdin())
   const reserved = message !== undefined && message.startsWith('tb:')
   if (reserved && waitMs <= 0) waitMs = DEFAULT_SEND_WAIT_MS
   // Actuation verbs are gestures: the server must refuse them before dispatch unless exactly one

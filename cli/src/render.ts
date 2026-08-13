@@ -8,7 +8,7 @@
  * bundles it (no bare imports) — that's also what makes it `--replace`-able.
  */
 
-import { parseBulb, toLocalBulb, splitIntoChunks, parseConfig } from './bulb/bulbParser.js'
+import { parseBulb, toLocalBulb, splitIntoChunks, parseConfig, type ParsedBulb } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
 import { lint } from 'typebulb/lint'
 import { summarizeLint } from './bulb/lintGate.js'
@@ -22,7 +22,7 @@ export { bulbName, slugifyBulbName, stripFrontmatter } from './bulb/source.js'
 // Structural validation (unterminated-fence detection), re-exported so a host can flag a malformed
 // inline bulb that still rendered — same reason: it shouldn't re-derive the block grammar. `parseBulb` rides
 // along so a host can structurally test whether an arbitrary fence body *is* a bulb (mislabel tolerance).
-export { validateBulbStructure, parseBulb, findUnfencedBulbs } from './bulb/bulbParser.js'
+export { validateBulbStructure, tryParseBulb, findUnfencedBulbs } from './bulb/bulbParser.js'
 
 export interface RenderBulbResult {
   /** Complete standalone HTML document, ready for an iframe srcdoc. */
@@ -66,8 +66,8 @@ const { packageService } = createResolver(memoryCache(), fetchHttpClient)
  * against the host page and flow through its caching CDN proxy.
  */
 export async function renderBulb(source: string, opts: { theme?: 'light' | 'dark' } = {}): Promise<RenderBulbResult> {
-  const parsed = parseBulb(source)
-  if (!parsed) return { error: 'Not a valid bulb (missing `---` frontmatter or a **code.tsx** block).' }
+  let parsed: ParsedBulb
+  try { parsed = parseBulb(source) } catch (e) { return { error: e instanceof Error ? e.message : String(e) } }
 
   const bulb = toLocalBulb(parsed)
   if (bulb.server.trim()) return { error: 'Nested bulbs are client-only; a **server.ts** block is not supported.' }

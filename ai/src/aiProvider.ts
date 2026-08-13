@@ -69,12 +69,12 @@ export abstract class AIProvider {
    * Parse a streaming chunk. Handles server errors (rate limit, etc.) before
    * delegating to provider-specific parsing.
    */
-  parseStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
+  parseStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined {
     this.checkAndThrowError(json)
     return this.parseProviderStreamChunk(json)
   }
 
-  protected abstract parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null
+  protected abstract parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined
 
   // ── Shared helpers ───────────────────────────────────────────────
 

@@ -9,7 +9,7 @@
 
 import { readdirSync, readFileSync, statSync, type Dirent } from 'fs'
 import { join, basename } from 'path'
-import { parseBulb } from 'typebulb/format'
+import { tryParseBulb } from 'typebulb/format'
 import { isServerOnly, toLocalBulb } from '../bulb/bulbParser.js'
 import { bulbName } from '../bulb/source.js'
 import { bulbDataDir } from '../pipeline.js'
@@ -74,7 +74,7 @@ function readInfo(path: string, mtime: number): { mtime: number; name: string; s
   try {
     const content = readFileSync(path, 'utf8')
     name = bulbName(content.slice(0, 1024))
-    const parsed = parseBulb(content)
+    const parsed = tryParseBulb(content)
     serverOnly = !!parsed && isServerOnly(toLocalBulb(parsed))
   } catch { /* unreadable ⇒ filename, and not treated as headless */ }
   return { mtime, name: name ?? basename(path).replace(/\.bulb\.md$/, ''), serverOnly }

@@ -77,11 +77,11 @@ export interface ServerOptions {
    *  `listenerCount('message')` is the count `/__send` reports back. Each event is an
    *  `{ id?, payload }` envelope; `id` is present only when the sender awaits replies. */
   messageEmitter?: EventEmitter
-  getServerExports?: () => Record<string, Function> | null
+  getServerExports?: () => Record<string, Function> | undefined
   /** The bulb's raw block sources for `tb.infer()` prompt building (TB-Inference.md): `code` is
    *  the TSX source, not transpiled output. A closure over the latest compile, like
    *  `getServerExports`, so hot reload stays fresh. */
-  getBulbBlocks?: () => { infer: string; insight: string; code: string; config: string; data: string } | null
+  getBulbBlocks?: () => { infer: string; insight: string; code: string; config: string; data: string } | undefined
   /** "Save to bulb" (TB-Inference.md): write a decoded inference run into the bulb file's
    *  data.txt/insight.json blocks. Owned by the web runner (it knows the file and the watcher). */
   saveInferenceResult?: (data: string[], insightJson: string) => Promise<void>
@@ -444,7 +444,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           yield { kind: 'delta', text: chunk.text }
         }
         const result = sanitizeJsonOutput(full)
-        if (result.parsed === null) {
+        if (result.parsed === undefined) {
           // Keep the evidence: without this, a parse failure is undiagnosable after the modal
           // closes (the streamed text is gone). Tail-truncated so a runaway output can't flood.
           console.warn('[tb.infer] output not valid JSON after sanitize; raw output (last 4000 chars):\n' + full.slice(-4000))
@@ -463,10 +463,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   })
 
   /** The `{hash}` body shared by /__infer-decode and /__infer-save: the page's `#tb=` fragment,
-   *  decoded or null. */
+   *  decoded or undefined. */
   const decodeHashBody = async (c: Context): Promise<ReturnType<typeof decodeFromHash>> => {
     const { hash } = await c.req.json<{ hash?: string }>().catch(() => ({}) as { hash?: string })
-    return typeof hash === 'string' ? decodeFromHash(hash) : null
+    return typeof hash === 'string' ? decodeFromHash(hash) : undefined
   }
 
   // "Save to bulb" — promote the current #tb= run to source (TB-Inference.md). The fragment is the

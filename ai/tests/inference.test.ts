@@ -192,19 +192,19 @@ Now I have all the context I need. Let me construct the JSON:
   })
 
   describe('unfixable content', () => {
-    it('returns null for completely invalid content', () => {
+    it('returns undefined for completely invalid content', () => {
       const r = sanitizeJsonOutput('this is not json at all')
-      expect(r.parsed).toBeNull()
+      expect(r.parsed).toBeUndefined()
     })
 
-    it('returns null for truncated JSON', () => {
+    it('returns undefined for truncated JSON', () => {
       const r = sanitizeJsonOutput('{"key": "val')
-      expect(r.parsed).toBeNull()
+      expect(r.parsed).toBeUndefined()
     })
 
-    it('returns null for empty input', () => {
+    it('returns undefined for empty input', () => {
       const r = sanitizeJsonOutput('')
-      expect(r.parsed).toBeNull()
+      expect(r.parsed).toBeUndefined()
     })
   })
 
@@ -239,9 +239,9 @@ Reconsidering...
       expect(r.fixesApplied).not.toContain('extracted last JSON value')
     })
 
-    it('still returns null if no JSON value is balanced', () => {
+    it('still returns undefined if no JSON value is balanced', () => {
       const r = sanitizeJsonOutput('thinking out loud {a: incomplete')
-      expect(r.parsed).toBeNull()
+      expect(r.parsed).toBeUndefined()
     })
   })
 
@@ -273,7 +273,7 @@ Reconsidering...
 }
 \`\`\``
       const r = sanitizeJsonOutput(content)
-      expect(r.parsed).not.toBeNull()
+      expect(r.parsed).not.toBeUndefined()
       const parsed = r.parsed as { equations: Array<{ range: [number, number] }> }
       expect(parsed.equations[0].range[1]).toBeCloseTo(4 * Math.PI)
       expect(r.fixesApplied).toEqual(['markdown fences', 'arithmetic constants'])
@@ -337,7 +337,7 @@ describe('encodeToHash / decodeFromHash', () => {
     const hash = encodeToHash(result)
     expect(hash.startsWith('#tb=1:')).toBe(true)
     const decoded = decodeFromHash(hash)
-    expect(decoded).not.toBeNull()
+    expect(decoded).not.toBeUndefined()
     expect(decoded!.insight).toEqual(result.insight)
     expect(decoded!.data).toEqual(result.data)
   })
@@ -353,11 +353,11 @@ describe('encodeToHash / decodeFromHash', () => {
 
   it('rejects a corrupted fragment', () => {
     const hash = encodeToHash({ insight: { a: 1 }, insightJson: '{"a":1}', data: [] })
-    expect(decodeFromHash(hash.slice(0, hash.length - 8))).toBeNull()
+    expect(decodeFromHash(hash.slice(0, hash.length - 8))).toBeUndefined()
   })
 
   it('rejects a non-tb fragment and an unknown version', () => {
-    expect(decodeFromHash('#section-2')).toBeNull()
-    expect(decodeFromHash('#tb=9:abc')).toBeNull()
+    expect(decodeFromHash('#section-2')).toBeUndefined()
+    expect(decodeFromHash('#tb=9:abc')).toBeUndefined()
   })
 })

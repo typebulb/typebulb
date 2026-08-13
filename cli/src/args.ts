@@ -14,7 +14,8 @@ export interface CliArgs {
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
   /** `send <file> [message]`: the value to push into the running bulb's page (tb.onMessage).
-   *  Optional — a bare `send <file>` delivers `undefined` (a pure trigger). */
+   *  Optional — a bare `send <file>` delivers `undefined` (a pure trigger); a lone `-` reads the
+   *  message from stdin, the same token `call --args -` and `put <kind>=-` speak. */
   sendMessage?: string
   /** `send --wait[=ms]`: bound the whole exchange — retry the push while no page is connected
    *  (e.g. mid hot-reload reconnect), then hold for the handlers' replies (TB-Interrogation.md).
@@ -374,7 +375,8 @@ Usage:
   typebulb send <file> [msg]     Push a message into a running bulb's page —
                                  its tb.onMessage(cb) handlers receive it. The
                                  client-side twin of 'call'; msg is JSON-or-
-                                 string, omit it for a bare trigger. No --trust.
+                                 string, omit it for a bare trigger, or pass '-'
+                                 to read it from stdin. No --trust.
                                  With --wait, a handler's non-undefined return
                                  prints on stdout (JSON; a bare string raw).
                                  msg 'tb:snapshot' instead prints the page's

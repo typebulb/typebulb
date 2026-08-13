@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  parseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
+  parseBulb, tryParseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
   validateBulbStructure, findUnfencedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
   forbiddenAssetExt, slugify, MODE, modeUnion,
@@ -190,20 +190,47 @@ The agent mirror is live at http://localhost:3000.`
 })
 
 describe('parse — strictness (settled behaviour, do not regress)', () => {
-  it('returns null without a leading ---', () => {
-    expect(parseBulb('name: x\n')).toBeNull()
+  it('returns undefined without a leading ---', () => {
+    expect(tryParseBulb('name: x\n')).toBeUndefined()
   })
-  it('returns null with an unterminated frontmatter', () => {
-    expect(parseBulb('---\nname: x\n')).toBeNull()
+  it('returns undefined with an unterminated frontmatter', () => {
+    expect(tryParseBulb('---\nname: x\n')).toBeUndefined()
   })
-  it('returns null when format does not start with "typebulb"', () => {
-    expect(parseBulb('---\nformat: other/v1\nname: x\n---\n')).toBeNull()
+  it('returns undefined when format does not start with "typebulb"', () => {
+    expect(tryParseBulb('---\nformat: other/v1\nname: x\n---\n')).toBeUndefined()
   })
-  it('returns null when name is missing', () => {
-    expect(parseBulb('---\nformat: typebulb/v1\n---\n')).toBeNull()
+  it('returns undefined when name is missing', () => {
+    expect(tryParseBulb('---\nformat: typebulb/v1\n---\n')).toBeUndefined()
   })
   it('accepts any format starting with "typebulb" (version-tolerant)', () => {
     expect(parseBulb('---\nformat: typebulb/v2\nname: x\n---\n')!.frontmatter.format).toBe('typebulb/v2')
+  })
+})
+
+// The throwing half of the same walk: every rejection above carries a reason, and they are the whole set.
+describe('parseBulb — the throw names what is wrong', () => {
+  const why = (src: string) => {
+    try { parseBulb(src); return undefined } catch (e) { return (e as Error).message }
+  }
+  it('names the missing opening ---', () => {
+    expect(why('name: x\n')).toContain("expected '---' on line 1")
+  })
+  it('points at a frontmatter pushed down the file (a patch applied at the wrong offset)', () => {
+    const src = 'const VOCAB = 50257\n\n---\nformat: typebulb/v1\nname: x\n---\n\n**code.tsx**\n\n```\nok\n```\n'
+    expect(why(src)).toContain('starts on line 3')
+  })
+  it('names an unterminated frontmatter', () => {
+    expect(why('---\nname: x\n')).toContain('never closed')
+  })
+  it('separates an unrecognized format from a missing one', () => {
+    expect(why('---\nformat: other/v1\nname: x\n---\n')).toContain('not a typebulb format')
+    expect(why('---\nname: x\n---\n')).toContain("no 'format:'")
+  })
+  it('names a missing name', () => {
+    expect(why('---\nformat: typebulb/v1\n---\n')).toContain("no 'name:'")
+  })
+  it('returns the bulb on success', () => {
+    expect(parseBulb('---\nformat: typebulb/v1\nname: x\n---\n').frontmatter.name).toBe('x')
   })
 })
 

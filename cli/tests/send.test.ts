@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { EventEmitter } from 'events'
+import { Readable } from 'stream'
 import * as net from 'net'
 import * as http from 'http'
 import * as path from 'path'
@@ -191,6 +192,28 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
       restore(); await unregisterServer(process.ppid)
     }
     expect(errs.join('\n')).toContain('No page connected after 0.3s')
+  })
+})
+
+describe('send <file> - — the message from stdin (TB-Get-Put.md Normalization)', () => {
+  const file = path.resolve('send-stdin.bulb.md')
+  const BOM = String.fromCharCode(0xfeff)
+
+  it("reads stdin and normalizes it like put's sources", async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const received: string[] = []
+    const listener = (env: { payload: string }) => received.push(env.payload)
+    emitter.on('message', listener)
+    const stdin = vi.spyOn(process, 'stdin', 'get')
+      .mockReturnValue(Readable.from([Buffer.from(BOM + 'hello there\r\n', 'utf-8')]) as unknown as NodeJS.ReadStream & { fd: 0 })
+    const { restore } = capture()
+    try {
+      await runSend(file, '-')
+    } finally {
+      restore(); stdin.mockRestore(); emitter.removeListener('message', listener); await unregisterServer(process.ppid)
+    }
+    // BOM stripped, CRLF folded, trailing newline trimmed: identical to `send <file> 'hello there'`.
+    expect(received).toEqual(['hello there'])
   })
 })
 

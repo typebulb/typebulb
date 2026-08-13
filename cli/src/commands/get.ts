@@ -12,11 +12,8 @@ import { parseBulb, blocks, type SubscriptKind } from 'typebulb/format'
  */
 export async function runGet(bulbPath: string, kind: SubscriptKind): Promise<void> {
   const content = await fs.readFile(bulbPath, 'utf-8')
+  // Throws with the reason; main()'s handler prints `Error: <message>` and exits 1.
   const parsed = parseBulb(content)
-  if (!parsed) {
-    console.error(`Not a valid bulb: ${bulbPath}`)
-    process.exit(1)
-  }
   const path = blocks[kind].path
   const body = parsed.files.get(path)
   if (!body) {

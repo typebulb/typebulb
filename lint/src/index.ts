@@ -70,8 +70,8 @@ const IMPORT_FROM: readonly RegExp[] = [
  * aren't config-declared dependencies, so they're not this rule's concern (URL imports
  * have their own rule; relative paths aren't packages).
  */
-function importRoot(spec: string): string | null {
-  if (/^[./]/.test(spec) || /^[a-z][a-z0-9+.-]*:/i.test(spec)) return null
+function importRoot(spec: string): string | undefined {
+  if (/^[./]/.test(spec) || /^[a-z][a-z0-9+.-]*:/i.test(spec)) return undefined
   const parts = spec.split('/')
   return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
 }

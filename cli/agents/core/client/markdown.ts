@@ -12,7 +12,7 @@ import hljsPlaintext from 'highlight.js/lib/languages/plaintext'
 import hljsPython from 'highlight.js/lib/languages/python'
 import hljsBash from 'highlight.js/lib/languages/bash'
 import hljsYaml from 'highlight.js/lib/languages/yaml'
-import { parseBulb, findUnfencedBulbs } from '../../../src/render.js'
+import { tryParseBulb, findUnfencedBulbs } from '../../../src/render.js'
 import type { Msg } from './types.js'
 
 // `html: true` lets the agent's natural semantic HTML through the parser — today only <details>/<summary>
@@ -569,7 +569,7 @@ export function splitBulbSegments(text: string): BulbSegment[] {
   for (const t of md.parse(text, {})) {
     if (t.type !== 'fence' || !t.map) continue
     const source = t.content.replace(STRAY_BULB_OPENER, '')
-    const isBulb = (t.info ?? '').trim().toLowerCase() === 'bulb' || parseBulb(source) != null
+    const isBulb = (t.info ?? '').trim().toLowerCase() === 'bulb' || tryParseBulb(source) !== undefined
     if (isBulb) spans.push({ start: t.map[0], end: t.map[1], source })
   }
   // (b) Naked bulbs, skipping any that sit inside a fenced span we already have.

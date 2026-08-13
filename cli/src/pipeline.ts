@@ -10,10 +10,10 @@ import { ensureBulbServerPackages, extractServerImports } from './serve/serverDe
 import { rewriteServerOverrideImports, type ResolvedLocalOverride } from './localOverride.js'
 import { installServerTb } from './serve/serverTb.js'
 
-export async function findBulbFile(dir: string): Promise<string | null> {
+export async function findBulbFile(dir: string): Promise<string | undefined> {
   const files = await fs.readdir(dir)
   const bulbFile = files.find(f => f.endsWith('.bulb.md'))
-  return bulbFile ? path.join(dir, bulbFile) : null
+  return bulbFile ? path.join(dir, bulbFile) : undefined
 }
 
 /** A bulb's folder — the sibling dir named for the filename stem, absolute (TB-FS.md).
@@ -56,7 +56,6 @@ export function conventionalIdentity(absPath: string): { userSlug: string; slug:
 export async function readBulb(bulbPath: string): Promise<{ bulb: LocalBulb; config: ReturnType<typeof parseConfig>; warnings: string[]; starts: Map<string, number> }> {
   const content = await fs.readFile(bulbPath, 'utf-8')
   const parsed = parseBulb(content)
-  if (!parsed) throw new Error('Invalid .bulb.md file format')
   const bulb = toLocalBulb(parsed)
   // `starts` carries each block's first line in the .bulb.md — what maps a tool's block coordinates
   // back to the file the user edits (TB-CLI.md, One coordinate space).
@@ -177,7 +176,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // /__api capability. An untrusted launch must not execute it, so skip the import
   // entirely (the trustGate 403s /__api regardless, but importing the module is itself
   // the privileged act — never run it without trust).
-  let serverExports: Record<string, Function> | null = null
+  let serverExports: Record<string, Function> | undefined = undefined
   if (bulb.server && trusted) {
     serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, batch)
   }

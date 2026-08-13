@@ -1,5 +1,5 @@
 import { readFile } from 'fs/promises'
-import { parseBulb, toLocalBulb } from '../bulb/bulbParser.js'
+import { tryParseBulb, toLocalBulb } from '../bulb/bulbParser.js'
 import { predictTrust } from '../bulb/predictTrust.js'
 
 /**
@@ -12,7 +12,7 @@ import { predictTrust } from '../bulb/predictTrust.js'
  */
 export async function predictBulbTrust(file: string): Promise<string | undefined> {
   try {
-    const parsed = parseBulb(await readFile(file, 'utf-8'))
+    const parsed = tryParseBulb(await readFile(file, 'utf-8'))
     if (!parsed) return undefined
     return predictTrust(toLocalBulb(parsed))
   } catch {

@@ -41,6 +41,7 @@ typebulb agent                 An agent's first command — auto-detects the har
 typebulb agent:{claude|codex|pi}  Open a named harness's mirror in the foreground — the explicit form, or to override auto-detect
 typebulb call <file> <fn> […]  Invoke one server.ts export headlessly: prints its return as JSON to stdout, logs/errors to stderr (needs --trust)
 typebulb send <file> [msg]     Push a message into a running bulb's page (its tb.onMessage handlers); the client-side twin of call, no --trust.
+                               A '-' message reads it from stdin (like call --args -)
                                With --wait, a handler's non-undefined return prints on stdout (JSON; a bare string raw)
 typebulb send <file> tb:snapshot  Print the live page's rendered outline (roles, names, visible text), headed by a viewport/content fit line
 typebulb send <file> tb:rect …    Print a named control's rect ('tb:rect button "Pass"' → {x,y,width,height} + viewport)
@@ -253,21 +254,22 @@ The agent mirror turns that block into a live, sandboxed app, with a *breakout �
 
 **The turn-based loop** (a game, an approval flow): a bulb whose `server.ts` does `console.log` on each user action is the event channel. Per turn — act via `typebulb call`, arm `wait <file> --match <tag>` in the background, end your turn; on wake, read state with `typebulb call <file> <getState>` (never parse it from the log line) and repeat. **`call` always boots a fresh `server.ts` instance** — it never attaches to the running bulb's server — so any state shared between the page and your calls must live on disk (load/save it in each export), not in `server.ts` module memory. A bulb's uncaught browser errors land in the same log as `[runtime error] …`, so the wake channel also catches your bulb breaking. For inline bulbs, the same subscription is `typebulb wait agent` on the mirror — see [Emitting an inline bulb](#emitting-an-inline-bulb).
 
-**Keep every loop command argument-stable.** A harness that permission-matches exact command strings prompts the user on *every* event if varying data (a move, a payload) rides the command line. Keep it off: write the args to a fixed file and pipe them — `cat <bulb-folder>/args.json | typebulb call <file> <fn> --args -` — so each of the loop's commands is one constant string, approved once. `wait` and a `getState` call are constant already.
+**Keep every loop command argument-stable.** A harness that permission-matches exact command strings prompts the user on *every* event if varying data (a move, a payload) rides the command line. Keep it off: write the args to a fixed file and pipe them — `cat <bulb-folder>/args.json | typebulb call <file> <fn> --args -` — so each of the loop's commands is one constant string, approved once. `send` takes its message the same way (`typebulb send <file> -`), which is also how a large or quote-heavy payload avoids the shell. `wait` and a `getState` call are constant already.
 
 ### Emitting a local bulb
 
-- **Launch once, and share the printed link.** `npx typebulb foo.bulb.md` starts the server (in VS Code's terminal and agent shells it prints the link to share rather than opening a tab). The link stays good — a bulb keeps its port across runs.
+- **Launch once, and share the printed link.** `npx typebulb foo.bulb.md` starts the server (in VS Code's terminal and agent shells it prints the link to share rather than opening a tab). The link stays good: a bulb keeps its port across runs, keyed to the filename, so re-share it after a rename.
+- **In an agent shell, background the launch** (Claude Code: `run_in_background`; pi: run it plainly). The server runs until stopped, so a foreground launch only holds your turn.
 
 ### Iterating on a local bulb
 
 That one launch *is* the loop: the server watches the file, so every save recompiles and reloads the page (`server.ts` included) — editing the file is the iteration.
 
-- **Don't relaunch, and don't wrap it in `timeout`.** A relaunch replaces the running server (one per bulb file), reclaiming the same port so the open tab reloads itself — it costs the page's in-memory state and nothing else. `timeout` kills it outright, and the racing relaunch is what spawns extra windows.
+- **Don't relaunch, and don't wrap it in the `timeout` command.** A relaunch replaces the running server (one per bulb file), reclaiming the same port so the open tab reloads itself — it costs the page's in-memory state and nothing else. The `timeout` command kills the server outright, and the racing relaunch is what spawns extra windows; your harness's own tool timeout does not kill it.
 - **What needs a restart:** a `.env` change (read once at boot) and in-memory `server.ts` state (reset on each reload).
 - **Each reload re-runs the bulb.** A save re-executes `code.tsx` from scratch, so work you start on mount repeats every edit — re-spending GPU/network, re-firing side effects, flooding the log. Put expensive or side-effecting work behind a trigger: `tb.onMessage(() => start())`, then `typebulb send <file>` when ready (also a general terminal→page channel — pass params, drive a loop).
 - **Reading the log:** it appends across every reload, so `typebulb logs --run latest <file>` shows just the current run (no need to clear).
-- **When done:** Ctrl-C, or `typebulb stop <file>` — closing the terminal leaves the server running detached.
+- **When done:** Ctrl-C, or `typebulb stop <file>` — a backgrounded launch has no Ctrl-C, so `stop` ends it.
 
 #### Interrogating the live page
 
@@ -488,7 +490,7 @@ One bulb per command, between typebulb.com and its conventional local file — t
 
 - **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place) — brings the bulb's `assets/` folder along. Unlisted and public bulbs need no login. A local file or asset with real changes is refused; `--force` overwrites it.
 - **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.
-- **Assets**: push and pull carry the bulb's `assets/` folder both ways — files upload to typebulb's asset host and the published bulb serves them with zero config (quotas apply; refusals say so). A local file shadows its hosted copy.
+- **Assets**: push and pull carry the bulb's `assets/` folder both ways — files upload to typebulb's asset host and the published bulb serves them with zero config. Caps are **2MB per file, 10MB per bulb**; anything larger stays yours, referenced by absolute URL (a push over a cap is refused and names the live figure). A local file shadows its hosted copy.
 - **In the agent mirror**, the launcher lists your typebulb.com bulbs (pull-on-play) and local `u/<user>/` rows carry pull/push icons — same rules, same `--force` confirm. Pasting any bulb URL into its filter offers a pull-on-play row.
 - `TYPEBULB_ORIGIN` in `.env` overrides the default `https://typebulb.com` host.
 

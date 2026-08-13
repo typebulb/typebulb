@@ -2,7 +2,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { createHash } from 'crypto'
 import { loadEnv } from '../env.js'
-import { parseBulb, orderedKinds, blocks } from 'typebulb/format'
+import { tryParseBulb, orderedKinds, blocks } from 'typebulb/format'
 import { bulbAssetsDir, conventionalIdentity } from '../pipeline.js'
 
 /**
@@ -122,10 +122,10 @@ export function parsePullTarget(arg: string, cwd: string, defaultOrigin: string)
 export type PullOutcome =
   | { kind: 'written'; dest: string; created: boolean; assets?: AssetPull }
   | { kind: 'up-to-date'; dest: string; assets?: AssetPull }
-  | { kind: 'conflict'; dest: string; localMtime: Date; remoteLastModified: string | null }
+  | { kind: 'conflict'; dest: string; localMtime: Date; remoteLastModified: string | undefined }
   | { kind: 'asset-conflict'; dest: string; paths: string[] }
   | { kind: 'http-error'; status: number }
-  | { kind: 'not-markdown'; contentType: string | null }
+  | { kind: 'not-markdown'; contentType: string | undefined }
 
 /** The assets leg's outcome, attached to written/up-to-date. Absent = the leg didn't run (the
  *  manifest was empty or unavailable — an older server, a dev host without the binding). */
@@ -192,7 +192,7 @@ export async function pullBulb(target: PullTarget, opts: PullOpts = {}): Promise
   if (!resp.ok) return { kind: 'http-error', status: resp.status }
   // Guard against an SPA-fallback 200 (HTML shell for an unhandled path): only markdown is a bulb.
   const contentType = resp.headers.get('content-type')
-  if (!contentType?.includes('text/markdown')) return { kind: 'not-markdown', contentType }
+  if (!contentType?.includes('text/markdown')) return { kind: 'not-markdown', contentType: contentType ?? undefined }
   const markdown = await resp.text()
 
   let existing: string | undefined
@@ -200,7 +200,7 @@ export async function pullBulb(target: PullTarget, opts: PullOpts = {}): Promise
   const upToDate = existing !== undefined && bulbEquivalent(existing, markdown)
   if (existing !== undefined && !upToDate && !opts.force) {
     const { mtime } = await fs.stat(target.dest)
-    return { kind: 'conflict', dest: target.dest, localMtime: mtime, remoteLastModified: resp.headers.get('last-modified') }
+    return { kind: 'conflict', dest: target.dest, localMtime: mtime, remoteLastModified: resp.headers.get('last-modified') ?? undefined }
   }
 
   // The assets leg, planned BEFORE the text write so an asset conflict refuses with nothing
@@ -228,7 +228,7 @@ export async function pullBulb(target: PullTarget, opts: PullOpts = {}): Promise
  * CRLF-insensitive; unparseable content falls back to a byte compare. */
 function bulbEquivalent(a: string, b: string): boolean {
   const norm = (s: string) => s.replace(/\r\n/g, '\n')
-  const pa = parseBulb(norm(a)), pb = parseBulb(norm(b))
+  const pa = tryParseBulb(norm(a)), pb = tryParseBulb(norm(b))
   if (!pa || !pb) return norm(a) === norm(b)
   return pa.frontmatter.name === pb.frontmatter.name &&
     orderedKinds.every(k => (pa.files.get(blocks[k].path) || '') === (pb.files.get(blocks[k].path) || ''))

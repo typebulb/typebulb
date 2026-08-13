@@ -167,7 +167,7 @@ export class GeminiProvider extends AIProvider {
       // (intended); `includeThoughts` streams thought summaries as `thought` parts (parser maps
       // them to reasoning), and at effort 0 there is nothing to stream, so it's dropped.
       const version = this.geminiVersion(model)
-      const dial: GeminiThinkingConfig = version !== null && version >= 3
+      const dial: GeminiThinkingConfig = version !== undefined && version >= 3
         ? { thinkingLevel: this.thinkingLevelFor(version, effort) }
         : { thinkingBudget: this.budgetMap[effort] }
       payload.generationConfig = {
@@ -239,17 +239,17 @@ export class GeminiProvider extends AIProvider {
     return { text, status, usage: this.mapUsage(json.usageMetadata) }
   }
 
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
+  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined {
     this.checkGeminiError(json)
 
-    if (!this.isGeminiResponse(json)) return null
+    if (!this.isGeminiResponse(json)) return undefined
 
     const piece = this.extractParts(json)
     // Counts are cumulative per chunk, so passing every sighting through is safe — the stream
     // adapter's later-wins merge lands on the final (complete) one.
     const usage = this.mapUsage(json.usageMetadata)
     if (usage) piece.usage = usage
-    return (piece.text || piece.reasoning || piece.usage) ? piece : null
+    return (piece.text || piece.reasoning || piece.usage) ? piece : undefined
   }
 
   // ── Private helpers ──────────────────────────────────────────────
@@ -268,9 +268,9 @@ export class GeminiProvider extends AIProvider {
   }
 
   /** Major.minor from a versioned model name (`gemini-3.5-flash` → 3.5); null for aliases. */
-  private geminiVersion(model: string): number | null {
+  private geminiVersion(model: string): number | undefined {
     const m = model.match(/^gemini-(\d+(?:\.\d+)?)/)
-    return m ? Number(m[1]) : null
+    return m ? Number(m[1]) : undefined
   }
 
   /** Dial → level, clamped to the family's supported enum: `minimal` is 3.5+; earlier 3.x floors at

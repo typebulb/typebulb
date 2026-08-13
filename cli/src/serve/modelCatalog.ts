@@ -29,14 +29,14 @@ const CATALOG_URL = 'https://api.typebulb.com/api/models'
 const CATALOG_TTL = 24 * 60 * 60 * 1000 // 24 hours
 const CATALOG_TIMEOUT = 5000 // bound a single fetch so a hung upstream can't stall the menu
 const OLLAMA_TTL = 60 * 1000 // local models change rarely; cache so repeated menu opens don't re-probe
-let catalogCache: { models: TbModelDto[]; fetchedAt: number } | null = null
-let ollamaCache: { models: TbModelDto[]; fetchedAt: number } | null = null
+let catalogCache: { models: TbModelDto[]; fetchedAt: number } | undefined
+let ollamaCache: { models: TbModelDto[]; fetchedAt: number } | undefined
 // The last catalog-fetch failure, or null after any success — lets a caller tell an empty list from
 // a failed fetch (both otherwise yield no models).
-let lastCatalogError: string | null = null
+let lastCatalogError: string | undefined
 
 /** The most recent catalog-fetch failure message, or null if the last fetch succeeded. */
-export function catalogFetchError(): string | null { return lastCatalogError }
+export function catalogFetchError(): string | undefined { return lastCatalogError }
 
 /** The key-filtered cloud catalog plus locally-discovered Ollama models. The two are independent
  *  I/O (remote catalog vs local probe), so they run concurrently. Degrades gracefully: a stale
@@ -56,14 +56,14 @@ export function markDefault(models: TbModelDto[], defaultProvider?: string, defa
 /** One bounded catalog fetch. Returns the parsed models, or null on any failure — network, non-2xx,
  *  or a 200 whose body isn't valid JSON (a redeploy can serve an HTML error page, so guard the
  *  parse). Records the reason in `lastCatalogError`. */
-async function fetchCatalogOnce(): Promise<TbModelDto[] | null> {
+async function fetchCatalogOnce(): Promise<TbModelDto[] | undefined> {
   let resp: Response
   try {
     resp = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(CATALOG_TIMEOUT) })
-  } catch (e) { lastCatalogError = `catalog fetch failed: ${(e as Error)?.message ?? e}`; return null }
-  if (!resp.ok) { lastCatalogError = `catalog fetch failed: HTTP ${resp.status}`; return null }
+  } catch (e) { lastCatalogError = `catalog fetch failed: ${(e as Error)?.message ?? e}`; return undefined }
+  if (!resp.ok) { lastCatalogError = `catalog fetch failed: HTTP ${resp.status}`; return undefined }
   try { return await resp.json() as TbModelDto[] }
-  catch (e) { lastCatalogError = `catalog returned an unreadable body: ${(e as Error)?.message ?? e}`; return null }
+  catch (e) { lastCatalogError = `catalog returned an unreadable body: ${(e as Error)?.message ?? e}`; return undefined }
 }
 
 /** The admin catalog, in-memory cached with a TTL. Bounded fetch + one quick retry rides out a
@@ -72,7 +72,7 @@ async function fetchCatalogOnce(): Promise<TbModelDto[] | null> {
 async function getCatalogModels(): Promise<TbModelDto[]> {
   if (catalogCache && Date.now() - catalogCache.fetchedAt <= CATALOG_TTL) return catalogCache.models
   const models = (await fetchCatalogOnce()) ?? (await fetchCatalogOnce())
-  if (models) { catalogCache = { models, fetchedAt: Date.now() }; lastCatalogError = null; return models }
+  if (models) { catalogCache = { models, fetchedAt: Date.now() }; lastCatalogError = undefined; return models }
   return catalogCache?.models ?? []
 }
 

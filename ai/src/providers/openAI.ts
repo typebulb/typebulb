@@ -228,8 +228,8 @@ export class OpenAIProvider extends AIProvider {
     return { text, reasoning, usage: this.mapUsage(json.usage) }
   }
 
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
-    if (!this.isResponsesApiEvent(json)) return null
+  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined {
+    if (!this.isResponsesApiEvent(json)) return undefined
 
     switch (json.type) {
       case 'response.failed': {
@@ -250,11 +250,11 @@ export class OpenAIProvider extends AIProvider {
       // Responses API reports token counts on a stream.
       case 'response.completed': {
         const usage = this.mapUsage((json as OpenAIResponseCompletedEvent).response?.usage)
-        return usage ? { usage } : null
+        return usage ? { usage } : undefined
       }
 
       default:
-        return null
+        return undefined
     }
   }
 

@@ -1,4 +1,4 @@
-import { parseBulb, serializeBulb, kindFromPath, type BulbSource } from 'typebulb/format'
+import { tryParseBulb, serializeBulb, kindFromPath, type BulbSource } from 'typebulb/format'
 import { bareImportRoots } from 'typebulb/lint'
 
 /**
@@ -17,7 +17,7 @@ import { bareImportRoots } from 'typebulb/lint'
  * byte-for-byte unchanged (only an actual injection re-serializes).
  */
 export function ensureDeclaredDependencies(source: string): string {
-  const parsed = parseBulb(source)
+  const parsed = tryParseBulb(source)
   if (!parsed) return source
   const code = parsed.files.get('code.tsx')
   if (!code) return source

@@ -20,24 +20,24 @@ function findSeparator(buffer: string): { pos: number; len: number } {
  * Parses an SSE block (text between \n\n delimiters) into a data payload.
  * Handles multiple data: lines and the [DONE] sentinel.
  */
-export function parseSseBlock<T = any>(block: string): T | 'done' | null {
+export function parseSseBlock<T = any>(block: string): T | 'done' | undefined {
   const lines = block.split(/\r?\n/)
   const dataLines = lines.filter(l => l.startsWith('data:'))
 
-  if (!dataLines.length) return null
+  if (!dataLines.length) return undefined
 
   const payloadStr = dataLines
     .map(l => l.replace(/^data:\s?/, ''))
     .join('\n')
     .trim()
 
-  if (!payloadStr) return null
+  if (!payloadStr) return undefined
   if (payloadStr === '[DONE]') return 'done'
 
   try {
     return JSON.parse(payloadStr) as T
   } catch {
-    return null
+    return undefined
   }
 }
 
@@ -80,13 +80,13 @@ export async function* consumeSseStreamGen<T = any>(
 
   // reader.read() can block for seconds after cancel; race against abort for immediate exit
   let onAbort: (() => void) | undefined
-  const abortPromise: Promise<never> | null = signal
+  const abortPromise: Promise<never> | undefined = signal
     ? new Promise<never>((_, reject) => {
         if (signal.aborted) reject(new Error('Aborted'))
         onAbort = () => reject(new Error('Aborted'))
         signal.addEventListener('abort', onAbort, { once: true })
       })
-    : null
+    : undefined
   // The race can finish (stream done) with this promise still pending; a later abort of the
   // same controller would then reject it with no handler — an unhandledrejection (and the
   // family of the tb.ai() abort leak fixed in 392f4bb3). Pre-attach a no-op handler so the
@@ -102,7 +102,7 @@ export async function* consumeSseStreamGen<T = any>(
         // Process any remaining buffer content
         if (buffer.trim()) {
           const parsed = parseSseBlock<T>(buffer)
-          if (parsed !== null && parsed !== 'done') yield parsed
+          if (parsed !== undefined && parsed !== 'done') yield parsed
         }
         return
       }
@@ -114,7 +114,7 @@ export async function* consumeSseStreamGen<T = any>(
         buffer = buffer.slice(sep + sepLen)
         const parsed = parseSseBlock<T>(block)
         if (parsed === 'done') return
-        if (parsed !== null) yield parsed
+        if (parsed !== undefined) yield parsed
         ;({ pos: sep, len: sepLen } = findSeparator(buffer))
       }
     }
@@ -185,7 +185,7 @@ export async function* streamAiChunks(
   const reader = response.body.getReader()
   let usage: Partial<AiUsage> | undefined
   for await (const json of consumeSseStreamGen(reader)) {
-    const piece = spec.parseStreamChunk(json) as ChatStreamPieceDto | null
+    const piece = spec.parseStreamChunk(json) as ChatStreamPieceDto | undefined
     if (piece?.reasoning) yield { kind: 'reasoning', text: piece.reasoning }
     if (piece?.text) yield { kind: 'text', text: piece.text }
     if (piece?.usage) usage = mergeUsage(usage, piece.usage)

@@ -71,7 +71,7 @@ The `html` block may be either an HTML fragment or a full HTML page. The former 
 ## API
 
 - **Registry** — `blocks`, `orderedKinds`, `kindFromPath`, types `SubscriptKind` / `SubscriptPath` / `BlockSpec`.
-- **Parse** — `parseBulb(text) → ParsedBulb | null`, `toBulbData(parsed) → BulbData`.
+- **Parse** — `parseBulb(text) → ParsedBulb` (throws, naming what is wrong), `tryParseBulb(text) → ParsedBulb | undefined` for scanners and predicates, `toBulbData(parsed) → BulbData`.
 - **Serialize** — `serializeBulb(source) → string`.
 - **Config** — `parseConfig(json) → BulbConfig`, types `BulbConfig` / `InferenceConfig`.
 - **Data chunks** — `splitIntoChunks` / `splitIntoChunksWithBoundaries`, `isStructuralData` (JSON/XML/YAML).

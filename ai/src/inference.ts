@@ -64,27 +64,29 @@ Output only valid JSON. No explanation, no markdown fences, just the JSON object
 // version produces valid JSON.
 
 export interface SanitizeResult {
-  parsed: unknown | null
+  /** The parsed value, or `undefined` when nothing parsed — `unknown` cannot express the difference. */
+  parsed: unknown
   json: string
   fixesApplied: string[]
 }
 
-/** Try to parse, return result or null */
-function tryParse(json: string): unknown | null {
+/** Parse, or `undefined` on failure. Not `null`: `JSON.parse('null')` is a *successful* parse, so a
+ *  null return would make a bare-null payload indistinguishable from a syntax error. */
+function tryParse(json: string): unknown {
   try {
     return JSON.parse(json)
   } catch {
-    return null
+    return undefined
   }
 }
 
 /** Sanitization strategies: [name, fix function] */
-const strategies: Array<[string, (s: string) => string | null]> = [
-  ['orphan quote', (s) => { const f = s.replace(/^[ \t]*"[ \t]*\r?\n/gm, ''); return f !== s ? f : null }],
-  ['trailing }', (s) => s.endsWith('}}') ? s.slice(0, -1) : null],
-  ['trailing ]', (s) => s.endsWith(']]') ? s.slice(0, -1) : null],
-  ['trailing },', (s) => s.endsWith('},') ? s.slice(0, -1) : null],
-  ['trailing ],', (s) => s.endsWith('],') ? s.slice(0, -1) : null],
+const strategies: Array<[string, (s: string) => string | undefined]> = [
+  ['orphan quote', (s) => { const f = s.replace(/^[ \t]*"[ \t]*\r?\n/gm, ''); return f !== s ? f : undefined }],
+  ['trailing }', (s) => s.endsWith('}}') ? s.slice(0, -1) : undefined],
+  ['trailing ]', (s) => s.endsWith(']]') ? s.slice(0, -1) : undefined],
+  ['trailing },', (s) => s.endsWith('},') ? s.slice(0, -1) : undefined],
+  ['trailing ],', (s) => s.endsWith('],') ? s.slice(0, -1) : undefined],
   ['trailing commas', stripTrailingCommas],
   ['arithmetic constants', foldArithmeticConstants],
 ]
@@ -113,16 +115,16 @@ function mapOutsideStrings(text: string, fn: (seg: string) => string): string {
  *  GPT-5.6 emits JSON5-style trailing commas inside nested objects, so deeply structured insights
  *  (one comma per closing) fail far more often than flat ones. String contents are never touched:
  *  a quoted snippet ending ",\n}" stays verbatim. */
-function stripTrailingCommas(s: string): string | null {
+function stripTrailingCommas(s: string): string | undefined {
   const fixed = mapOutsideStrings(s, (seg) => seg.replace(/,(\s*[}\]])/g, '$1'))
-  return fixed !== s ? fixed : null
+  return fixed !== s ? fixed : undefined
 }
 
 /** Fold constant arithmetic in value position — "range": [0, 4 * pi] — into JSON number literals.
  *  Cheap models routinely emit these, and the free tier runs on cheap models, so absorbing the
  *  artifact is load-bearing. Conservative like every strategy: only wins if the result parses, and
  *  string contents are never touched (a "period of 2*pi radians" explanation stays verbatim). */
-function foldArithmeticConstants(s: string): string | null {
+function foldArithmeticConstants(s: string): string | undefined {
   const folded = mapOutsideStrings(s, (seg) => seg
     // Standalone constants first ("1e3" has no word boundary before its e, so exponents survive).
     .replace(/\bpi\b/g, '3.141592653589793')
@@ -136,7 +138,7 @@ function foldArithmeticConstants(s: string): string | null {
         return typeof v === 'number' && Number.isFinite(v) ? String(v) : run
       } catch { return run }
     }))
-  return folded !== s ? folded : null
+  return folded !== s ? folded : undefined
 }
 
 /** Find the end index of a balanced {...} or [...] starting at `start`.
@@ -165,8 +167,8 @@ function findBalancedEnd(text: string, start: number): number {
  *  Handles the case where a strong model with no thinking budget emits visible
  *  self-correction in the text channel — e.g. draft → "wait, reconsider" →
  *  revised JSON. The final value is essentially always the intended answer. */
-function findLastValidJson(text: string): { parsed: unknown; json: string } | null {
-  let last: { parsed: unknown; json: string } | null = null
+function findLastValidJson(text: string): { parsed: unknown; json: string } | undefined {
+  let last: { parsed: unknown; json: string } | undefined
   let i = 0
   while (i < text.length) {
     const c = text[i]!
@@ -175,7 +177,7 @@ function findLastValidJson(text: string): { parsed: unknown; json: string } | nu
       if (end !== -1) {
         const candidate = text.slice(i, end + 1)
         const parsed = tryParse(candidate)
-        if (parsed !== null) last = { parsed, json: candidate }
+        if (parsed !== undefined) last = { parsed, json: candidate }
         i = end + 1
         continue
       }
@@ -200,7 +202,7 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
 
   // Try parsing as-is
   let parsed = tryParse(json)
-  if (parsed !== null) {
+  if (parsed !== undefined) {
     return { parsed, json, fixesApplied }
   }
 
@@ -210,7 +212,7 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
     json = fenceMatch[1].trim()
     fixesApplied.push('preamble before fenced JSON')
     parsed = tryParse(json)
-    if (parsed !== null) {
+    if (parsed !== undefined) {
       return { parsed, json, fixesApplied }
     }
   }
@@ -225,7 +227,7 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
       json = json.slice(idx)
       fixesApplied.push('preamble text')
       parsed = tryParse(json)
-      if (parsed !== null) {
+      if (parsed !== undefined) {
         return { parsed, json, fixesApplied }
       }
     }
@@ -234,9 +236,9 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
   // Try each sanitization strategy (operates on cleaned json from above)
   for (const [name, fix] of strategies) {
     const fixed = fix(json)
-    if (fixed !== null) {
+    if (fixed !== undefined) {
       const parsed = tryParse(fixed)
-      if (parsed !== null) {
+      if (parsed !== undefined) {
         return { parsed, json: fixed, fixesApplied: [...fixesApplied, name] }
       }
     }
@@ -246,11 +248,11 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
   // complete JSON value. Catches the "model emitted draft + revision in text"
   // pattern that the linear strategies above can't handle.
   const found = findLastValidJson(content)
-  if (found !== null) {
+  if (found !== undefined) {
     return { ...found, fixesApplied: [...fixesApplied, 'extracted last JSON value'] }
   }
 
-  return { parsed: null, json, fixesApplied }
+  return { parsed: undefined, json, fixesApplied }
 }
 
 // ─── Result encoding (#tb=1:<deflate+base64url>) ─────────────────────────────
@@ -287,21 +289,21 @@ export function encodeToHash(result: InferenceResult): string {
   }
 }
 
-/** Decode result from URL hash. Returns null if no result or decode fails. */
-export function decodeFromHash(hash: string): InferenceResult | null {
+/** Decode result from URL hash. Returns undefined if no result or decode fails. */
+export function decodeFromHash(hash: string): InferenceResult | undefined {
   try {
     const fragment = hash.startsWith('#') ? hash.slice(1) : hash
-    if (!fragment.startsWith(TB_PREFIX)) return null
+    if (!fragment.startsWith(TB_PREFIX)) return undefined
 
     const encoded = fragment.slice(TB_PREFIX.length)
     const colonIndex = encoded.indexOf(':')
-    if (colonIndex === -1 || encoded.slice(0, colonIndex) !== TB_VERSION) return null
+    if (colonIndex === -1 || encoded.slice(0, colonIndex) !== TB_VERSION) return undefined
 
     const compressed = base64UrlDecode(encoded.slice(colonIndex + 1))
     const payload = JSON.parse(strFromU8(inflateSync(compressed))) as EncodedPayload
 
     if (!payload || typeof payload.i === 'undefined' || !Array.isArray(payload.d)) {
-      return null
+      return undefined
     }
 
     return {
@@ -310,7 +312,7 @@ export function decodeFromHash(hash: string): InferenceResult | null {
       data: payload.d
     }
   } catch {
-    return null
+    return undefined
   }
 }
 

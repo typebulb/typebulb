@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises'
 import { parseBulb, replaceBulbBlock, removeBulbBlock, blocks, type SubscriptKind } from 'typebulb/format'
 import type { BlockPair } from '../blockPairs.js'
+import { readStdin, normalizeContent } from '../payload.js'
 
 /**
  * `typebulb put <file> <kind>=<source>…` — write file (or stdin) content into a bulb's blocks,
@@ -63,7 +64,6 @@ export interface PutOutcome {
  */
 export function applyPuts(original: string, puts: ResolvedPut[]): PutOutcome {
   const parsed = parseBulb(original)
-  if (!parsed) throw new Error('not a valid bulb')
   let text = original
   const written: PutOutcome['written'] = []
   const upToDate: SubscriptKind[] = []
@@ -89,15 +89,6 @@ export function applyPuts(original: string, puts: ResolvedPut[]): PutOutcome {
   return { text, written, upToDate }
 }
 
-/** Leading BOM stripped + CRLF→LF + trailing trim (TB-Get-Put.md Normalization): transport
- *  artifacts of Windows tooling, never intended content — PowerShell 5.1's default UTF-8 writes a
- *  BOM, and one baked into a block breaks `JSON.parse` (so `tb.json(0)`) on the very results files
- *  `put` exists to promote. Block bodies are stored LF; the fence framing supplies the final newline. */
-export function normalizeContent(raw: string): string {
-  const noBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
-  return noBom.replace(/\r\n/g, '\n').trimEnd()
-}
-
 /** A primitive that returns its input has hit the one defect it refuses to guess at. */
 function refuseIfUnchanged(next: string, previous: string, path: string): string {
   if (next === previous) throw new Error(`the **${path}** block's fence is unterminated; refusing to rewrite inside it`)
@@ -107,11 +98,4 @@ function refuseIfUnchanged(next: string, previous: string, path: string): string
 function fail(message: string): never {
   console.error(message)
   process.exit(1)
-}
-
-/** Read all of stdin as UTF-8 — backs `<kind>=-` (the `call --args -` precedent). */
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf-8')
 }

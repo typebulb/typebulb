@@ -228,8 +228,8 @@ export class AnthropicProvider extends AIProvider {
     return { text, reasoning: reasoning || undefined, usage: finalizeUsage(this.mapUsage(json.usage)) }
   }
 
-  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | null {
-    if (!this.isAnthropicEvent(json)) return null
+  protected parseProviderStreamChunk(json: ProviderStreamEventDto): ChatStreamPieceDto | undefined {
+    if (!this.isAnthropicEvent(json)) return undefined
 
     switch (json.type) {
       case 'content_block_delta':
@@ -239,22 +239,22 @@ export class AnthropicProvider extends AIProvider {
         if (json.delta.type === 'thinking_delta') {
           return { reasoning: json.delta.thinking || '' }
         }
-        return null
+        return undefined
 
       // Usage is split across the stream: message_start carries the input-side counts, each
       // message_delta the cumulative output count. Emitted as partial pieces; the stream adapter
       // merges them (later wins) into one final usage chunk.
       case 'message_start': {
         const usage = this.mapUsage(json.message?.usage)
-        return usage ? { usage } : null
+        return usage ? { usage } : undefined
       }
       case 'message_delta': {
         const usage = this.mapUsage(json.usage)
-        return usage ? { usage } : null
+        return usage ? { usage } : undefined
       }
 
       default:
-        return null
+        return undefined
     }
   }
 

@@ -4,6 +4,7 @@ import { readBulb, importServerModule, materializeBatchDir } from '../pipeline.j
 import { BUILTINS, resolveServerFn, isAsyncGenerator } from '../serve/builtins.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 import { listBulbServers, serversForBulb, readServerLog, writeWaitCursor } from '../serve/serverRegistry.js'
+import { readStdin } from '../payload.js'
 
 /**
  * `typebulb call <file> <fn> [arg…]` — boot a bulb's **server.ts**, invoke one exported function by
@@ -195,11 +196,4 @@ function writeStdout(text: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     process.stdout.write(text, (e) => (e ? reject(e) : resolve()))
   })
-}
-
-/** Read all of stdin as UTF-8 — backs `--args -`, which sidesteps shell quoting (PowerShell). */
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf-8')
 }

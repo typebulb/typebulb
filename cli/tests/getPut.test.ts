@@ -4,7 +4,8 @@ import * as os from 'os'
 import * as path from 'path'
 import { parseArgs } from '../src/args.js'
 import { parseBlockKind, parseBlockPairs } from '../src/blockPairs.js'
-import { applyPuts, normalizeContent } from '../src/commands/put.js'
+import { applyPuts } from '../src/commands/put.js'
+import { normalizeContent } from '../src/payload.js'
 import { runGet } from '../src/commands/get.js'
 import { parseBulb } from 'typebulb/format'
 
@@ -114,8 +115,8 @@ describe('applyPuts', () => {
     ).toThrow(/unterminated/)
   })
 
-  it('a non-bulb throws', () => {
-    expect(() => applyPuts('just some text', [{ kind: 'data', content: 'x' }])).toThrow(/not a valid bulb/)
+  it('a non-bulb throws, naming what is wrong with it', () => {
+    expect(() => applyPuts('just some text', [{ kind: 'data', content: 'x' }])).toThrow(/Invalid \.bulb\.md file format/)
   })
 
   it('empty content removes the block — empty === absent, so removal is its canonical spelling', () => {
@@ -176,11 +177,12 @@ describe('runGet exit codes — the probe answer (2) is distinguishable from rea
     await expect(runGet(file, 'data')).rejects.toThrow('exit 2')
   })
 
-  it('a non-bulb exits 1', async () => {
+  // The 2-vs-1 distinction is intact: `get` owns exit 2, and every throw reaches main()'s handler,
+  // which prints `Error: <message>` and exits 1.
+  it('a non-bulb throws (main() reports it as exit 1)', async () => {
     const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'getput-')), 'x.bulb.md')
     await fs.writeFile(file, 'just some text')
-    trapExit()
-    await expect(runGet(file, 'data')).rejects.toThrow('exit 1')
+    await expect(runGet(file, 'data')).rejects.toThrow(/Invalid \.bulb\.md file format/)
   })
 })
 

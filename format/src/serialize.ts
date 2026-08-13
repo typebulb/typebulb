@@ -11,7 +11,7 @@ function getFence(content: string): string {
   return '`'.repeat(Math.max(3, maxLen + 1))
 }
 
-export type BulbSource = { name: string } & Partial<Record<SubscriptKind, string | null>>
+export type BulbSource = { name: string } & Partial<Record<SubscriptKind, string>>
 
 /** One `**path**` block section: header + fenced content, fence sized to the content. */
 function blockSection(kind: SubscriptKind, content: string): string {
@@ -46,7 +46,7 @@ type BlockSpan = { header: number; open: number; close: number; fence: string; l
  * extent, and appending past it would plant a block inside the open fence) — and `null` when the
  * block is simply absent, which each writer answers its own way.
  */
-function locateBlock(lines: string[], path: string): BlockSpan | 'unterminated' | null {
+function locateBlock(lines: string[], path: string): BlockSpan | 'unterminated' | undefined {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i]?.trim() !== `**${path}**`) continue
     let open = i + 1
@@ -59,7 +59,7 @@ function locateBlock(lines: string[], path: string): BlockSpan | 'unterminated' 
     if (close >= lines.length) return 'unterminated'
     return { header: i, open, close, fence: m[1], lang: m[2] }
   }
-  return null
+  return undefined
 }
 
 /**
