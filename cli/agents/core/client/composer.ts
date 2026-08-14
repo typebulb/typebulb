@@ -585,18 +585,18 @@ export class Composer extends Component {
         // then send/stop as the primary CTA. Below the text (not overlaid) so the textarea keeps the
         // full prose column.
         div({ class: 'composer-actions' },
-          button({ class: 'composer-clip', type: 'button', title: 'Capture clipboard to a file (Ctrl+;)', ariaLabel: 'Capture clipboard',
+          button({ class: 'composer-clip', type: 'button', 'data-tip': 'Capture clipboard to a file (Ctrl+;)', ariaLabel: 'Capture clipboard',
             ...disabled,
             onClick: () => void this.captureClipboard() }, icon('attach')),
           // Always live, mid-turn included (C6): + detaches to a fresh conversation while the
           // running turn continues in the background — it never aborts anything.
-          button({ class: 'composer-new', type: 'button', title: 'New conversation', ariaLabel: 'New conversation',
+          button({ class: 'composer-new', type: 'button', 'data-tip': 'New conversation', ariaLabel: 'New conversation',
             ...(this.#sending ? { disabled: true } : {}),
             onClick: () => void this.newConversation() }, icon('addCircle')),
           this.streaming
-            ? button({ class: 'composer-act stop', type: 'button', title: 'Stop the current turn', ariaLabel: 'Stop',
+            ? button({ class: 'composer-act stop', type: 'button', 'data-tip': 'Stop the current turn', ariaLabel: 'Stop',
                 onClick: () => void this.stopTurn() }, icon('stopCircle'))
-            : button({ class: 'composer-act send', type: 'button', title: 'Send (Enter)', ariaLabel: 'Send',
+            : button({ class: 'composer-act send', type: 'button', 'data-tip': 'Send (Enter)', ariaLabel: 'Send',
                 ...disabled,
                 onClick: () => void this.send() }, icon('playCircle')),
         ),

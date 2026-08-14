@@ -19,16 +19,27 @@ export class TokenPill extends Component {
     const total = s ? s.contextTokens ?? 0 : t.in + t.out + t.cached + t.cacheCreate
     const cost = s?.cost ?? this.parent.cost
     const busy = this.parent.working
+    const money = cost > 0 ? `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(3)}` : ''
     const parts: string[] = []
     if (total > 0) parts.push(formatTokens(total))
     if (s && s.contextPercent != null) parts.push(`${Math.round(s.contextPercent)}%`)
-    if (cost > 0) parts.push(`$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(3)}`)
+    if (money) parts.push(money)
     if (!parts.length && !busy) return span({ class: 'token-wrap' })
     const label = !parts.length ? 'working…' : parts.length === 1 && total > 0 ? `${parts[0]} tokens` : parts.join(' · ')
+    // The pill's segments are bare numbers once there is more than one, so the tip names each. The
+    // count is the last response's WHOLE window (cached + new input + output), never an output-only
+    // or session-summed figure — the tip has to say which, since the pill's bare `62k` cannot.
+    const tip = parts.length
+      ? [
+          total > 0 ? `${formatTokens(total)} tokens in the context window` : '',
+          s && s.contextPercent != null ? `${Math.round(s.contextPercent)}% of the model’s window` : '',
+          money ? `${money} spent this session` : '',
+        ].filter(Boolean).join('\n')
+      : 'Waiting for the harness to flush this turn'
     // Passive indicator, not a button — nothing to click. Doubles as the working indicator
     // (no separate statusbar element): the chip shimmers while CC is mid-turn, the count
     // frozen until the flush; a fresh session has no count yet, so the word stands in.
     return span({ class: 'token-wrap' },
-      span({ class: ['token', busyPill(busy)] }, label))
+      span({ class: ['token', busyPill(busy)], 'data-tip': tip }, label))
   }
 }

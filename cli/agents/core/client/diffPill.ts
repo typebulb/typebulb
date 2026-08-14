@@ -183,7 +183,8 @@ export class DiffPill extends ComboboxPill<never> {
     return div({ class: 'gitdiff-wrap pop-center' },
       this.viewing ? this.viewingPill() : button({
         class: ['pill', 'glyph', 'gitdiff-pill', this.open ? 'on' : ''],
-        title: `${n} changed file${n === 1 ? '' : 's'} — view a diff`,
+        'data-tip': `${n} changed file${n === 1 ? '' : 's'} — view a diff`,
+        ariaLabel: `${n} changed file${n === 1 ? '' : 's'}`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       }, icon('diff'), span({ class: 'gitdiff-count' }, String(n))),
       this.open ? this.popup() : null,
@@ -200,14 +201,16 @@ export class DiffPill extends ComboboxPill<never> {
     const del = v.kinds.filter(k => k === 'del').length
     return button({
         class: ['pill', 'glyph', 'gitdiff-pill', 'viewing', 'on'],
-        title: `${this.files.length} changed file${this.files.length === 1 ? '' : 's'} — switch file`,
+        'data-tip': `${this.files.length} changed file${this.files.length === 1 ? '' : 's'} — switch file`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       },
       span({ class: ['gitdiff-status', `s-${v.status}`] }, v.status),
+      // Stays a native title: .gitdiff-doc-path is overflow:hidden for its ellipsis, which would
+      // clip a tooltip of its own — and a path is what native title is better at anyway.
       span({ class: 'gitdiff-doc-path', title: `Open ${v.path}`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(`${this.root}/${v.path}`) } }, v.path),
       span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, `+${add}`), span({ class: 'count-del' }, `−${del}`)),
-      span({ class: 'gitdiff-close', title: 'Back to the conversation (Esc)',
+      span({ class: 'gitdiff-close', 'data-tip': 'Back to the conversation (Esc)', ariaLabel: 'Back to the conversation',
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.closeDoc() } }, icon('close')),
     )
   }

@@ -371,7 +371,7 @@ export class ModelPill extends ComboboxPill<never> {
     return div({ class: 'model-wrap pop-center' },
       button({
         class: ['pill', active || ext ? 'on' : 'glyph', uncached ? 'warn' : ''],
-        title: tip,
+        'data-tip': tip,
         ariaLabel: active || ext ? undefined : 'Anthropic (native)',
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       }, content),

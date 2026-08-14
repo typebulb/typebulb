@@ -16,10 +16,10 @@ const key = (prose: string, userPrompt: string) => userPrompt + '\n\n---\n\n' + 
 type ViewChoice = 'raw' | 'reply' | 'summary'
 
 // One turn-representation tab (Raw | Reply | Summary): the class / shimmer / stopPropagation rules.
-const tab = (t: { which: string; selected: string; label: string; title: string; shimmer?: boolean; err?: boolean; onClick: () => void }) =>
+const tab = (t: { which: string; selected: string; label: string; tip: string; shimmer?: boolean; err?: boolean; onClick: () => void }) =>
   button({
     class: ['turn-view', t.which === t.selected ? 'on' : '', t.err ? 'err' : ''],
-    title: t.title,
+    'data-tip': t.tip,
     onClick: (e: MouseEvent) => { e.stopPropagation(); t.onClick() },
   }, t.shimmer ? span({ class: 'shimmer-text shimmer-slow' }, t.label) : t.label)
 
@@ -143,14 +143,16 @@ export class TurnView extends Component {
   // selected tab's thicker line indicating the active view. Summary is unavailable for the live
   // tail even if it has emitted prose (it is still changing), and for a turn that emitted none at
   // all: there is nothing to compress, and the tab would only ever answer "nothing to summarize".
+  // Tooltips are for a reader who has never seen the mirror: each says what its view shows, never
+  // naming it "trace" or "exact" (this codebase's words for them, not a user's).
   view(live: boolean) {
     const selected = this.#selected(live)
     return div({ class: 'turn-views-row' },
-      tab({ which: 'raw', selected, label: 'Raw', title: 'Show this turn’s raw trace', onClick: () => this.#select('raw') }),
-      tab({ which: 'reply', selected, label: 'Reply', title: 'Show this turn’s exact reply', onClick: () => this.#select('reply') }),
+      tab({ which: 'raw', selected, label: 'Raw', tip: 'The full response', onClick: () => this.#select('raw') }),
+      tab({ which: 'reply', selected, label: 'Reply', tip: 'The response without tool call chatter', onClick: () => this.#select('reply') }),
       !live && !!this.#source.trim()
         ? tab({ which: 'summary', selected, label: 'Summary', err: !!this.#error,
-            title: this.#busy ? 'Summarizing…' : this.#error || 'Summarize this reply (one cheap model call)',
+            tip: this.#busy ? 'Summarizing…' : this.#error || 'Summarized reply (one cheap model call)',
             shimmer: this.#busy, onClick: () => this.#select('summary') })
         : null,
       this.#setup ? this.#setupDialog() : null,

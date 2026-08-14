@@ -127,7 +127,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     return div({ class: 'sid-wrap' },
       button({
         class: 'pill',
-        title: tip,
+        'data-tip': tip,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       }, label),
       this.open ? this.picker() : null,

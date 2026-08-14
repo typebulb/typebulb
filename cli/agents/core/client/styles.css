@@ -337,6 +337,81 @@ html:not([data-theme="dark"]) .turn-view > .shimmer-text {
    rides a whole buffering window). */
 .pill-busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
 
+/* ── Tooltip — the styled stand-in for native `title`, and only on FIXED EXPLANATORY copy: text
+   that teaches what a control does. Dynamic identifiers (a path, a model id, an mcp tool's full
+   name) keep the native attribute, which is better at them: they run long, they want to wrap, and
+   `title` is the reliable "show me the whole string" affordance a bounded box is worse at. One
+   attribute opts a control in, no wrapper component and no JS, and it shows on :focus-visible,
+   which native `title` never does for a keyboard user. `data-tip` is not an accessible name, so a
+   glyph-only control still needs its own ariaLabel.
+   Three non-obvious bits. :where() zeroes the position rule's specificity, so a control that is
+   ALREADY positioned (the filter's inset × and 🔬) keeps its own and is its own containing block
+   anyway. display:none at rest rather than opacity:0, because an absolutely positioned box still
+   counts toward a scroll container's scrollable overflow and .messages' stuck-to-bottom test is
+   measured in pixels. The open delay therefore rides an animation (fill-mode both holds the
+   from-state through the delay), since a display switch cannot transition. ── */
+:where([data-tip]) { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  display: none;
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(22rem, 60vw);
+  padding: .3rem .55rem;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .45);
+  /* Its own typography, never the host's (a stub label is italic, a pill is not) — but the same
+     SIZE as the chrome it explains, .8rem, which is both the statusbar's and the tab row's. A tip
+     set larger than the control it belongs to reads as shouting. Full --fg carries it instead. */
+  font-size: .8rem;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.4;
+  /* Centred and balanced, because the box CANNOT hug wrapped text: `width: max-content` capped by
+     max-width means any tip too long for one line sits at exactly max-width, whatever it wraps to.
+     Left-aligned, the leftover on the last line then reads as dead space (the model pill's tip, the
+     only one long enough to wrap). Balancing evens the lines and centring splits what's left to both
+     sides, so a two-line tip reads as a block instead of a full line plus a stub. */
+  text-align: center;
+  text-wrap: balance;
+  /* pre-line, not normal: a tip built from two lines (the session pill's cwd over its id) keeps the
+     break native `title` gave it, and everything else still wraps at the max-width. */
+  white-space: pre-line;
+  pointer-events: none;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after { display: block; animation: tip-in .12s ease .4s both; }
+@keyframes tip-in { from { opacity: 0; } to { opacity: 1; } }
+/* One tip nested in another (the diff pill's × sits inside the pill body): hovering the inner one
+   hovers the outer too, so both boxes would open. Only the innermost shows, which is how native
+   `title` resolves it. */
+[data-tip]:has([data-tip]:hover)::after { display: none; }
+/* Pressed: tooltips are dismissed until the pointer reaches a different one (ui.ts
+   armTooltipDismiss). Out-specifies the :hover rule on its own, no !important needed. */
+body.tips-off [data-tip]::after { display: none; }
+/* Bottom-anchored surfaces open upward, like their own menus: under the statusbar and under the
+   composer's action row there is no room to drop into. */
+:is(.statusbar, .composer) [data-tip]::after { top: auto; bottom: calc(100% + 7px); }
+/* ...and grow LEFT from the control's right edge, which is the "end" alignment the statusbar menus
+   already take by default (.pop-center / .pop-start above are their opt-outs). Every one of these
+   clusters is right-aligned, so a centred box runs past the viewport — the bulbs pill's tip was
+   clipped — and inside a menu it is also the direction that stays within its overflow:hidden for a
+   control inset at the right edge. The transcript's own tips stay centred: they sit mid-column. */
+:is(.statusbar, .composer, .picker, .servers-pop) [data-tip]::after { left: auto; right: 0; transform: none; }
+/* ...except where the pill's WRAP already names an alignment for its menu. A tip and the menu it
+   belongs to must open the same way, so both read off the same tag (.pop-center / .pop-start above)
+   and neither can be set on its own. Direct child, like the menu rules: a control nested inside a
+   pill (the diff pill's ×) keeps the cluster's end alignment, which is right at a pill's far edge. */
+.pop-center > [data-tip]::after { right: auto; left: 50%; transform: translateX(-50%); }
+.pop-start > [data-tip]::after { right: auto; left: 0; transform: none; }
+
 /* ── The composer (TB-Agent-Composer.md): the prompt panel under the transcript. In flow (not
    overlaid like the statusbar) — it owns real height and must never cover content. ── */
 .composer { position: relative; flex: none; background: var(--bg); padding-inline: 1.75rem; }

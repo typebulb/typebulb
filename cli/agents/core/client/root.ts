@@ -5,6 +5,7 @@ import { BulbsPill } from './bulbsPill.js'
 import { DiffPill } from './diffPill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
+import { armTooltipDismiss } from './ui.js'
 import type { ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
 
 // The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
@@ -67,6 +68,7 @@ export class Root extends Component implements IRoot {
   override onAttached() {
     if (this.#started) return
     this.#started = true
+    armTooltipDismiss()     // one global listener set, so every harness's entry gets it
     this.init()
   }
 

@@ -596,7 +596,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       // (the diff pill's convention).
       button({
         class: ['pill', running > 0 ? '' : 'glyph', this.open ? 'on' : ''],
-        title: 'Launch a project bulb · stop a running one',
+        'data-tip': 'Launch a project bulb · stop a running one',
+        // data-tip is not an accessible name; the glyph isn't one either, so say it here.
+        ariaLabel: running > 0 ? `Bulbs (${running} running)` : 'Bulbs',
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       }, running > 0 ? `${running}💡` : span({ class: 'glyph-img' }, '💡')),
       this.open ? this.popup() : null,

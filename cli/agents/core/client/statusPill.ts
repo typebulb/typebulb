@@ -246,7 +246,7 @@ export abstract class ComboboxPill<R> extends StatusPill {
     return button({
       class: ['bulb-filter-mode', this.fullText ? 'on' : ''],
       type: 'button',
-      title: this.fullText ? `Back to ${this.filterNoun} filter` : 'Full-text search',
+      'data-tip': this.fullText ? `Back to ${this.filterNoun} filter` : 'Full-text search',
       ariaLabel: 'Full-text search',
       onClick: (e: MouseEvent) => { e.stopPropagation(); this.toggleFullText() },
     }, span({ class: 'glyph-img' }, '🔬'))

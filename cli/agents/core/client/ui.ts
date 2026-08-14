@@ -33,7 +33,7 @@ export function searchFilter(opts: {
       attrs: { class: 'bulb-filter', placeholder: opts.placeholder, ariaLabel: opts.placeholder, onKeyDown: opts.onKeyDown },
     }),
     opts.hasValue
-      ? button({ class: 'bulb-filter-clear', type: 'button', title: 'Clear filter', ariaLabel: 'Clear filter',
+      ? button({ class: 'bulb-filter-clear', type: 'button', 'data-tip': 'Clear filter', ariaLabel: 'Clear filter',
           onClick: (e: MouseEvent) => { e.stopPropagation(); opts.onClear() } }, '×')
       : null,
     opts.trailing ?? null,
@@ -72,4 +72,27 @@ export function armOutsideClose(keepOpenSelector: string, onOutside: () => void)
   }
   setTimeout(() => { if (armed) document.addEventListener('click', handler) }, 0)
   return () => { armed = false; document.removeEventListener('click', handler) }
+}
+
+// Native `title`'s dismissal rule, which the CSS tooltip has no state of its own to reproduce:
+// pressing a control hides its tooltip, and it stays hidden until the pointer reaches a DIFFERENT
+// tip. You have acted, so the explanation stops. It also covers the flicker a press otherwise
+// causes: the click re-renders the very control it hit, and the replacement lands under a
+// stationary cursor already :hover, restarting the reveal delay so the box blinks out and back.
+// Two consequences of that re-render shape. The flag rides <body>, since a class on the control
+// would die with it; and "same control" is judged by the tip TEXT, not node identity, which the
+// re-render does not preserve. A press that misses every tip suppresses nothing. Capture phase:
+// half the mirror's handlers stopPropagation. A keypress re-arms, so a :focus-visible tooltip is
+// never suppressed by whatever click preceded the tabbing.
+export function armTooltipDismiss() {
+  let pressed: string | null = null
+  const tipAt = (e: Event) =>
+    e.target instanceof Element ? e.target.closest('[data-tip]')?.getAttribute('data-tip') ?? null : null
+  const rearm = () => { pressed = null; document.body.classList.remove('tips-off') }
+  addEventListener('pointerdown', e => {
+    pressed = tipAt(e)
+    document.body.classList.toggle('tips-off', pressed !== null)
+  }, true)
+  addEventListener('pointermove', e => { if (pressed !== null && tipAt(e) !== pressed) rearm() }, true)
+  addEventListener('keydown', rearm, true)
 }

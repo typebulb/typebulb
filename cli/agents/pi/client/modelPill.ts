@@ -14,6 +14,6 @@ export class PiModelPill extends Component implements StatusPillLike {
     if (!model) return span({ class: 'model-wrap' })   // no driver and no turn on disk yet (hidden via :empty)
     // Compact: drop a provider prefix (`z-ai/glm-5.2` → `glm-5.2`); the full id rides the tooltip.
     const short = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
-    return span({ class: 'model-wrap' }, span({ class: 'token', title: `Model: ${model}` }, short))
+    return span({ class: 'model-wrap' }, span({ class: 'token', 'data-tip': `Model: ${model}` }, short))
   }
 }

@@ -11,6 +11,6 @@ export class CodexModelPill extends Component implements StatusPillLike {
   view(): VElement {
     const model = this.parent.latestModel
     if (!model) return span({ class: 'model-wrap' })   // no turn on disk yet (hidden via :empty)
-    return span({ class: 'model-wrap' }, span({ class: 'token', title: `Model: ${model}` }, model))
+    return span({ class: 'model-wrap' }, span({ class: 'token', 'data-tip': `Model: ${model}` }, model))
   }
 }

@@ -449,7 +449,10 @@ export class MessageList extends Component {
     return div({ class: 'masthead', key: 'masthead' },
       img({ class: 'masthead-logo light', src: LOGO_LIGHT, alt: 'typebulb' }),
       img({ class: 'masthead-logo dark', src: LOGO_DARK, alt: 'typebulb' }),
-      div({ class: 'masthead-tagline' }, 'a live mirror of your agent’s session, with inline bulbs, latex, svg, mermaid and more'),
+      // The mirror's two halves: the 💡 explorer (its glyph points at the real pill in the status
+      // bar) and the live transcript. Not a list of renderable formats — those are on screen the
+      // moment there are any, so naming them spends the line on what the page already shows.
+      div({ class: 'masthead-tagline' }, 'run and publish bulbs 💡 your agent’s session live here, bulbs rendered inline'),
     )
   }
 
@@ -557,7 +560,9 @@ export class MessageList extends Component {
   // to Reply; the one live durable turn defaults to Raw. A selector's optional explicit override
   // survives the default changing at completion, while a never-touched tail naturally settles Reply.
   renderTurn(msgs: Msg[], turnIdx: number, live: boolean) {
-    const visible = msgs.filter(m => m.role === 'user' || m.role === 'fork' || m.text || m.body)
+    // Reply and Summary render from `visible`, which holds no fork stub: an abandoned branch is trace,
+    // so it is Raw's alone (TB-LostMessage.md), and Raw renders from `msgs`.
+    const visible = msgs.filter(m => m.role === 'user' || m.text || m.body)
     const firstProse = visible.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
     const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && (!!m.text || !!m.body))
     // A turn selects off its newest assistant row rather than its newest PROSE row — every row of a
@@ -567,7 +572,6 @@ export class MessageList extends Component {
     const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
     const turnView = (lastProse ?? lastAssistant)?.turnView
     if (!turnView) return this.#renderPromptOnlyTurn(msgs, turnIdx)
-
     // The selector's display mode determines how the turn is rendered. A non-empty summary is only
     // ever set from this turn's prose, so `firstProse` exists wherever it is read.
     const host = this.#selectorHost(msgs, turnView, live)
@@ -577,13 +581,14 @@ export class MessageList extends Component {
   }
 
   // The one rule for which bubble carries a turn's selector, so the row is always above every body it
-  // switches: Raw renders every assistant row, so the turn's FIRST one hosts it — not its first prose,
-  // which would leave the row under the thinking and tool steps that opened the turn. Reply and Summary
-  // render prose alone, so its first prose bubble hosts. Undefined ⇒ nothing in the turn hosts it yet,
-  // and the draft beneath carries it, which is that view's assistant portion start.
+  // switches: Raw renders every assistant row AND the turn's fork stubs, so the turn's FIRST non-user
+  // row hosts it — not its first prose, which would leave the row under the thinking, tool steps, and
+  // abandoned branches that opened the turn. Reply and Summary render prose alone, so its first prose
+  // bubble hosts. Undefined ⇒ nothing in the turn hosts it yet, and the draft beneath carries it,
+  // which is that view's assistant portion start.
   #selectorHost(msgs: Msg[], turnView: TurnView, live: boolean): Msg | undefined {
-    const assistants = msgs.filter(m => m.role === 'assistant')
-    return turnView.raw(live) ? assistants[0] : assistants.find(m => !!m.text || !!m.body)
+    if (turnView.raw(live)) return msgs.find(m => m.role !== 'user')
+    return msgs.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
   }
 
   // A turn with no assistant row at all — a prompt whose reply hasn't landed. Nothing to switch
@@ -592,11 +597,12 @@ export class MessageList extends Component {
     return msgs.map(m => m.role === 'fork' ? this.forkStub(m, turnIdx) : this.bubble(m, turnIdx))
   }
 
-  // Raw: the full chronological trace — every assistant row, thinking, tools, and per-message copy.
+  // Raw: the full chronological trace — every assistant row, thinking, tools, per-message copy, and
+  // the turn's abandoned-branch stubs, which no other view renders.
   #renderRawTurn(msgs: Msg[], turnIdx: number, host: Msg | undefined, turnView: TurnView, live: boolean) {
     return msgs.map(m =>
       m.role === 'fork'
-        ? this.forkStub(m, turnIdx)
+        ? this.forkStub(m, turnIdx, m === host ? turnView : undefined, live)
         : this.bubble(m, turnIdx, undefined, true, m === host ? turnView : undefined, true, live))
   }
 
@@ -606,28 +612,24 @@ export class MessageList extends Component {
   // selector always has a home. A LIVE turn's reply is still arriving, so the draft carries the row
   // and a "no reply text" line would be contradicting the text streaming under it.
   #renderReplyTurn(msgs: Msg[], turnIdx: number, visible: Msg[], host: Msg | undefined, lastProse: Msg | undefined, turnView: TurnView, live: boolean) {
-    const out = visible.flatMap(m => {
-      if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
+    const out = visible.map(m => {
       const copy = m.role === 'user' ? m.copy : m === lastProse ? m.turnCopy : undefined
-      return [this.bubble(m, turnIdx, copy ?? null, true, m === host ? turnView : undefined, false, live)]
+      return this.bubble(m, turnIdx, copy ?? null, true, m === host ? turnView : undefined, false, live)
     })
     if (host || live) return out
-    // The prose slot is right after the prompt: a turn's user messages merge into one bubble, and any
-    // fork stub was raised during the work the placeholder stands for, so it belongs below it.
+    // The prose slot is right after the prompt: a turn's user messages merge into one bubble.
     out.splice(visible[0]?.role === 'user' ? 1 : 0, 0, this.#noProseBubble(msgs, turnIdx, turnView))
     return out
   }
 
-  // Summary: one compressed bubble in place of all assistant prose — user/fork messages stay visible.
-  // It takes the FIRST prose slot, the same one Reply hosts the row in, so the row does not move as
-  // the reader flips between them (a fork stub raised mid-turn would otherwise sit above it).
+  // Summary: one compressed bubble in place of all assistant prose — the turn's user messages stay
+  // visible. It takes the FIRST prose slot, the same one Reply hosts the row in, so the row does not
+  // move as the reader flips between them.
   #renderSummaryTurn(turnIdx: number, visible: Msg[], firstProse: Msg, turnView: TurnView, live: boolean) {
     return visible.flatMap(m => {
-      if (m.role === 'fork') return [this.forkStub(m, turnIdx)]
       if (m.role === 'assistant') return m === firstProse
         ? [this.#summaryBubble(m, turnIdx, turnView.summary, turnView)] : []
-      const copy = m.role === 'user' ? m.copy : undefined
-      return [this.bubble(m, turnIdx, copy ?? null, true, undefined, false, live)]
+      return [this.bubble(m, turnIdx, m.copy ?? null, true, undefined, false, live)]
     })
   }
 
@@ -644,9 +646,12 @@ export class MessageList extends Component {
   // Shared shell for the mirror's collapsed fork rows: a .bubble carrying the turn stripe (color
   // continuous with the turn) and a clickable .turn-summary header (caret + label) that toggles its
   // open set; the fork additionally shows its orphan body beneath when open.
-  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, body?: ReturnType<typeof div>) {
+  // `head` is the turn's selector row when this stub opens the turn's trace, so the row stays above
+  // everything it switches.
+  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, head?: ReturnType<typeof div>, body?: ReturnType<typeof div>) {
     const expanded = set.has(id)
     return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key },
+      head ?? null,
       div({ class: 'turn-summary', onClick: () => { toggleInSet(set, id); this.update() } },
         caret(expanded),
         span({ class: 'turn-summary-text' }, label),
@@ -656,14 +661,15 @@ export class MessageList extends Component {
   }
 
   // Collapsed stub for an abandoned branch (TB-LostMessage.md): a count label, expanding to the orphan's
-  // read-only messages beneath. Additive, never replacing the live transcript.
-  forkStub(msg: Msg, turnIdx: number) {
+  // read-only messages beneath. Additive, never replacing the live transcript. Raw-only (the branch is
+  // trace, not this turn's reply), so it can be the row that hosts the turn's selector.
+  forkStub(msg: Msg, turnIdx: number, turnView?: TurnView, live = false) {
     const f = msg.fork!
     const body = this.expandedForks.has(msg.id)
       ? div({ class: 'fork-body' }, f.sub.map(sub => this.bubble(sub, turnIdx, undefined, false)))
       : undefined
     const label = [forkIcon(), ` ${f.count} message${f.count === 1 ? '' : 's'} on an abandoned branch`]
-    return this.#collapsibleRow(`fork-${msg.id}`, turnIdx, this.expandedForks, msg.id, label, body)
+    return this.#collapsibleRow(`fork-${msg.id}`, turnIdx, this.expandedForks, msg.id, label, turnView?.view(live), body)
   }
 
   // `copy` is the pill to render (defaults to the message's own). Reply passes the shared turn-level
