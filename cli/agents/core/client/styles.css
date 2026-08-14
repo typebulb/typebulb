@@ -1439,6 +1439,10 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   width: var(--lane-w);
   margin-left: var(--lane-ml);
   margin-right: auto;
+  /* Zero the `.embed` inset: spread makes the border box the lane, so a 1rem left padding would
+     leave the scroller 1rem narrower than the table's own lane cap — a capped table then overflows
+     by exactly that inset at every window width, which is the permanent 16px-of-travel scrollbar. */
+  padding-left: 0;
 }
 
 /* ````bulb```` inline bulbs: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
