@@ -4,7 +4,7 @@
 
 import type { ImportMap } from 'typebulb/resolver'
 import { typebulbShim } from './shim.js'
-import { escapeHtml, escapeScript, baseResetStyle, pageHeightStyle, themeHeadScript } from './pageChrome.js'
+import { escapeHtml, escapeScript, baseResetStyle, pageHeightStyle, themeHeadScript, scrollRestoreHeadScript } from './pageChrome.js'
 
 export interface RenderOptions {
   name: string
@@ -64,6 +64,7 @@ export function renderHtml(options: RenderOptions): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(name)} - typebulb</title>
 ${themeHeadScript(name, theme)}
+${inline ? '' : scrollRestoreHeadScript()}
   <script type="importmap">
 ${JSON.stringify(proxiedImportMap, null, 2)}
   </script>

@@ -6,6 +6,8 @@
  * Pure string assembly, isomorphic (no node builtins), so it lives in bulb/.
  */
 
+import { scrollRestoreEngine } from 'typebulb/format'
+
 /** Escape text for safe interpolation inside an inline `<script>` body — a literal
  *  `</script` in the payload would close the tag early and break out of the script. */
 export const escapeScript = (s: string) => s.replace(/<\/script/gi, '<\\/script')
@@ -24,6 +26,31 @@ export function escapeHtml(str: string): string {
 // bulb can't render differently local vs published. Re-exported so the CLI's pages
 // keep importing their chrome from one place.
 export { baseResetStyle, pageHeightStyle } from 'typebulb/format'
+
+/**
+ * Scroll restoration for the standalone bulb page (specs/Scroll-Restoration.md § The CLI tier):
+ * the shared engine, wired to this page's own sessionStorage (`tb-scroll:<route>`; first-party
+ * and top-level, so the page itself gates on the navigation type). Native restoration gives up
+ * at `load`; the engine covers the tail a bulb that renders after load needs. Not for inline
+ * bulbs: content-measured, the host page scrolls.
+ */
+export function scrollRestoreHeadScript(): string {
+  return `  <script>
+${scrollRestoreEngine}
+    (function () {
+      try {
+        var key = function () { return 'tb-scroll:' + location.pathname + location.search; };
+        var nav = performance.getEntriesByType('navigation')[0];
+        var restoring = !!nav && (nav.type === 'reload' || nav.type === 'back_forward');
+        var stored = restoring ? Number(sessionStorage.getItem(key())) : 0;
+        window.__tbScroll.init({
+          initialY: stored > 0 ? stored : 0,
+          save: function (y) { try { sessionStorage.setItem(key(), String(y)); } catch (e) {} }
+        });
+      } catch (e) {}
+    })();
+  </script>`
+}
 
 /**
  * The no-flash theme engine, injected into <head>. Sets `html[data-theme]` before

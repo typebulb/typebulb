@@ -3,7 +3,7 @@ import {
   parseBulb, tryParseBulb, serializeBulb, toBulbData, parseConfig, blocks, orderedKinds, kindFromPath,
   isJsonData, isXmlData, isYamlData, isStructuralData, splitIntoChunks, splitIntoChunksWithBoundaries,
   validateBulbStructure, findUnfencedBulbs, replaceBulbBlock, removeBulbBlock, extractDescription, hostedAssetsBase,
-  forbiddenAssetExt, slugify, MODE, modeUnion,
+  forbiddenAssetExt, slugify, MODE, modeUnion, scrollRestoreEngine,
 } from '../src/index.js'
 
 const CANONICAL = `---
@@ -436,5 +436,13 @@ describe('tb.mode values', () => {
   it('generates the emitted typings union from MODE, in declaration order', () => {
     expect(modeUnion).toBe(`'local' | 'ide' | 'published' | 'inline'`)
     expect(Object.keys(MODE)).toEqual(Object.values(MODE))   // key and value never drift apart
+  })
+})
+
+describe('scroll restoration engine', () => {
+  it('is a parseable head script exposing the four entry points', () => {
+    expect(() => new Function(scrollRestoreEngine)).not.toThrow()   // a syntax slip here breaks every page silently
+    for (const fn of ['init', 'restore', 'top', 'flush']) expect(scrollRestoreEngine).toContain(`${fn}:`)
+    expect(scrollRestoreEngine).not.toContain('</script')
   })
 })
