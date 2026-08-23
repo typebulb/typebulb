@@ -273,7 +273,9 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.argsJson = value
-    } else if (!arg.startsWith('-')) {
+    } else if (!arg.startsWith('-') || (arg === '-' && result.subcommand === 'send')) {
+      // `send <file> -` reads the message from stdin, so its bare `-` is a positional, not a flag.
+      // Scoped to send: elsewhere a lone `-` stays an unknown option, keeping `call`'s --args hint.
       if (['call', 'send', 'get', 'put', 'slug'].includes(result.subcommand)) callPositionals.push(arg)
       else result.file = arg
     } else {

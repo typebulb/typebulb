@@ -155,6 +155,19 @@ describe('parseArgs: send --wait', () => {
   it('absent --wait leaves sendWaitMs undefined (a single best-effort attempt)', () => {
     expect(parseArgs(['send', 'x.bulb.md', 'go']).sendWaitMs).toBeUndefined()
   })
+
+  it('a bare - is the stdin message, not an unknown option', () => {
+    const a = parseArgs(['send', 'x.bulb.md', '-', '--wait'])
+    expect(a.sendMessage).toBe('-')
+    expect(a.sendWaitMs).toBe(5000)
+  })
+
+  it('the bare - is scoped to send — call keeps its --args hint', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(process, 'exit').mockImplementation(((code: number) => { throw new Error(`exit ${code}`) }) as never)
+    expect(() => parseArgs(['call', 'x.bulb.md', 'fn', '-'])).toThrow('exit 1')
+    vi.restoreAllMocks()
+  })
 })
 
 describe('runSend --wait — client-side retry across the reconnect window', () => {

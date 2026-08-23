@@ -32,7 +32,9 @@ const ms = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`)
  * line carrying this project's mirror URL — a live mirror is reused, otherwise one is started detached
  * and windowless (`agent:<name> --no-open`) — and an `Agents:`-tagged block: the inline bulb-vs-local rule
  * (the one decision agents most often get wrong — a weak model that under-reads the skill plans a
- * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix), how to verify an emitted inline bulb (a *backgrounded* `wait` — the
+ * `.bulb.md` when asked to show something inline; this line is the guaranteed-delivery fix, and its
+ * sub-line kills the strong-model variant, which drafts a `.bulb.md` to test and only then re-emits
+ * inline), how to verify an emitted inline bulb (a *backgrounded* `wait` — the
  * render lands only on turn-end, so a foreground or pre-emit wait would deadlock; backgrounding fixes
  * both halves. Codex inverts both facts — items stream to the rollout mid-turn and no background wake
  * exists — so its branch is a bounded FOREGROUND wait: TB-Agent-Codex.md § Wait under Codex), and a
@@ -106,6 +108,7 @@ async function launchAndReport(version: string, name: string, t: LaunchClock): P
         `  Agents:`,
         `    Reusable app/tool → write a ${lit('.bulb.md')}`,
         `    Show something inline → emit an inline bulb`,
+        `      emit it with no .bulb.md draft first`,
         // "background" told pi agents to shell-'&' the wait, decoupling the wake (TB-Wait.md).
         // Codex has no background wake at all — its wait runs FOREGROUND in the emitting turn
         // (items stream to the rollout mid-turn), bounded because it occupies that turn

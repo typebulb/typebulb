@@ -784,6 +784,7 @@ describe('piExtensionSource (the written typebulb.ts extension: wait shim + mirr
     for (const wording of [
       'Reusable app/tool → write a ',            // trailed by lit('.bulb.md') in agent.ts
       'Show something inline → emit an inline bulb',
+      'emit it with no .bulb.md draft first',
       'Read the authoring skill before writing a bulb:',
     ]) {
       expect(agentSrc, `agent.ts no longer says: ${wording}`).toContain(wording)

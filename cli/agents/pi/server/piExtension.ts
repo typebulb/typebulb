@@ -153,6 +153,7 @@ var TB_MIRROR_BLOCK = [
   "  • no need to end your reply with a mirror link",
   "  Reusable app/tool → write a .bulb.md",
   "  Show something inline → emit an inline bulb",
+  "    emit it with no .bulb.md draft first",
   "  Read the authoring skill before writing a bulb:",
   "    • " + TB_SKILL_PATH,
 ].join("\n");
