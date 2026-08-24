@@ -486,7 +486,7 @@ The user can proxy claude with the agent mirror's model switcher, to any model o
 
 ## Push & Pull (typebulb.com)
 
-One bulb per command, between typebulb.com and its conventional local file — the path IS the remote identity: `typebulbs/u/ben/birds.bulb.md` ↔ `typebulb.com/u/ben/birds`.
+One bulb per command, between typebulb.com and its conventional local file — the path IS the remote identity: `typebulbs/u/ben/birds.bulb.md` ↔ `typebulb.com/u/ben/birds`. That bare URL opens the bulb in IDE mode; `typebulb.com/u/ben/birds/full` opens it in published mode — the canonical page, and the link to share.
 
 - **Pull**: `typebulb pull <bulb-url>` (or an existing local file, to refresh in place) — brings the bulb's `assets/` folder along. Unlisted and public bulbs need no login. A local file or asset with real changes is refused; `--force` overwrites it.
 - **Push**: `typebulb push <file>` uploads as you — set `TYPEBULB_TOKEN` in `.env` (minted on your typebulb.com settings page). A slug that doesn't exist yet is created, unlisted. If the site copy changed since your last pull/push, the push is refused; `--force` overwrites it. A `**server.ts**` block is stripped from the site copy (CLI-only); your local file is never modified.

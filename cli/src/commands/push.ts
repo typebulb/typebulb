@@ -196,7 +196,8 @@ export async function runPush(arg: string | undefined, opts: { force: boolean; m
       process.exitCode = 1
       return
     case 'pushed': {
-      console.log(`pushed ${rel} → ${bulbUrl}`)
+      // /full is published mode — canonical and shareable (specs/SEO.md); the bare path is IDE mode.
+      console.log(`pushed ${rel} → ${bulbUrl}/full`)
       // A first push and a post-rename push are indistinguishable here — identity is positional and
       // nothing records where this file went last (Invariant 5's no-sidecar stance), so a create
       // can't be refused, only made unmissable. As a trailing `(created)` it read exactly like an
