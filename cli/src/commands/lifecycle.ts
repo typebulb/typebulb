@@ -2,7 +2,7 @@ import * as path from 'path'
 import { valid as semverValid, lt as semverLt } from 'semver'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, isProjectMirror, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopServer, pageCount, isAlive, readWaitCursor, writeWaitCursor, isProjectMirror, type BulbServer, type StopOutcome } from '../serve/serverRegistry.js'
 import { VERSION } from '../version.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
@@ -45,29 +45,49 @@ export function findServer(servers: BulbServer[], arg: string, cwd?: string, cal
 /** A server's human name: its agent name for a mirror, the bulb filename otherwise. */
 const serverLabel = (s: BulbServer) => s.agent ?? path.basename(s.file)
 
+/** Is this server's runtime older than the CLI reading it? No version ⇒ predates the stamp ⇒ yes,
+ *  and an unparseable one is presumed old. The listing says so, and a forced stop names it as the
+ *  reason nothing answered (TB-Page-Lifecycle.md, Reporting). */
+function isStaleRuntime(v: string | undefined): boolean {
+  if (v === VERSION) return false
+  if (!v) return true
+  return semverValid(v) && semverValid(VERSION) ? semverLt(v, VERSION) : true
+}
+
 /** The staleness note for a server's runtime version (TB-CLI.md, server lifecycle & the reap): a
  *  server older than this CLI serves capabilities the docs no longer describe, invisibly unless the
  *  listing says so. No version ⇒ predates the stamp ⇒ presume stale. Current is silent. */
 function versionNote(v: string | undefined): string {
   if (v === VERSION) return ''
   if (!v) return '  STALE runtime (predates the version stamp — relaunch to update)'
-  const older = semverValid(v) && semverValid(VERSION) ? semverLt(v, VERSION) : true
-  return older
+  return isStaleRuntime(v)
     ? `  STALE runtime v${v} (this CLI is v${VERSION} — relaunch to update)`
     : `  runtime v${v} (newer than this CLI's v${VERSION})`
 }
 
+/** Whether a page is attached: a bulb runs in its page, so a row saying "running" without saying
+ *  that is where "I thought it was running" comes from (TB-Page-Lifecycle.md). A mirror is a viewer,
+ *  so it makes no such claim. `undefined` = the server didn't answer the probe. */
+function pageNote(s: BulbServer, pages: number | undefined): string {
+  if (pages === undefined) return '  pages ?'
+  if (pages > 0) return `  ${pages} page${pages === 1 ? '' : 's'}`
+  return s.agent != null ? '  NO PAGE (no tab open on it)' : '  NO PAGE (nothing of it is running)'
+}
+
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
  *  each server's live tier, `--batch` scope, and any runtime-version skew so an agent sees all
- *  three at a glance. */
-function printServerList(servers: BulbServer[], stream: (line: string) => void): void {
-  for (const s of servers) stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.batch ? `  --batch ${s.batch}` : ''}${versionNote(s.version)}  ${s.file}`)
+ *  three at a glance. `counts` (the no-arg listing's live page probe) adds the fourth; the
+ *  not-found hint omits it, being about resolution rather than page state. */
+function printServerList(servers: BulbServer[], stream: (line: string) => void, counts?: Array<number | undefined>): void {
+  servers.forEach((s, i) => stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.batch ? `  --batch ${s.batch}` : ''}${counts ? pageNote(s, counts[i]) : ''}${versionNote(s.version)}  ${s.file}`))
 }
 
 /** No-arg form of `logs`/`stop`: list the running servers (or report none), then a per-command hint. */
-function listServers(servers: BulbServer[], hint: string): void {
+async function listServers(servers: BulbServer[], hint: string): Promise<void> {
   if (!servers.length) { console.log('No running bulb servers.'); return }
-  console.log('Running bulb servers:'); printServerList(servers, l => console.log(l))
+  // Bounded and parallel: a wedged server costs the listing its own row's count, never the listing.
+  const counts = await Promise.all(servers.map(pageCount))
+  console.log('Running bulb servers:'); printServerList(servers, l => console.log(l), counts)
   console.log('\n' + hint)
 }
 
@@ -92,7 +112,7 @@ export async function runLogs(arg: string | undefined, opts: { follow: boolean; 
   // With an arg, target globally: a pid (or built-in name) names a specific process anywhere.
   if (!arg) {
     if (opts.clear) { console.error('Specify which server to clear: typebulb logs --clear <file|pid>'); process.exit(1) }
-    listServers(await listBulbServers(process.cwd()), 'Run `typebulb logs <file|pid>` to print one server\'s console.'); return
+    await listServers(await listBulbServers(process.cwd()), 'Run `typebulb logs <file|pid>` to print one server\'s console.'); return
   }
   // A reserved agent name (`claude`) targets the running mirror by its `agent` field (findServer),
   // preferring this cwd's mirror; a pid or path targets any server globally.
@@ -266,17 +286,34 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   process.exit(exitCode)
 }
 
+/** What the stop observed, appended to its status line (TB-Page-Lifecycle.md, invariant 4). A forced
+ *  stop is the one that cannot make the claim, its pages never told, so it names its cause: a runtime
+ *  older than this CLI carries no stop route to answer with. */
+function stopNote(s: BulbServer, outcome: StopOutcome): string {
+  if (outcome === 'killed') {
+    const why = isStaleRuntime(s.version)
+      ? `its runtime ${s.version ? `v${s.version} ` : ''}predates the stop route`
+      : 'it did not answer'
+    return ` — forced (${why}); a page it opened may still be open`
+  }
+  const said: string[] = []
+  if (outcome.closed) said.push(`closed ${outcome.closed} page${outcome.closed === 1 ? '' : 's'}`)
+  if (outcome.stuck) said.push(`${outcome.stuck} did not close`)
+  return said.length ? ` — ${said.join(', ')}` : ''
+}
+
 /**
- * `typebulb stop [file|pid]` — stop a running bulb server (SIGTERM + deregister, via stopBulbServer).
- * No arg lists the running servers. The off-switch half of the agent lifecycle: an agent (or user)
- * stops a bulb it played without hunting for the OS pid.
+ * `typebulb stop [file|pid]` — stop a running bulb server through its owner (`/__stop`), which
+ * closes its pages first and then exits by the cleanup path a Ctrl-C takes; a server that cannot
+ * answer is killed instead and the line says so. No arg lists the running servers. The off-switch
+ * half of the agent lifecycle: an agent (or user) stops a bulb it played without hunting for the pid.
  */
 export async function runStop(arg: string | undefined): Promise<void> {
   // No arg ⇒ list this project's running servers (cwd-scoped); with an arg, target globally by pid/file.
-  if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb stop <file|pid>` to stop one.'); return }
+  if (!arg) { await listServers(await listBulbServers(process.cwd()), 'Run `typebulb stop <file|pid>` to stop one.'); return }
   const server = requireServer(await listBulbServers(), arg, 'stop', process.cwd(), detectCallerHarness())
-  await stopBulbServer(server.pid)
-  console.log(`Stopped ${serverLabel(server)} (pid ${server.pid}, ${server.url}).`)
+  const outcome = await stopServer(server)
+  console.log(`Stopped ${serverLabel(server)} (pid ${server.pid}, ${server.url}).${stopNote(server, outcome)}`)
 }
 
 /**
@@ -310,7 +347,8 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
     console.log(scope === 'global' ? 'No running bulb servers.' : `No running ${noun}s for this project.`)
     return
   }
-  await Promise.all(servers.map(s => stopBulbServer(s.pid)))
+  // Same verb as the single stop, so a batch reap closes pages too; a mirror keeps its tab.
+  await Promise.all(servers.map(s => stopServer(s)))
   console.log(`Stopped ${servers.length} ${noun}${servers.length === 1 ? '' : 's'}:`)
   for (const s of servers) console.log(`  ${s.url}  pid ${s.pid}  ${serverLabel(s)}`)
 }

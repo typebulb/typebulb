@@ -5,7 +5,7 @@
  * bundled into the self-contained browser build (TB-Agent-Mirror-Inline.md Invariant 6). Hosts of
  * inline bulbs import this to graduate an inline bulb into its own running server.
  */
-export { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, serverLogPath, type BulbServer } from './serve/serverRegistry.js'
+export { launchBulbServer, listBulbServers, stopBulbServer, stopServer, readServerLog, serverLogPath, type BulbServer, type StopOutcome } from './serve/serverRegistry.js'
 export { listBulbFiles, listBulbBatches, type BulbFileInfo } from './serve/bulbFiles.js'
 export { lastRunTimes } from './serve/portBlocks.js'
 // Proactive trust prediction — scan a bulb for privileged tb.* usage so a host can offer --trust

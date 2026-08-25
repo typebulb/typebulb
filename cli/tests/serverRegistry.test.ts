@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, mkdir, rm, readdir, writeFile, chmod } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
+import * as http from 'http'
 import { listBulbServers, registerServer, stopBulbServer, bulbServerCommand, agentViewerCommand, findProjectViewer, readWaitCursor, writeWaitCursor, serversForBulb, stopServersForBulb, clearServerLog, readServerLog, serverLogPath, runMarker, sliceRunLog, type BulbServer } from '../src/serve/serverRegistry.js'
 import { resolvePort, assignedPortFor, findAvailablePort, lastRunTimes } from '../src/serve/portBlocks.js'
+import { runWeb } from '../src/run/web.js'
+import { parseArgs } from '../src/args.js'
 import { VERSION } from '../src/version.js'
 
 // A pid that cannot be alive: well above any real-world pid space, so process.kill(_, 0)
@@ -164,6 +167,35 @@ describe('serverRegistry', () => {
         await chmod(blockFile, 0o666)
       }
     })
+
+    // A keep is a promise about the bind, so it is kept or the launch aborts (TB-Page-Lifecycle.md).
+    // Keyed off the replace instead of the page, the abort could never fire on the mirror's launch
+    // path, which stops the predecessor in the host process. Real ports, so it sits by the allocator.
+    it('aborts rather than spill off the slot a page may be waiting at', async () => {
+      const proj = path.join(dir, 'promised')
+      await mkdir(proj, { recursive: true })
+      const bulb = path.join(proj, 'kept.bulb.md')
+      await writeFile(bulb, '---\nformat: typebulb/v1\nname: Kept\n---\n')
+      // Claiming the slot is also the "this bulb has run" record the launch reads — exactly what the
+      // host's pre-spawn `assignedPortFor` leaves behind for its child to find.
+      const slot = (await assignedPortFor({ kind: 'bulb', file: bulb }, proj))!
+      const squatter = http.createServer()
+      await new Promise<void>(r => squatter.listen(slot, '127.0.0.1', r))
+
+      const cwd0 = process.cwd()
+      const errs: string[] = []
+      const errSpy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)) })
+      const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
+      process.chdir(proj)   // runWeb reads the project from process.cwd(), as a launched run does
+      try {
+        await expect(runWeb(bulb, parseArgs([bulb, '--no-open']), '', undefined)).rejects.toThrow('exit 1')
+        expect(errs.join('\n')).toContain(`Port ${slot} is this bulb's`)
+      } finally {
+        process.chdir(cwd0)
+        exit.mockRestore(); errSpy.mockRestore()
+        await new Promise<void>(r => squatter.close(() => r()))
+      }
+    }, 20000)
   })
 
   // Self-exclusion (TB-Agent-Mirror.md): the cwd-scoped list — what a launcher's
@@ -300,6 +332,62 @@ describe('serverRegistry', () => {
     } finally {
       child.kill()                                        // reap even on assertion failure
     }
+  })
+
+  // A replace is the same verb, and the reuse port is what decides the predecessor's pages
+  // (TB-Page-Lifecycle.md): kept on the address we are about to take, closed on any other, since we
+  // will never answer there. The disposition is the whole point, so the stub owner records it.
+  describe('the replace predicate — which port decides the predecessor\'s pages', () => {
+    /** An owner that answers `/__stop` and then exits, as a real one does. */
+    async function stubOwner(pid: number) {
+      const seen: Array<{ pages?: string }> = []
+      const srv = http.createServer((req, res) => {
+        let body = ''
+        req.on('data', (d: Buffer) => { body += d })
+        req.on('end', () => {
+          seen.push(JSON.parse(body || '{}'))
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ closed: 1, stuck: 0 }))
+          try { process.kill(pid) } catch { /* already gone */ }
+        })
+      })
+      await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+      return { seen, port: (srv.address() as { port: number }).port, close: () => srv.close() }
+    }
+
+    const replaceWith = async (reusePort: number | undefined, predecessorPort: number) => {
+      const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
+      const stub = await stubOwner(child.pid!)
+      try {
+        const file = path.join(dir, 'replaced.bulb.md')
+        await registerServer({ pid: child.pid!, port: predecessorPort, url: `http://127.0.0.1:${stub.port}`, file, startedAt: 1 })
+        await stopServersForBulb(file, reusePort)
+        return stub.seen
+      } finally { stub.close(); child.kill() }
+    }
+
+    it('keeps the pages of a predecessor on the port we are about to take', async () => {
+      expect(await replaceWith(20101, 20101)).toEqual([{ pages: 'keep' }])
+    })
+
+    it('closes the pages of one anywhere else — we would never answer there', async () => {
+      expect(await replaceWith(20101, 20144)).toEqual([{ pages: 'close' }])
+    })
+
+    it('closes them when there is no assigned slot to promise (an unwritable home)', async () => {
+      expect(await replaceWith(undefined, 20101)).toEqual([{ pages: 'close' }])
+    })
+
+    it('falls back to the kill when nothing answers, and still deregisters', async () => {
+      const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
+      try {
+        const file = path.join(dir, 'wedged.bulb.md')
+        // Port 1 is nothing of ours: the POST fails, so the stop is the kill it falls back to.
+        await registerServer({ pid: child.pid!, port: 20101, url: 'http://127.0.0.1:1', file, startedAt: 1 })
+        await stopServersForBulb(file, 20101)
+        expect(await listBulbServers()).toEqual([])
+      } finally { child.kill() }
+    })
   })
 
   // The one-mirror-per-project dedup (TB-Agent-Mirror.md Invariant 2): a mirror is found by its

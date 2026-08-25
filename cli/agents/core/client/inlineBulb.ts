@@ -1,6 +1,7 @@
 import { Component, div, button } from 'domeleon'
 import { createBulbFrame, stripFrontmatter, bulbName, validateBulbStructure } from '../../../src/render.js'
 import { mdPlain } from './markdown.js'
+import { openBulbPage } from './ui.js'
 
 // A live ````bulb```` inline bulb: a sandboxed nested app plus its controls. createBulbFrame (the
 // typebulb package) compiles the source into an auto-sizing iframe and owns sandbox policy,
@@ -180,10 +181,14 @@ export class InlineBulb extends Component {
     this.#breakoutState = 'busy'
     this.update()
     try {
-      const { file, pid } = await tb.server.breakout(this.#source)
+      const { file, pid, url } = await tb.server.breakout(this.#source)
       this.#breakoutResult = `launched ${file}`
+      // The point of breaking out is the tier the iframe denies (storage, workers, the GPU), so the
+      // gesture ends on the page that has it — the same open a play click makes. The inline copy
+      // stays as transcript.
+      if (url) openBulbPage(url)
       // breakout resolves only once the new server has registered — nudge the launcher now to open with
-      // the new bulb's row spotlit (its green :port link is the user's next click).
+      // the new bulb's row spotlit, where its trust toggle, logs and stop live.
       window.dispatchEvent(new CustomEvent('tb-breakout', { detail: { pid } }))
     } catch (err) {
       this.#breakoutResult = 'breakout failed'

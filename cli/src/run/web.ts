@@ -7,9 +7,10 @@ import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir, conventio
 import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import { startAndRegister } from '../serve/serveSession.js'
-import { resolvePort, lastRunTimes } from '../serve/portBlocks.js'
+import { resolvePort, lastRunTimes, assignedPortFor } from '../serve/portBlocks.js'
 import { watchPath } from '../serve/watcher.js'
 import { startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
+import { bulbStreamKey } from '../serve/paths.js'
 import { RECONNECT_WINDOW_MS } from '../bulb/pageChrome.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
@@ -20,6 +21,15 @@ import { type ResolvedLocalOverride } from '../localOverride.js'
  * local to this function. Runs until SIGINT/SIGTERM.
  */
 export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string, local: ResolvedLocalOverride | undefined): Promise<void> {
+  // A bulb has one address, and nothing typebulb does moves it (TB-Page-Lifecycle.md, invariant 1).
+  // A flag whose whole effect is to move one cannot coexist with that, and a warning is not a
+  // mechanism: it is what turned an orphaned page into a second live run of the same bulb.
+  if (args.port !== undefined) {
+    console.error("--port isn't supported when running a bulb: a bulb keeps its assigned project port across runs, and moving it strands the open tab.")
+    console.error('It applies to `typebulb agent`. Run the bulb with no --port; `typebulb logs` prints the URL it kept.')
+    process.exit(1)
+  }
+
   // Use current working directory as base for filesystem operations
   const basePath = process.cwd()
 
@@ -31,34 +41,48 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Set up reload emitter for watch mode
   const reloadEmitter = args.watch ? new EventEmitter() : undefined
 
-  // The `typebulb send` channel — created regardless of watch (send must work under --no-watch too).
-  // One listener per connected page; uncapped so many tabs don't trip Node's default 10-listener warning.
-  const messageEmitter = new EventEmitter()
-  messageEmitter.setMaxListeners(0)
-
   // Load the cwd .env cascade before loadAndCompile — it imports server.ts, which reads
   // process.env at import time (TB-Env.md). Report after, once the bulb is read.
   const envResult = loadEnv(args.mode)
 
+  // Read FIRST: the slot assignment is what writes this record, so anything that touches the slot
+  // erases the answer it was about to give (TB-Page-Lifecycle.md, the open half). Whether a tab from
+  // an earlier run may still be reaching for its address is what the hand-over below watches for.
+  const priorRun = (await lastRunTimes(process.cwd()))(bulbPath)
+
+  // The address we are about to take, and therefore what happens to a predecessor's pages: kept on
+  // this same port (the tab reattaches to us and reloads on the new boot id), closed anywhere else
+  // (we would never answer there). TB-Page-Lifecycle.md, A replace is the same verb.
+  const reusePort = await assignedPortFor({ kind: 'bulb', file: bulbPath }, process.cwd())
+
   // One server per bulb file — a launch replaces, never stacks (TB-CLI.md). Stopping the
   // predecessor before the compile gives its port time to free, so the replacement often
   // lands on the same port and an old tab's reload reconnects.
-  const replaced = await stopServersForBulb(bulbPath)
+  const replaced = await stopServersForBulb(bulbPath, reusePort)
   if (replaced.length) console.log(`Replacing the running server for this bulb (pid ${replaced.map(s => s.pid).join(', ')})`)
 
-  // Read before resolvePort refreshes the slot's usedAt: whether a tab from an earlier run may still
-  // be retrying its stream is what the hand-over below watches for.
-  const priorRun = (await lastRunTimes(process.cwd()))(bulbPath)
+  // May a page of this bulb's still be reaching for its slot? A live predecessor's tab, or one from a
+  // run inside RECONNECT_WINDOW_MS. Decides the bind rule below and the hand-over's settle window.
+  const mayHaveTab = replaced.length > 0 || Date.now() - priorRun < RECONNECT_WINDOW_MS
 
   // The project block's sticky slot for this bulb (TB-CLI.md, Port allocation) — the same port every
   // run, so the replace above cannot move the URL out from under the user's open tab. Resolved right
   // after stopping the predecessor (which frees the slot to reclaim) and before the compile, so an
   // explicit `--port` that's taken fails immediately instead of after a build's worth of output.
   const { port: assignedPort, note: portNote } = await resolvePort({
-    explicit: args.port,
     target: { kind: 'bulb', file: bulbPath },
     cwd: process.cwd(),
   })
+
+  // A keep is a promise about the bind, so it is kept or the launch aborts (TB-Page-Lifecycle.md):
+  // landing off the slot leaves any page there reaching for an address nothing will answer, its owner
+  // already gone. Keyed on `mayHaveTab`, NOT on `replaced` — the mirror's launcher stops the
+  // predecessor in the host process, so this child never sees one and would always spill.
+  if (reusePort !== undefined && assignedPort !== reusePort && mayHaveTab) {
+    console.error(`\nPort ${reusePort} is this bulb's, and a page of it may be waiting there, but something else took it.`)
+    console.error('Free that port and relaunch; starting elsewhere would leave that page running with no way to reach it.')
+    process.exit(1)
+  }
 
   // Run id: run 1 is this process's initial compile, each successful hot reload bumps it. Emitting
   // the marker here (the first teed line) makes all of run 1's output — startup chrome and the bulb's
@@ -110,7 +134,9 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       fsBase: bulbDataDir(bulbPath, args.batch),
       port,
       reloadEmitter,
-      messageEmitter,
+      // The `typebulb send` channel, on regardless of watch (send must work under --no-watch too).
+      // Delivery fans out over the server's page set, which is also the count send reports.
+      sendChannel: true,
       getServerExports: () => serverExports,
       getBulbBlocks: () => ({ infer: bulb.infer, insight: bulb.insight, code: bulb.code, config: bulb.config, data: bulb.data }),
       // "Save to bulb" (TB-Inference.md): promote a run from runtime state to source. Surgical
@@ -126,10 +152,15 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       bulbAssets: { dirs: assetsDirs, remoteBase: identity && hostedAssetsBase(identity.userSlug, identity.slug) },
       // Backs the page's source map: devtools fetches the bulb itself from /__source/.
       sourceFile: bulbPath,
+      // Which bulb this address serves, checked against what a reattaching page announces
+      // (TB-Page-Lifecycle.md, invariant 1).
+      bulbKey: bulbStreamKey(bulbPath),
       trusted: args.trust,
       trustHint,
     }),
     makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, batch: args.batch, mode: args.mode, predicted }),
+    // The wait a launch that opened no page names (TB-Page-Lifecycle.md).
+    waitTarget: path.relative(process.cwd(), bulbPath) || path.basename(bulbPath),
   })
 
   if (args.trust) console.log('  trust: granted (filesystem, AI, server.ts enabled)')
@@ -163,14 +194,16 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
             html = result.html
             serverExports = result.serverExports
             bulb = result.bulb
-            // New run boundary (only on a successful recompile — a compile error keeps the old run
-            // live). Marks where the reloaded code's output begins, for `typebulb logs --run`.
-            runId++
-            console.log(runMarker(runId))
+            // New run boundary only on a successful build. A build failure still reloads — the page
+            // must carry the reason (TB-Interrogation.md) — but opens no run: its error line closes
+            // the current run's slice, so `logs --run latest` ends with it (TB-CLI.md § Build failures).
+            if (!result.buildError) { runId++; console.log(runMarker(runId)) }
             // Signal browser to reload
             reloadEmitter.emit('reload')
           } catch (e) {
-            console.error('Compile error:', e)
+            // Not a build failure (those return a page): the file was unreadable mid-write, or the
+            // like. The previous build stays up; the next settled change retries.
+            console.error('Recompile failed:', e)
           }
         })
       },
@@ -217,9 +250,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   onCleanup(() => fs.rm(serverModulePath(bulbPath), { force: true }))
 
   // Hand over the URL (TB-CLI.md, TB-VSCode-Browser.md). A tab from an earlier run may still be
-  // retrying its stream — a live predecessor's, or a dead one's within the page's reconnect window —
-  // and reloads itself once it reattaches (the boot-id check), so the hand-over waits for it unless
-  // this bulb is fresh.
-  const mayHaveTab = replaced.length > 0 || Date.now() - priorRun < RECONNECT_WINDOW_MS
+  // retrying its stream (`mayHaveTab`, decided above with the bind rule) and reloads itself once it
+  // reattaches (the boot-id check), so the hand-over waits for it unless this bulb is fresh.
   await handOver({ mode: args.open, fresh: !mayHaveTab, replacedLive: replaced.some(s => s.port === port) })
 }

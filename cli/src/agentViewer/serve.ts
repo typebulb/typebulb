@@ -96,6 +96,9 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     portNote,
     displayName,
     stopLog,
+    // The wait this launch names if it opens no page. That it is a viewer (keeps its pages, its own
+    // no-page wording) follows from the `agent` on its entry below.
+    waitTarget: 'agent',
     makeServerOptions: (port) => ({
       getHtml,
       basePath,

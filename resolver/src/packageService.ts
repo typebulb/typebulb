@@ -77,8 +77,8 @@ export class PackageService {
   }
 
   /** Resolution is `resolveExactForRoot`'s pipeline or a clear failure — never an unpinned range.
-   *  (Its final step already probes esm.sh, exact-version-guarded, so a registry outage still
-   *  resolves when the CDN redirect names an exact version.) */
+   *  (Its final esm.sh probe counts only when the response URL names an exact in-range version;
+   *  current esm.sh answers 200 with `X-Esm-Path` instead, so the version index is the only source.) */
   private async resolveVersion(name: string, ranges: PackageRanges): Promise<string> {
     const range = ranges[name]
     const version = await this.version.resolveExactForRoot(name, range)

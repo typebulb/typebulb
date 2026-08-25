@@ -13,7 +13,6 @@ import { mkdir, readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { typebulbHome, normalizeBulbPath, warnStateDirOnce } from './paths.js'
-import { listBulbServers } from './serverRegistry.js'
 
 /**
  * 20100–21999, one 100-port block per project: 20100 is a project, 20101 and 20102 its first two
@@ -44,6 +43,13 @@ const SPILL_BASE = 23000
  *  and a second harness's mirror counts down from the far end rather than displacing app numbering. */
 const FIRST_BULB_SLOT = 1
 const LAST_SLOT = BLOCK_SIZE - 1
+
+/** How long a launch waits for its OWN slot before concluding somebody else holds it, polled every
+ *  150ms. A replaced predecessor is already dead by then (`stopServer` waits for it), but its socket
+ *  can outlive it for a beat, and the kill fallback does not wait at all. Spilling is no longer a
+ *  shrug: a page may be waiting at that slot, so the launch aborts rather than move
+ *  (TB-Page-Lifecycle.md, A keep is a promise). Four tries at 150ms was not enough. */
+const BIND_WAIT_MS = 3000
 
 interface BlockFile {
   /** The project this block belongs to (normalized). */
@@ -86,8 +92,13 @@ export async function findAvailablePort(from: number): Promise<number> {
 /**
  * The one place a port collision becomes a message. Names the occupant when it's one of ours — the
  * registry is right here, and it is the only moment we can say *which* bulb took it.
+ *
+ * The registry is reached lazily, and deliberately: `serverRegistry` needs `assignedPortFor` to
+ * decide a replaced predecessor's pages (TB-Page-Lifecycle.md), which makes allocation the lower
+ * layer. A static import here would point the edge both ways for one diagnostic.
  */
 export async function reportPortInUse(port: number): Promise<never> {
+  const { listBulbServers } = await import('./serverRegistry.js')
   const holder = (await listBulbServers()).find(s => s.port === port)
   const who = holder ? ` (pid ${holder.pid}, ${holder.agent ? `agent:${holder.agent}` : holder.file})` : ''
   console.error(`port ${port} in use${who}`)
@@ -271,10 +282,11 @@ export async function resolvePort(opts: { explicit?: number; target: PortTarget;
   if (assigned !== undefined) {
     // Recoverable from the port because BAND_START is block-aligned: the remainder IS the slot offset.
     const base = assigned - (assigned % BLOCK_SIZE)
-    for (let attempt = 0; attempt < 4; attempt++) {
+    const deadline = Date.now() + BIND_WAIT_MS
+    do {
       if (await canBind(assigned)) return { port: assigned }
       await new Promise(r => setTimeout(r, 150))
-    }
+    } while (Date.now() < deadline)
     // Somebody else holds our slot: any other free port in the block keeps us inside the project's range.
     for (let offset = FIRST_BULB_SLOT; offset < BLOCK_SIZE; offset++) {
       const port = base + offset

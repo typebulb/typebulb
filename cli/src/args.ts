@@ -38,7 +38,9 @@ export interface CliArgs {
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
    *  target) ensures this project's mirror is up and prints what-to-do guidance. */
   agentTarget?: string
-  /** Explicit `--port` only. Absent means the project block assigns a sticky slot
+  /** Explicit `--port` only, and `typebulb agent`'s alone: a bulb keeps its assigned project port
+   *  across runs, so `runWeb` refuses the flag rather than moving a bulb's address
+   *  (TB-Page-Lifecycle.md, invariant 1). Absent means the project block assigns a sticky slot
    *  (serve/portBlocks.ts) — there is no default port to fall back to. */
   port?: number
   watch: boolean
@@ -454,7 +456,8 @@ Options:
                               Use it right after an edit, and for any send
                               whose reply you read.
   --no-watch                  Disable hot reload (watch is on by default)
-  -p, --port <port>           Bind this exact port (fails if taken; default: the project's assigned slot)
+  -p, --port <port>           For 'agent' only: bind this exact port (fails if taken). A bulb keeps
+                              its assigned project port across runs and cannot be moved.
   --open                      Force a window (default off in VS Code's terminal
                               and agent shells, where the printed link stands):
                               inside VS Code when a page of ours is open there,
@@ -522,7 +525,7 @@ AI API:
 
 Examples:
   typebulb my-editor.bulb.md
-  typebulb --no-watch --port 8080 my-editor.bulb.md
+  typebulb --no-watch my-editor.bulb.md
   typebulb .
 `)
 }

@@ -136,3 +136,44 @@ describe('PackageService.buildImportMap - declared ranges', () => {
     expect(await cache.getPinnedExact('tensorgrad', '^0.4.9')).toBe('0.4.9')
   })
 })
+
+// The window after a release reaches npm and before the CDNs carry it: the cached index is stale,
+// a refetch returns the same stale list, esm.sh has nothing for the range. The bulb's previous
+// range still has its pin. The only acceptable answer is an error, never the previous version.
+describe('PackageService.buildImportMap - a version the CDNs do not have yet', () => {
+  const stale = { versions: ['0.4.9', '0.4.8'], tags: { latest: '0.4.9' } }
+  const code = `import { x } from 'tensorgrad'`
+
+  async function staleCache() {
+    const cache = new FakeCache()
+    await cache.setIndex('tensorgrad', stale.versions, stale.tags)
+    await cache.setPinnedExact('tensorgrad', '^0.4.9', '0.4.9')
+    return cache
+  }
+
+  it('fails rather than serving the previous version', async () => {
+    const cache = await staleCache()
+    const http: HttpClient = {
+      async getJson() { return stale as any },
+      async head() { return undefined }  // esm.sh 404: ky throws, attempt() yields undefined
+    }
+    const service = createResolver(cache, http).packageService
+
+    await expect(service.buildImportMap(code, { tensorgrad: '^0.5.0' })).rejects.toThrow(/Cannot resolve tensorgrad@\^0\.5\.0/)
+    expect(await cache.getPinnedExact('tensorgrad', '^0.5.0')).toBeUndefined()
+  })
+
+  it('refuses a CDN redirect that names a version outside the range', async () => {
+    // Same window, but esm.sh answers the range with the newest version it has. Without the range
+    // guard this pinned `^0.5.0 -> 0.4.9` and served it.
+    const cache = await staleCache()
+    const http: HttpClient = {
+      async getJson() { return stale as any },
+      async head() { return { ok: true, url: 'https://esm.sh/tensorgrad@0.4.9/es2022/tensorgrad.mjs' } }
+    }
+    const service = createResolver(cache, http).packageService
+
+    await expect(service.buildImportMap(code, { tensorgrad: '^0.5.0' })).rejects.toThrow(/Cannot resolve tensorgrad@\^0\.5\.0/)
+    expect(await cache.getPinnedExact('tensorgrad', '^0.5.0')).toBeUndefined()
+  })
+})

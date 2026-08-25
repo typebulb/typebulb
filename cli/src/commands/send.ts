@@ -134,7 +134,9 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   const clients = outcome.clients ?? 0
   const pages = `${clients} page${clients === 1 ? '' : 's'}`
   if (outcome.refused) {
-    console.error(`Actuation needs exactly one connected page; ${pages} are open on ${server.url} — close the extras and retry.`)
+    // Name the reset, not a gesture an agent can't make: it cannot reach into a browser to close a
+    // tab, and `stop` now closes the pages before it goes (TB-Page-Lifecycle.md).
+    console.error(`Actuation needs exactly one connected page; ${pages} are open on ${server.url} — the reset is \`typebulb stop ${file}\` then relaunch.`)
     process.exit(1)
   }
   if (clients === 0) {

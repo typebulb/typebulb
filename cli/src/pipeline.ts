@@ -3,11 +3,13 @@ import * as path from 'path'
 import { pathToFileURL } from 'url'
 import { parseBulb, toLocalBulb, splitIntoChunks, parseConfig, validateBulbStructure, type LocalBulb } from './bulb/bulbParser.js'
 import { transpile } from 'typebulb/transpile'
+import type { ImportMap } from 'typebulb/resolver'
 import { assertDeclaredImports } from './bulb/lintGate.js'
 import { packageService } from './deps/resolver.js'
 import { renderHtml } from './bulb/template.js'
 import { ensureBulbServerPackages, extractServerImports } from './serve/serverDeps.js'
 import { rewriteServerOverrideImports, type ResolvedLocalOverride } from './localOverride.js'
+import { bulbStreamKey } from './serve/paths.js'
 import { installServerTb } from './serve/serverTb.js'
 
 export async function findBulbFile(dir: string): Promise<string | undefined> {
@@ -111,30 +113,38 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   const { bulb, config, starts } = await readBulb(bulbPath)
   const dataChunks = splitIntoChunks(bulb.data)
 
-  // Enforce the CLI's authored-config contract before compiling — every bare client import declared in
-  // config.json `dependencies`, else the import-driven resolver silently CDN-resolves "latest" and the
-  // bulb runs config-less (the GLM incident). See assertDeclaredImports for why only that one rule fires.
-  assertDeclaredImports(bulb.code, config.dependencies ?? {})
+  // Every build failure takes one route: the page still serves, with no code and the reason in
+  // __TB_COMPILE_ERROR__ (TB-CLI.md § Build failures). Throwing here instead left the watcher serving
+  // the previous build and killed a launched child before it registered. First failure wins; each
+  // later stage needs what the earlier one produces.
+  let buildError: string | undefined
+  const fail = (e: unknown) => { buildError ??= e instanceof Error ? e.message : String(e) }
+
+  // The CLI's authored-config contract: every bare client import declared in config.json
+  // `dependencies`, else the import-driven resolver silently CDN-resolves "latest" and the bulb runs
+  // config-less (the GLM incident). See assertDeclaredImports for why only that one rule fires.
+  try { assertDeclaredImports(bulb.code, config.dependencies ?? {}) } catch (e) { fail(e) }
 
   // Compile TypeScript
-  const compileResult = transpile(bulb.code, {
-    jsxImportSource: config.ts?.jsxImportSource,
-  })
-
-  if (compileResult.error) {
-    console.error('Compilation error:', compileResult.error)
-  }
+  const compileResult = transpile(bulb.code, { jsxImportSource: config.ts?.jsxImportSource })
+  if (compileResult.error) fail(compileResult.error)
 
   // Build import map using full resolver (peer deps, singletons, shared deps).
   // When overriding a package, skip resolving it on the CDN: its declared
   // version may be unpublished (a range like ^0.3.0 then throws), and even when
   // it does resolve we'd only discard the result for the shadow below. The rest
   // of the graph is unaffected — the override is self-contained (Invariant 6).
-  const { importMap } = await packageService.buildImportMap(
-    compileResult.code,
-    config.dependencies ?? {},
-    local ? new Set([local.name]) : undefined,
-  )
+  let importMap: ImportMap = { imports: {} }
+  if (!buildError) {
+    try {
+      ({ importMap } = await packageService.buildImportMap(
+        compileResult.code,
+        config.dependencies ?? {},
+        local ? new Set([local.name]) : undefined,
+      ))
+    } catch (e) { fail(`Dependency resolution failed: ${e instanceof Error ? e.message : String(e)}`) }
+  }
+  if (buildError) console.error('Build error:', buildError)
 
   // Shadow exactly one import-map entry with the local override (Invariant 5).
   // routeImportsThroughProxy only rewrites https:// values, so this local URL
@@ -153,7 +163,7 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
   // hint rides in the response body), so a denied capability stays actionable without a frame.
   const html = renderHtml({
     name: bulb.name,
-    code: compileResult.code,
+    code: buildError ? '' : compileResult.code,
     css: bulb.css,
     html: bulb.html,
     data: dataChunks,
@@ -163,9 +173,11 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     watch,
     // The served script speaks this file's coordinates (TB-CLI.md, One coordinate space).
     source: { file: path.basename(bulbPath), codeLine: starts.get('code.tsx') ?? 1 },
-    // A failed compile still serves a page, so the page must carry the reason: it renders
+    // Which bulb this page is, for its stream to announce (TB-Page-Lifecycle.md, invariant 1).
+    bulbKey: bulbStreamKey(bulbPath),
+    // A failed build still serves a page, so the page must carry the reason: it renders
     // nothing, and every `tb:` read would otherwise report an empty room (TB-Interrogation.md).
-    compileError: compileResult.error ? String(compileResult.error) : undefined,
+    compileError: buildError,
   })
 
   // Env is already loaded into process.env by the caller (index.ts runWeb/runConsole) from the
@@ -181,5 +193,5 @@ export async function loadAndCompile(bulbPath: string, watch: boolean, trusted: 
     serverExports = await importServerModule(bulb.server, bulbPath, local, config.dependencies, batch)
   }
 
-  return { html, bulb, serverExports }
+  return { html, bulb, serverExports, buildError }
 }

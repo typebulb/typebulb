@@ -6,7 +6,7 @@
  *   typebulb .                      Find and run .bulb.md in current directory
  *   typebulb check <file>           Type-check a bulb without running it
  *   typebulb --no-watch <file>      Disable hot reload
- *   typebulb --port 3333 <file>     Use a specific port
+ *   typebulb agent --port 3333      Bind the mirror to a specific port (bulbs keep their own)
  *   typebulb --no-open <file>       Don't auto-open browser
  *   typebulb --server <file>        Run server.ts only, no web server
  *   typebulb --replace <name>=<path> Replace one dependency with a local build

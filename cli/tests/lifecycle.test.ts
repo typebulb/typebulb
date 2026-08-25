@@ -3,8 +3,9 @@ import { mkdtemp, rm, readdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
+import * as http from 'http'
 import { registerServer, type BulbServer } from '../src/serve/serverRegistry.js'
-import { runLogs, runStopScope } from '../src/commands/lifecycle.js'
+import { runLogs, runStop, runStopScope } from '../src/commands/lifecycle.js'
 import { VERSION } from '../src/version.js'
 
 // `runStopScope` really SIGTERMs each matched pid, so the test registers pids that are safe to kill —
@@ -176,5 +177,81 @@ describe('the server listing marks a stale runtime (TB-CLI.md, server lifecycle 
     const text = await listing()
     expect(text).toContain('STALE runtime v0.0.0-alpha')
     expect(text).toContain(`this CLI is v${VERSION}`)
+  })
+})
+
+// "Stopped" asserts an intention, and an intention carries the observation behind it
+// (TB-Page-Lifecycle.md, invariant 4): the line says what happened to the pages, and a forced stop
+// says it could not tell.
+describe('runStop reports what the stop observed', () => {
+  let dir: string
+  const kids: ChildProcess[] = []
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'tb-stop-'))
+    process.env.TYPEBULB_SERVERS_DIR = dir
+  })
+  afterEach(async () => {
+    delete process.env.TYPEBULB_SERVERS_DIR
+    for (const k of kids) { try { if (k.pid) process.kill(k.pid) } catch { /* already gone */ } }
+    kids.length = 0
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  /** An owner that answers `/__stop` with a page count and then exits, as a real one does. */
+  async function stubOwner(pid: number, answer: { closed: number; stuck: number }) {
+    const srv = http.createServer((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(answer))
+        try { process.kill(pid) } catch { /* already gone */ }
+      })
+    })
+    await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+    return { port: (srv.address() as { port: number }).port, close: () => srv.close() }
+  }
+
+  const stopAndRead = async (url: string, pid: number, version = VERSION) => {
+    const file = path.join(process.cwd(), 'stopped.bulb.md')
+    await registerServer({ pid, port: 20101, url, file, cwd: process.cwd(), startedAt: 1, version })
+    const out: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { out.push(String(m)) })
+    try { await runStop(file) } finally { log.mockRestore() }
+    return out.join('\n')
+  }
+
+  it('names the pages it closed', async () => {
+    const child = spawnSleeper(); kids.push(child)
+    const stub = await stubOwner(child.pid!, { closed: 2, stuck: 0 })
+    try {
+      expect(await stopAndRead(`http://127.0.0.1:${stub.port}`, child.pid!)).toContain('closed 2 pages')
+    } finally { stub.close() }
+  })
+
+  it('names the page that would not go', async () => {
+    const child = spawnSleeper(); kids.push(child)
+    const stub = await stubOwner(child.pid!, { closed: 0, stuck: 1 })
+    try {
+      expect(await stopAndRead(`http://127.0.0.1:${stub.port}`, child.pid!)).toContain('1 did not close')
+    } finally { stub.close() }
+  })
+
+  it('says it was forced when nothing answered — the one stop that cannot make the claim', async () => {
+    const child = spawnSleeper(); kids.push(child)
+    const line = await stopAndRead('http://127.0.0.1:1', child.pid!)
+    expect(line).toContain('forced')
+    expect(line).toContain('it did not answer')
+    expect(line).toContain('may still be open')
+    expect(await until(() => !isAlive(child.pid!))).toBe(true)
+  })
+
+  // A forced stop names its cause where the registry knows it: a runtime older than this CLI has no
+  // stop route to answer with, so "it did not answer" would read as a wedged server (Reporting).
+  it('names the runtime skew when that is why nothing answered', async () => {
+    const child = spawnSleeper(); kids.push(child)
+    const line = await stopAndRead('http://127.0.0.1:1', child.pid!, '0.0.0-alpha')
+    expect(line).toContain('its runtime v0.0.0-alpha predates the stop route')
+    expect(await until(() => !isAlive(child.pid!))).toBe(true)
   })
 })

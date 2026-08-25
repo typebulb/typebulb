@@ -62,12 +62,6 @@ function isVsCodeUserAgent(ua: string | undefined): boolean {
   return !!ua && /\bCode\/\d/.test(ua) && /\bElectron\//.test(ua)
 }
 
-/** The note a yielded page parks on when its browser refuses a script the close (TB-VSCode-Browser.md,
- *  one CLI-opened page). The link reopens the bulb as the user's own page: no fragment, so no yielding. */
-const PARKED_PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>typebulb</title>
-<style>body{font:15px system-ui,sans-serif;margin:0;padding:32px;color:CanvasText;background:Canvas;color-scheme:light dark}a{color:inherit}</style></head>
-<body><p>This bulb was already open in another tab, so this one stepped aside.</p><p><a href="/">Open it here too</a></p></body></html>`
-
 /** Does `origin` address the exact host:port given by the request's `Host` — i.e. the
  *  page's *own* origin? This is the only origin allowed to reach a privileged endpoint
  *  when `Sec-Fetch-Site` is absent. Matching against `Host` tracks whichever local name
@@ -93,12 +87,13 @@ export interface ServerOptions {
   fsBase?: string
   port: number
   reloadEmitter?: EventEmitter
-  /** Carries `typebulb send` pushes to connected pages as `message` SSE events (TB-CLI.md).
-   *  Created unconditionally by the web runner (unlike `reloadEmitter`, which is watch-only) so
-   *  send works even under `--no-watch`. Each connected page adds one `message` listener, so its
-   *  `listenerCount('message')` is the count `/__send` reports back. Each event is an
-   *  `{ id?, payload }` envelope; `id` is present only when the sender awaits replies. */
-  messageEmitter?: EventEmitter
+  /** Does this server carry the `typebulb send` channel (TB-CLI.md)? Set unconditionally by the web
+   *  runner (unlike `reloadEmitter`, which is watch-only) so send works even under `--no-watch`; the
+   *  mirror sets nothing. The pushes ride each page's own stream as `message` SSE events carrying an
+   *  `{ id?, payload }` envelope (`id` only when the sender awaits replies), fanned out over the
+   *  page set — which is therefore both the delivery list and the count `/__send` reports, one fact
+   *  with one spelling (TB-Page-Lifecycle.md, invariant 6). */
+  sendChannel?: boolean
   getServerExports?: () => Record<string, Function> | undefined
   /** The bulb's raw block sources for `tb.infer()` prompt building (TB-Inference.md): `code` is
    *  the TSX source, not transpiled output. A closure over the latest compile, like
@@ -131,6 +126,12 @@ export interface ServerOptions {
   /** The `.bulb.md` this page was compiled from. Served read-only at `/__source/…` so devtools can
    *  fetch the file the page's source map points at (TB-CLI.md, One coordinate space). */
   sourceFile?: string
+  /** Which bulb this server serves (`bulbStreamKey`, serve/paths.ts — the why is there). A page
+   *  announcing another's is declined `close: foreign`. Absent (the mirror, tests) ⇒ never checked. */
+  bulbKey?: string
+  /** Run when `/__stop` is accepted: the owner's ordinary cleanup, which exits the process. Called
+   *  after the response flushes, so the caller reads the observed page count first. */
+  onStop?: (opts: { pages: 'close' | 'keep' }) => void | Promise<void>
 }
 
 export interface ServerInstance {
@@ -138,7 +139,14 @@ export interface ServerInstance {
   close: () => void
   /** Have a page for this server, where the agent mirror is (TB-VSCode-Browser.md). See requestPage. */
   requestPage: (opts: PageRequest) => Promise<PageOutcome>
+  /** Tell every page to go and wait to SEE it (TB-Page-Lifecycle.md). Cleanup's first step, so a
+   *  Ctrl-C, a POSIX signal and `/__stop` all dispose of the pages by one path. Never throws. */
+  closePages: (reason: PageCloseReason) => Promise<{ told: number; gone: number }>
 }
+
+/** Why a page was told to go. One event, one vocabulary (invariant 6): another page was already
+ *  here, the owner is leaving, or this address serves a different bulb now. */
+export type PageCloseReason = 'yielded' | 'stopped' | 'foreign'
 
 export interface PageRequest {
   /** May the CLI open the external browser when no page of ours is inside VS Code to relay through?
@@ -162,18 +170,16 @@ export type PageOutcome =
 export const RELOAD_SETTLE_MS = 3000
 /** An opened page has this long to attach; until then a second request is answered "pending". */
 export const PAGE_ARRIVAL_MS = 10000
-/** A page the CLI opened (the relay, or the external browser) yields to any other page of this
- *  server's for this long after its first attach — the returning tab the launch guessed wrong about,
- *  a user's own click — after which it is the user's page like any other (TB-VSCode-Browser.md, one
- *  CLI-opened page). */
-const RELAY_PROVISIONAL_MS = 10000
 /** A request that found nothing to open through is answered "none" for this long before asking the
  *  registry again — off the 150ms retry cadence, but quick to notice a mirror the user just opened. */
 const RELAY_RETRY_MS = 2000
+/** How long a stop waits to SEE the pages it told to go. Against the page's own ~300ms ladder
+ *  (window.close, then the note), with headroom for a background tab whose timers are throttled. */
+export const PAGE_CLOSE_WAIT_MS = 2500
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
-  const { getHtml, basePath, fsBase, port, reloadEmitter, messageEmitter, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets, bulbAssets, sourceFile } = options
+  const { getHtml, basePath, fsBase, port, reloadEmitter, sendChannel, getServerExports, getBulbBlocks, saveInferenceResult, localOverride, trusted = false, trustHint, staticAssets, bulbAssets, sourceFile, bulbKey, onStop } = options
 
   // Identifies THIS server instance to a connected page: a replace hands our port to a successor, and
   // the id changing across a reconnect is how the page knows to reload rather than resume. Per
@@ -294,31 +300,59 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
    *  stale", which is the whole diagnosis when a send finds nobody home. */
   let lastPageDropAt = 0
   /** The pages attached right now, one per event stream, with whether VS Code's integrated browser
-   *  renders each (its UA says so): the footholds `/__open` relays through. */
-  const pages = new Set<{ inEditor: boolean; doc?: string; open: (url: string) => Promise<void>; yield: () => Promise<void> }>()
-  /** When each CLI-opened document first attached, by the id its shim announces (`/__reload?relay=<id>`):
-   *  what makes a page provisional (RELAY_PROVISIONAL_MS), and what keeps a same-document reconnect from
-   *  counting as a fresh arrival. One entry per relayed open, kept for the server's life. */
-  const relayDocs = new Map<string, number>()
+   *  renders each (its UA says so): the footholds `/__open` relays through. This is the ONE page
+   *  count (invariant 6) — `/__send` reports it, `/__open` answers with it, `/__pages` prints it. */
+  type Page = {
+    inEditor: boolean
+    doc?: string
+    open: (url: string) => Promise<void>
+    send: (envelope: { id?: number; payload: string }) => Promise<void>
+    close: (reason: PageCloseReason) => Promise<void>
+  }
+  const pages = new Set<Page>()
+  /** Pages told to go and not yet seen to. They stop counting the moment they are told (they must not
+   *  receive a later send, nor hold up a solo actuation) but a stop reports only what it observed, so
+   *  a page leaves this set when its stream aborts — the tab closing or navigating to the note. */
+  const closing = new Set<Page>()
+  /** Bulb keys already declined here (below). The departure is said once per stranger, not on every
+   *  reconnect of a page that could not navigate to its note — it retries forever now. */
+  const declined = new Set<string>()
+  /** Every CLI-opened document seen here, by the id its shim announces (`/__reload?relay=<id>`).
+   *  Membership is what tells a first arrival from a reconnect of a page already here — a hot
+   *  reload's drop-and-reattach must not read as a newcomer. Kept for the server's life. */
+  const relayDocs = new Set<string>()
   const bootAt = Date.now()
 
-  // One CLI-opened page (TB-VSCode-Browser.md): on every attach, with more than one page here, each
-  // still-provisional page yields — closes itself, or parks — keeping whichever page we did NOT open
-  // (the returning tab the launch guessed wrong about, the user's own click), or between provisional
-  // pages the earliest. The count is the fact; the launch's settle window is only the polish that
-  // usually stops the second tab opening at all.
-  const firstAttach = (p: { doc?: string }) => relayDocs.get(p.doc ?? '') ?? 0   // 0: not ours, never provisional
-  const yieldProvisional = () => {
-    if (pages.size < 2) return
-    const now = Date.now()
-    const provisional = [...pages].filter(p => now - firstAttach(p) < RELAY_PROVISIONAL_MS)
-    const keep = pages.size > provisional.length ? undefined
-      : provisional.sort((a, b) => firstAttach(a) - firstAttach(b))[0]
-    for (const p of provisional) {
-      if (p === keep) continue
-      console.log('[page] yielded: another page was already open')
-      p.yield().catch(() => { /* the stream may already be gone */ })
+  /**
+   * One CLI-opened page (TB-VSCode-Browser.md). **Only the newcomer ever yields**, and only on its
+   * FIRST attach: a page that is already here is the user's — whatever opened it — so a second view
+   * arriving never takes it away. That asymmetry is the whole rule. It gives both halves of what a
+   * user means: a mirror gesture (play, the `:port` link) opens through the relay's URL, so a
+   * duplicate steps aside and the launcher can never stack; a tab the user makes by hand and pastes
+   * into announces no relay id, so it neither yields nor evicts, and two views is simply two views.
+   * A reconnect (hot reload, a blip) is not a first attach and is exempt.
+   */
+  const yieldArrival = (page: Page, firstAttach: boolean) => {
+    if (!firstAttach || pages.size < 2) return
+    page.close('yielded').catch(() => { /* the stream may already be gone */ })
+  }
+
+  /**
+   * Tell every page to go, then wait to see it happen (TB-Page-Lifecycle.md, Observed not asserted).
+   * The page does not close its own stream, so a stream still attached when the wait elapses is a
+   * page that did not go, and is reported as one. Returns how many were told and how many were seen.
+   */
+  const closePages = async (reason: PageCloseReason): Promise<{ told: number; gone: number }> => {
+    const targets = [...pages]
+    if (!targets.length) return { told: 0, gone: 0 }
+    await Promise.all(targets.map(p => p.close(reason).catch(() => { /* the stream may already be gone */ })))
+    const deadline = Date.now() + PAGE_CLOSE_WAIT_MS
+    while (targets.some(p => closing.has(p)) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 50))
     }
+    const gone = targets.filter(p => !closing.has(p)).length
+    for (const p of targets) closing.delete(p)   // give up watching; the count already says what happened
+    return { told: targets.length, gone }
   }
   /** The last ask that got as far as the relay, and whether it produced a page: which of the two
    *  windows below applies (the arrival one, or the short don't-re-ask one). */
@@ -356,7 +390,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     return { how: 'none' }
   }
 
-  if (messageEmitter) {
+  if (sendChannel) {
     /** One held `/__send?reply` awaiting its pages' `/__send-reply` POSTs. */
     type PendingSend = { expected: number; received: number; results: string[]; errors: string[]; finish: (timedOut: boolean) => void }
     let sendSeq = 0
@@ -366,7 +400,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       let payload = ''
       try { payload = await c.req.text() } catch { /* empty body ⇒ a bare trigger */ }
       const replyMs = Number(c.req.query('reply')) || 0
-      const clients = messageEmitter.listenerCount('message')
+      const clients = pages.size
       // With nobody listening, report WHICH nothing this is: a bulb never opened, or a page that was
       // here until seconds ago and hasn't come back — a stale tab the user is looking at right now.
       // "No page connected" is true for both and useless for either (TB-CLI.md, observed state).
@@ -385,8 +419,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // Nobody listening: never emit. `clients` was read before requestPage's await, and a page that
       // attached during it would run this payload AND the sender's retry — a tb:click fired twice.
       if (clients === 0) return c.json(status)
+      // Fanned out over the page set itself: the list we deliver to IS the count we just reported.
+      const fanOut = (envelope: { id?: number; payload: string }) => {
+        for (const p of pages) p.send(envelope).catch(() => { /* a page leaving mid-send */ })
+      }
       if (replyMs <= 0) {
-        messageEmitter.emit('message', { payload })
+        fanOut({ payload })
         return c.json(status)
       }
       const id = ++sendSeq
@@ -401,7 +439,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         }
         const timer = setTimeout(() => entry.finish(true), replyMs)
         pendingSends.set(id, entry)
-        messageEmitter.emit('message', { id, payload })
+        fanOut({ id, payload })
       })
       return c.json({ clients, ...outcome })
     })
@@ -777,44 +815,60 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // and `message` (`typebulb send`). The page's shim opens this whenever it's served by the dev
   // server. Registered if either channel is active. A message rides its `{ id?, payload }` envelope
   // JSON-encoded on the wire so a multi-line value can't break SSE's line framing; the shim decodes it.
-  if (reloadEmitter || messageEmitter) {
+  if (reloadEmitter || sendChannel) {
     app.get('/__reload', (c) => {
       return streamSSE(c, async (stream) => {
+        // Which bulb the page thinks it is at (`bulbStreamKey`): adopting a stranger would count,
+        // report and reuse someone else's page as ours.
+        const claimed = c.req.query('bulb') || undefined
+        if (bulbKey && claimed && claimed !== bulbKey) {
+          if (!declined.has(claimed)) { declined.add(claimed); console.log('[page] closed: foreign') }
+          await stream.writeSSE({ event: 'close', data: 'foreign' })
+          return
+        }
         const onReload = () => { stream.writeSSE({ event: 'reload', data: '' }) }
-        const onMessage = (envelope: { id?: number; payload: string }) => { stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }) }
         reloadEmitter?.on('reload', onReload)
-        messageEmitter?.on('message', onMessage)
-        // One detach for both exits — the page leaving, or being told to yield — so a yielded page
+        // One detach for both exits — the page leaving, or being told to go — so a page told to go
         // stops counting (and receiving sends) before its tab has actually closed. Returns whether
         // the page was still here; removeListener is a no-op the second time.
         const detach = () => {
           reloadEmitter?.removeListener('reload', onReload)
-          messageEmitter?.removeListener('message', onMessage)
           return pages.delete(page)
         }
         const doc = c.req.query('relay') || undefined
-        const page = {
+        const page: Page = {
           inEditor: isVsCodeUserAgent(c.req.header('user-agent')),
           doc,
           open: (url: string) => stream.writeSSE({ event: 'open-url', data: url }),
-          yield: () => { detach(); return stream.writeSSE({ event: 'yield', data: '' }) },
+          // A `typebulb send` push, envelope JSON-encoded so a multi-line value cannot break SSE's
+          // line framing (the shim decodes it).
+          send: (envelope) => stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }),
+          // Told to go: stop counting at once, then watch for the stream to drop as the tab closes
+          // or navigates. One departure event for every reason (invariant 6).
+          close: (reason: PageCloseReason) => {
+            if (detach()) closing.add(page)
+            console.log(`[page] closed: ${reason}`)
+            return stream.writeSSE({ event: 'close', data: reason })
+          },
         }
-        if (doc && !relayDocs.has(doc)) relayDocs.set(doc, Date.now())
+        const firstAttach = !!doc && !relayDocs.has(doc)
+        if (doc) relayDocs.add(doc)
         pages.add(page)
         // A page attached where none was — the arrival wake (TB-Wait.md, "who speaks"): an agent
         // that needs a live page ends its turn with the link and a background
         // `wait --match "[page] connected"` armed; the user opening the page is the wake, never a
         // popped window. 0→1 only, so extra tabs don't re-fire; a hot reload's drop-and-reattach
         // re-logs, symmetric with the run markers.
-        if (messageEmitter && pages.size === 1) console.log('[page] connected')
-        yieldProvisional()
+        if (sendChannel && pages.size === 1) console.log('[page] connected')
+        yieldArrival(page, firstAttach)
         stream.onAbort(() => {
-          if (!detach()) return   // already yielded: not a departure
+          closing.delete(page)    // seen to go, which is what a stop's count reports
+          if (!detach()) return   // already told to go: not a departure
           const dropAt = lastPageDropAt = Date.now()
           // The departure line, the arrival's twin: only once the settle window passes with no page
           // back (a hot reload's drop-and-reattach stays silent), and only for the LAST page. A
           // page-driven run whose tab closed is otherwise a log that just stops (TB-Wait.md).
-          setTimeout(() => { if (pages.size === 0 && lastPageDropAt === dropAt && messageEmitter) console.log('[page] disconnected') }, RELOAD_SETTLE_MS).unref()
+          setTimeout(() => { if (pages.size === 0 && lastPageDropAt === dropAt && sendChannel) console.log('[page] disconnected') }, RELOAD_SETTLE_MS).unref()
         })
 
         // Who the page just connected to. A replace hands the same port to a NEW process serving new
@@ -851,10 +905,36 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       return c.json({ opened: !!foothold, pages: pages.size })
     })
 
-    // Where a CLI-opened page parks when it must yield but the browser refuses `window.close()` (a
-    // tab that wasn't script-opened and has history): the bulb stops running there.
-    app.get('/__parked', (c) => c.html(PARKED_PAGE))
   }
+
+  // The off switch, and the only deliberate exit (TB-Page-Lifecycle.md). Registered unconditionally:
+  // stopping is a property of the PROCESS, not of a page channel, and the server that most needs its
+  // cleanup to run is the one with no channels (a `--no-watch` mirror, whose switcher and composer
+  // teardown a Windows kill has never once run). `pages: 'keep'` is a replace handing this address to
+  // a successor the tab will reattach to. It answers with what it OBSERVED before the process exits,
+  // so the caller reports what happened rather than what it asked for.
+  app.use('/__stop', csrfGuard)
+  app.post('/__stop', async (c) => {
+    // The CSRF guard admits the page's own origin, which is right for a data channel and wrong here:
+    // the blast radius is the whole server and no page has a use for it. Anything announcing itself
+    // as a browser is refused; the CLI (no such headers) passes.
+    if (c.req.header('sec-fetch-site') || c.req.header('origin')) return c.text('Forbidden: browser request', 403)
+    // Every caller states it (serverRegistry `stopServer`); closing is the fallback that leaves
+    // nothing running.
+    let disposition: 'close' | 'keep' = 'close'
+    try {
+      const body = await c.req.json<{ pages?: unknown }>()
+      if (body?.pages === 'keep' || body?.pages === 'close') disposition = body.pages
+    } catch { /* no body ⇒ close, above */ }
+    const outcome = disposition === 'close' ? await closePages('stopped') : { told: 0, gone: 0 }
+    // After the response flushes: the count is the caller's, the exit is ours.
+    if (onStop) setTimeout(() => { void onStop({ pages: disposition }) }, 50)
+    return c.json({ closed: outcome.gone, stuck: outcome.told - outcome.gone, exiting: !!onStop })
+  })
+
+  // The page count, for the listing that answers "is this bulb actually running" (`typebulb logs`).
+  // A read of the one count, off the hot path: probed per row by the listing, never by the registry.
+  app.get('/__pages', (c) => c.json({ pages: pages.size }))
 
   // Re-proxy absolute imports an esm.sh module body emits — they resolve against localhost (the
   // page origin) and 404 without this. Which shapes count lives in isEsmAbsoluteImportPath
@@ -890,6 +970,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     port,
     close: () => server.close(),
     requestPage,
+    closePages,
   }
 }
 

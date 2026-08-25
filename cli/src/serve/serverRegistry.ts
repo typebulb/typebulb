@@ -16,6 +16,7 @@ import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 import { serversDir, isUnderProject, normalizeBulbPath, warnStateDirOnce } from './paths.js'
+import { assignedPortFor } from './portBlocks.js'
 import { VERSION } from '../version.js'
 
 export interface BulbServer {
@@ -375,8 +376,11 @@ export async function relayOpen(url: string, cwd: string): Promise<RelayOutcome>
 }
 
 /**
- * Stop a server: SIGTERM (its own cleanup unregisters), then unlink defensively in
- * case it died without cleaning up. Idempotent — stopping an already-gone pid is a no-op.
+ * Kill a server: SIGTERM, then unlink the registry entry. Idempotent — stopping an already-gone pid
+ * is a no-op. This is the FALLBACK, never the route: on Windows SIGTERM is `TerminateProcess`, so
+ * the process runs no cleanup at all — not the page close, not the watcher teardown, not the temp
+ * module removal, not the mirror's switcher/composer shutdown. A deliberate stop goes through
+ * `stopServer` below, which asks the owner over HTTP (TB-Page-Lifecycle.md, invariant 3).
  */
 export async function stopBulbServer(pid: number): Promise<void> {
   try {
@@ -385,6 +389,64 @@ export async function stopBulbServer(pid: number): Promise<void> {
     /* already gone */
   }
   await unregisterServer(pid)
+}
+
+/** What a deliberate stop observed: the pages it saw go and the ones it did not, or that nothing
+ *  answered and the process was killed instead (so a page it opened may still be open). */
+export type StopOutcome = { closed: number; stuck: number } | 'killed'
+
+/** How long a stop waits for the owner's answer, and then for its process to go. Well above the
+ *  server's own page-close drain (server.ts PAGE_CLOSE_WAIT_MS), which the answer comes after; past
+ *  either budget the fallback is the kill. */
+const STOP_WAIT_MS = 6000
+/** A listing's page probe is bounded far tighter: it is one row's detail, and a wedged server must
+ *  never hang the listing an agent reads before launching anything. */
+const PAGE_PROBE_MS = 500
+
+/**
+ * How many pages a server has attached right now, asked over HTTP. A listing's read, never the
+ * registry's: an entry is written once at launch and `listBulbServers` is on hot paths, while a page
+ * count is a live fact. `undefined` for anything that doesn't answer (a runtime older than the route
+ * included), which the listing prints as `?` rather than as a confident zero.
+ */
+export async function pageCount(s: BulbServer): Promise<number | undefined> {
+  try {
+    const resp = await fetch(`${s.url}/__pages`, { signal: AbortSignal.timeout(PAGE_PROBE_MS) })
+    if (!resp.ok) return undefined
+    const { pages } = (await resp.json()) as { pages?: number }
+    return typeof pages === 'number' ? pages : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Stop a server through its owner (TB-Page-Lifecycle.md, The close half): `POST /__stop`, which
+ * disposes of the pages, answers with what it observed, and then exits by the same cleanup path a
+ * Ctrl-C takes. We wait for the process to actually go before reporting it stopped — a successor
+ * needs the port, and "stopped" must mean stopped.
+ *
+ * `pages` defaults by kind: a bulb closes its pages (nothing of it may run after `stop`), a mirror
+ * keeps its tab (the foothold a relaunch reuses) and still gets its cleanup run. A server that
+ * cannot answer (wedged, or a runtime older than the route) falls back to the kill and says so.
+ */
+export async function stopServer(s: BulbServer, pages: 'close' | 'keep' = s.agent != null ? 'keep' : 'close'): Promise<StopOutcome> {
+  try {
+    const resp = await fetch(`${s.url}/__stop`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
+      signal: AbortSignal.timeout(STOP_WAIT_MS),
+    })
+    if (!resp.ok) throw new Error(`/__stop ${resp.status}`)
+    const { closed = 0, stuck = 0 } = (await resp.json()) as { closed?: number; stuck?: number }
+    const deadline = Date.now() + STOP_WAIT_MS
+    while (isAlive(s.pid) && Date.now() < deadline) await delay(100)
+    if (isAlive(s.pid)) { await stopBulbServer(s.pid); return 'killed' }
+    await unregisterServer(s.pid)
+    return { closed, stuck }
+  } catch {
+    await stopBulbServer(s.pid)
+    return 'killed'
+  }
 }
 
 /**
@@ -403,10 +465,16 @@ export function serversForBulb(servers: BulbServer[], file: string): BulbServer[
  * sites make the invariant hold on every route — the web runner at boot (covers a bare
  * terminal run) and launchBulbServer before spawning (so its registration poll can't return
  * the doomed entry). Returns what was stopped so the caller can say so.
+ *
+ * `reusePort` is the address this launch will take, and it is what decides the predecessor's pages
+ * (TB-Page-Lifecycle.md, A replace is the same verb): on the same port they are KEPT, because the
+ * tab reattaches to us and reloads on the new boot id; on any other port they are CLOSED, because
+ * we will never answer there and they would be orphans the moment their owner goes. Unknown (an
+ * unwritable home, so no assigned slot) closes them: we cannot promise an address we don't have.
  */
-export async function stopServersForBulb(file: string): Promise<BulbServer[]> {
+export async function stopServersForBulb(file: string, reusePort?: number): Promise<BulbServer[]> {
   const doomed = serversForBulb(await listBulbServers(), file)
-  for (const s of doomed) await stopBulbServer(s.pid)
+  for (const s of doomed) await stopServer(s, reusePort !== undefined && s.port === reusePort ? 'keep' : 'close')
   return doomed
 }
 
@@ -514,7 +582,9 @@ export async function launchBulbServer(
 ): Promise<BulbServer> {
   const cwd = opts.cwd ?? process.cwd()
   const abs = path.resolve(cwd, file)
-  const [prior] = await stopServersForBulb(abs)
+  // The same replace predicate the terminal run uses, from the same input (TB-Page-Lifecycle.md).
+  const reusePort = await assignedPortFor({ kind: 'bulb', file: abs }, cwd)
+  const [prior] = await stopServersForBulb(abs, reusePort)
   const merged = { ...opts, batch: opts.batch ?? prior?.batch, mode: opts.mode ?? prior?.mode }
   const byFile = async () => serversForBulb(await listBulbServers(), abs)[0]
   return launchDetached(byFile, bulbServerCommand(file, merged), cwd, path.basename(file))

@@ -114,12 +114,18 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
   </script>`
 }
 
-/** How long a page keeps retrying a dead stream (the reconnect window), and the interval between
- *  retries. The server announces the interval on connect (SSE `retry`), so a predecessor's tab
+/** How long a LAUNCH assumes an earlier tab may still be coming back, and the interval between a
+ *  page's retries. The server announces the interval on connect (SSE `retry`), so a predecessor's tab
  *  reattaches to a relaunch inside the server's settle window (server.ts RELOAD_SETTLE_MS), where the
- *  launch hand-over waits for it. */
+ *  launch hand-over waits for it. The window is the launch's alone — the page no longer gives up (the
+ *  backoff below) — and run/web.ts reads it twice: to wait out a returning tab, and to refuse a spill
+ *  off the slot that tab is waiting at. */
 export const RECONNECT_WINDOW_MS = 30 * 60000
 export const RECONNECT_RETRY_MS = 1000
+/** EventSource's own retry covers the seconds a replace takes; past this the page takes over with a
+ *  growing interval of its own, up to RECONNECT_MAX_MS. */
+export const RECONNECT_FAST_MS = 60000
+export const RECONNECT_MAX_MS = 30000
 
 /**
  * The `/__reload` client, shared by the bulb page (`shim.ts`) and the mirror (`agentViewer/page.ts`):
@@ -130,34 +136,53 @@ export const RECONNECT_RETRY_MS = 1000
  * Riding out a drop is the point. A relaunch stops the predecessor, compiles, then binds the same
  * slot, so the stream is down for seconds; closing on the first error leaves a zombie page — stale
  * render, no hot reload, and invisible to `typebulb send`, which counts open streams. EventSource
- * retries on its own, so all we do is bound how long. The window is long (30 min) because a CRASHED
- * server sits dead until its agent notices and relaunches — a tab that gave up early greets that
- * successor as a zombie, and localhost retries are free. A deliberate stop still ends with a dead
- * page, eventually. A successor serves bytes we don't have, so a boot id other than the one we
- * opened with means reload rather than resume.
+ * retries on its own for the first RECONNECT_FAST_MS, which is the replace window; past that the
+ * page reconnects on its own growing interval and **never gives up** (TB-Page-Lifecycle.md). The
+ * bound that used to sit here existed so a deliberate `stop` ended with a dead tab eventually; the
+ * owner now closes its pages outright, so all the bound was left holding was the CRASH case, where
+ * giving up is exactly wrong (localhost retries are free, and a tab that gave up greets the
+ * eventual successor as a zombie). A page that keeps reaching stays adoptable: the next launch at
+ * that address reloads it. A successor serves bytes we don't have, so a boot id other than the one
+ * we opened with means reload rather than resume — and a successor serving a DIFFERENT bulb tells
+ * the page so (`close: foreign`), which is why reaching forever is safe.
  *
- * Leaves `es` in scope: the bulb shim adds its own `message` listener (the `typebulb send` channel)
- * to the same stream. `streamUrl` is a JS expression for the stream to open — the bulb shim passes its
- * relay-aware one (TB-VSCode-Browser.md, one CLI-opened page); the mirror takes the default.
+ * Leaves `tbOn(event, fn)` in scope, not `es`: the stream is replaced on every reconnect, so a
+ * caller's listener has to be re-attached to each new one. The bulb shim registers its `message`
+ * (the `typebulb send` channel) and `close` listeners through it. `streamUrl` is a JS expression for
+ * the stream to open — the bulb shim passes its relay- and identity-bearing one
+ * (TB-VSCode-Browser.md, TB-Page-Lifecycle.md); the mirror takes the default.
  */
 export const reloadClientScript = (streamUrl = "'/__reload'") => `
-    const es = new EventSource(${streamUrl});
+    let es = null;
     let bootId = null;
     let firstErrorAt = 0;
-    const RETRY_WINDOW_MS = ${RECONNECT_WINDOW_MS};
-    es.addEventListener('open', () => { firstErrorAt = 0; });
-    es.addEventListener('hello', (e) => {
+    let backoff = 0;
+    const tbListeners = [];
+    // Register a stream listener that survives a reconnect. Attaching to \`es\` directly would bind to
+    // one instance, and the page outlives many.
+    const tbOn = (event, fn) => { tbListeners.push([event, fn]); if (es) es.addEventListener(event, fn); };
+    const tbConnect = () => {
+      es = new EventSource(${streamUrl});
+      for (const pair of tbListeners) es.addEventListener(pair[0], pair[1]);
+      es.onerror = () => {
+        if (!firstErrorAt) firstErrorAt = Date.now();
+        // Inside the replace window, EventSource's own retry is faster than anything we'd schedule.
+        if (Date.now() - firstErrorAt <= ${RECONNECT_FAST_MS}) return;
+        es.close();
+        backoff = Math.min(${RECONNECT_MAX_MS}, backoff ? backoff * 2 : ${RECONNECT_RETRY_MS} * 2);
+        setTimeout(tbConnect, backoff);
+      };
+    };
+    tbOn('open', () => { firstErrorAt = 0; backoff = 0; });
+    tbOn('hello', (e) => {
       if (bootId === null) bootId = e.data;
       else if (e.data !== bootId) window.location.reload();
     });
-    es.addEventListener('reload', () => {
+    tbOn('reload', () => {
       console.log('[typebulb] Reloading...');
       window.location.reload();
     });
     // A relay open (TB-VSCode-Browser.md): the CLI asks a page of ours inside VS Code to open a URL,
     // since its integrated browser honors a gesture-less window.open and keeps the new tab in-editor.
-    es.addEventListener('open-url', (e) => { window.open(e.data, '_blank', 'noopener'); });
-    es.onerror = () => {
-      if (!firstErrorAt) firstErrorAt = Date.now();
-      if (Date.now() - firstErrorAt > RETRY_WINDOW_MS) es.close();
-    };`
+    tbOn('open-url', (e) => { window.open(e.data, '_blank', 'noopener'); });
+    tbConnect();`

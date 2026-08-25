@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, isAbsolute } from 'path'
-import { launchBulbServer, listBulbServers, stopBulbServer, readServerLog, listBulbFiles as listProjectBulbFiles, listBulbBatches, lastRunTimes, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
+import { launchBulbServer, listBulbServers, stopBulbServer, stopServer, readServerLog, listBulbFiles as listProjectBulbFiles, listBulbBatches, lastRunTimes, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { extractDescription } from 'typebulb/format'
@@ -71,8 +71,12 @@ export async function listBreakouts() {
   return listBulbServers(projectCwd)
 }
 
-// Stop one by pid (SIGTERM + deregister). Idempotent — an already-gone pid is a no-op.
+// Stop one by pid, through its owner: it closes its pages first, then exits by the same cleanup path
+// a Ctrl-C takes (TB-Page-Lifecycle.md — every deliberate stop takes the one verb, this button
+// included). A server that can't answer is killed instead. Idempotent: an already-gone pid is a no-op.
 export async function stopBreakout(pid: number) {
+  const server = (await listBulbServers()).find(s => s.pid === pid)
+  if (server) return { ok: true, outcome: await stopServer(server) }
   await stopBulbServer(pid)
   return { ok: true }
 }

@@ -1,7 +1,7 @@
 import { div, span, a, button, pre } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
-import { hitsBadge, snippetLine } from './ui.js'
+import { hitsBadge, snippetLine, bulbPageUrl, openBulbPage } from './ui.js'
 import { pathKey, basename, bulbBasename, parseBulbUrlText, relTime } from './util.js'
 import { sortByKeys } from '../order.js'
 import type { RunningServer, BulbFile, BulbRow, BulbHit, RemoteBulb } from './types.js'
@@ -91,7 +91,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     const r = this.rows()[i]
     if (!r) return
     if (r.group) this.toggleFold(r.group.user)
-    else if (r.running) window.open(r.running.url, '_blank', 'noopener')
+    else if (r.running) openBulbPage(r.running.url)
     else if (r.remote) this.downloadAndLaunch(r)
     else this.launch(r.path)
   }
@@ -406,11 +406,15 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // row to running (which renders a stop button instead).
     const key = pathKey(path)
     this.launching.add(key); this.update()
-    let pid: number | undefined
-    try { pid = (await tb.server.launchBulb(path, trust, this.launchBatch(key)) as { pid?: number }).pid }
+    let started: { pid?: number; url?: string } | undefined
+    try { started = await tb.server.launchBulb(path, trust, this.launchBatch(key)) as { pid?: number; url?: string } }
     catch (err) { console.error('[mirror] launchBulb failed', err) }
     finally { this.launching.delete(key) }
-    if (suppressNag && pid) this.dismissedDenials.add(pid)
+    if (suppressNag && started?.pid) this.dismissedDenials.add(started.pid)
+    // A bulb runs in its page, so play opens one: a launch that leaves none has started a server, not
+    // run the bulb (TB-Page-Lifecycle.md, invariant 4). Cold starts only — `elevate` and `toggleTrust`
+    // relaunch a bulb whose tab reattaches on its own, and both bypass this method.
+    if (started?.url) openBulbPage(started.url)
     await this.refresh()
     // A launch is a deliberate foreground action: the now-running row jumped to the bottom (newest),
     // so force the list there to reveal it + its green :port. Unlike keepBottom (a background refresh
@@ -783,7 +787,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         ? a({ class: ['server-logs', showing ? 'on' : ''], title: 'Show this server’s console', onClick: (e: MouseEvent) => { e.stopPropagation(); this.showLog(s, r.name) } }, 'logs')
         : span({ class: 'cell-empty' }),
       s
-        ? a({ class: 'server-port', href: s.url, target: '_blank', rel: 'noopener noreferrer', title: `Open ${s.url}` }, `:${s.port}`)
+        ? a({ class: 'server-port', href: bulbPageUrl(s.url), target: '_blank', rel: 'noopener noreferrer', title: `Open ${s.url}` }, `:${s.port}`)
         : r.remote ? span({ class: 'cell-empty' }) : span({ class: 'bulb-time' }, relTime(r.recent)),
       // Full-text mode only: the first matching line, on a second subgrid row under the name column.
       snippetLine(r.snippet, this.filter.trim()),

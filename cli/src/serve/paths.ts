@@ -40,9 +40,19 @@ export function serversDir(): string {
  *  caller copying the path it was just given (TB-Interrogation-Pixels.md). */
 export function canvasPngPath(file: string): string {
   const key = normalizeBulbPath(file)
-  const hash = createHash('sha1').update(key).digest('hex').slice(0, 8)
   const stem = key.slice(key.lastIndexOf('/') + 1).replace(/\.bulb\.md$/, '')
-  return join(typebulbHome(), 'canvas', `${stem}-${hash}.png`)
+  return join(typebulbHome(), 'canvas', `${stem}-${bulbStreamKey(file)}.png`)
+}
+
+/**
+ * A short stable id for a bulb file. A page announces it on its event stream (`/__reload?bulb=`) and
+ * the server compares: a port is a bulb's long-lived identity but cannot prove itself across a gap,
+ * since the allocator spills a busy slot and recycles a full block's oldest one (TB-CLI.md, Port
+ * allocation), so a server serving a different bulb declines the page rather than adopting it
+ * (TB-Page-Lifecycle.md, invariant 1). Both ends derive it from the canonical path they already hold.
+ */
+export function bulbStreamKey(file: string): string {
+  return createHash('sha1').update(normalizeBulbPath(file)).digest('hex').slice(0, 8)
 }
 
 /**

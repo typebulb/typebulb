@@ -806,17 +806,38 @@ export const typebulbShim = `
   if (!isFramed && location.protocol.indexOf('http') === 0) {
     // A page the CLI opened arrives as #tb-relay (TB-VSCode-Browser.md, one CLI-opened page): it
     // announces itself on its stream under a per-document id, and strips the hash so a reload is an
-    // ordinary page. Told to yield, it closes itself; a tab the browser won't let a script close
-    // parks instead, which still stops the bulb running twice.
+    // ordinary page. Every page also announces WHICH bulb it was served (serve/paths bulbStreamKey):
+    // a server holding this address for another bulb declines it (TB-Page-Lifecycle.md, Inv. 1).
     const relayed = location.hash === '#tb-relay';
     if (relayed) history.replaceState(null, '', location.pathname + location.search);
-${reloadClientScript("relayed ? '/__reload?relay=' + Math.random().toString(36).slice(2) : '/__reload'")}
-    es.addEventListener('yield', () => {
-      es.close();
-      window.close();
-      setTimeout(() => location.replace('/__parked'), 250);
+    const tbStreamUrl = '/__reload?bulb=' + encodeURIComponent(window.__TB_BULB__ || '')
+      + (relayed ? '&relay=' + Math.random().toString(36).slice(2) : '');
+${reloadClientScript('tbStreamUrl')}
+    // Told to go, the page goes: it closes the tab, and where the browser refuses a script the close
+    // (a tab that wasn't script-opened and has history) it replaces itself with a note naming the
+    // reason. The note is a blob document, never a served route — a note that needs the server
+    // cannot cover the case where the server is leaving. The page never closes its own stream: the
+    // stream dropping is the server's evidence that the page actually went, so acknowledging must
+    // not look like going (TB-Page-Lifecycle.md, Observed not asserted).
+    tbOn('close', (e) => {
+      const said = {
+        stopped: 'This bulb was stopped.',
+        yielded: 'This bulb was already open in another tab, so this one stepped aside.',
+        foreign: 'This address now serves a different bulb.',
+      }[e.data] || 'This bulb was closed.';
+      const link = e.data === 'yielded' ? '<p><a href="' + location.origin + '">Open it here too</a></p>' : '';
+      try { window.close(); } catch (err) {}
+      setTimeout(() => {
+        try {
+          const doc = '<!DOCTYPE html><meta charset="utf-8"><title>typebulb</title>'
+            + '<body style="font:15px system-ui,sans-serif;margin:0;padding:32px;'
+            + 'color-scheme:light dark;color:CanvasText;background:Canvas">'
+            + '<p>' + said + '</p>' + link;
+          location.replace(URL.createObjectURL(new Blob([doc], { type: 'text/html' })));
+        } catch (err) { location.replace('about:blank'); }
+      }, 250);
     });
-    es.addEventListener('message', async (e) => {
+    tbOn('message', async (e) => {
       // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved
       // namespace (TB-Interrogation.md): answered by a built-in handler, never delivered to
       // tb.onMessage. Each settled non-undefined return is a reply candidate — the CLI enforces the

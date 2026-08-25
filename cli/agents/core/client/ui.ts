@@ -10,6 +10,19 @@ export const stuckToBottom = (el: Element, px: number) =>
  *  state resizes the pill mid-work. */
 export const busyPill = (busy: boolean) => busy ? 'pill-busy shimmer shimmer-slow' : ''
 
+/** The URL a mirror gesture opens: `#tb-relay` marks the tab as one the launcher opened, and a
+ *  marked tab steps aside if a page of that bulb is already attached when it arrives
+ *  (TB-VSCode-Browser.md, one CLI-opened page). So the launcher never stacks — while a tab the user
+ *  makes by hand carries no marker and is left entirely alone. A named window target would be the
+ *  tidier mechanism (reuse rather than open-and-step-aside), but VS Code's integrated browser does
+ *  not honour window names: verified live 2026-08-26, it opened a fresh tab every time. */
+export const bulbPageUrl = (url: string) => `${url}#tb-relay`
+
+/** The one place the mirror opens a bulb's page: the launcher's link and Enter, and the launches it
+ *  makes (play, breakout). It opens from the mirror's own page, which is what lands the tab where the
+ *  mirror is; the bulb is still spawned `--no-open` (TB-Agent-Mirror.md). */
+export const openBulbPage = (url: string) => { window.open(bulbPageUrl(url), '_blank', 'noopener') }
+
 // Shared filter input + clear (×) for the bulb launcher and the session picker — one copy of the
 // filter chrome (the bulb-local analogue of client's uiHelpers/searchBox; the bulb can't import
 // that). The host owns the value (it drives the filtered list + highlight) and the key handling

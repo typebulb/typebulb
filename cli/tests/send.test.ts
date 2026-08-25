@@ -13,9 +13,10 @@ import { registerServer, unregisterServer, relayOpen } from '../src/serve/server
 import { canvasPngPath } from '../src/serve/paths.js'
 
 /**
- * `typebulb send` → `/__send` (TB-CLI.md). The endpoint re-emits the posted body on the
- * `messageEmitter` (the SSE fan-out the shim's `tb.onMessage` reads) and returns the connected-page
- * count. It's data-in/trust-free but CSRF-guarded like `/__log`: the CLI (no Origin) passes; a
+ * `typebulb send` → `/__send` (TB-CLI.md). The endpoint fans the posted body out over the server's
+ * page set — the SSE streams the shim's `tb.onMessage` reads, and the same set it reports as the
+ * connected-page count (TB-Page-Lifecycle.md, invariant 6) — so every page here is a real stream.
+ * It's data-in/trust-free but CSRF-guarded like `/__log`: the CLI (no Origin) passes; a
  * cross-site/same-site browser POST is refused, so no other page can inject into the bulb.
  */
 
@@ -31,12 +32,9 @@ function freePort(): Promise<number> {
 }
 
 let server: ServerInstance
-let emitter: EventEmitter
 
 beforeAll(async () => {
-  emitter = new EventEmitter()
-  emitter.setMaxListeners(0)
-  server = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), messageEmitter: emitter })
+  server = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), sendChannel: true })
   // Isolate the cross-project registry so runSend's target lookup can't see (or disturb) the
   // developer's real running servers.
   process.env.TYPEBULB_SERVERS_DIR = await mkdtemp(path.join(tmpdir(), 'tb-send-'))
@@ -73,35 +71,36 @@ function raw(p: string, headers: Record<string, string>, body = ''): Promise<num
 }
 
 describe('typebulb send / __send', () => {
-  it('re-emits the posted body to message listeners and reports the count', async () => {
-    const received: Array<{ id?: number; payload: string }> = []
-    const listener = (env: { id?: number; payload: string }) => received.push(env)
-    emitter.on('message', listener)
+  it('delivers the posted body to every connected page and reports the count', async () => {
+    await drained()
+    const page = await pageClient()
     try {
       const resp = await fetch(url('/__send'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'hello' })
       expect(resp.ok).toBe(true)
       expect(await resp.json()).toEqual({ clients: 1 })
-      expect(received).toEqual([{ payload: 'hello' }])   // no ?reply ⇒ no id: fire-and-forget envelope
+      expect(await page.settled(1)).toEqual([{ payload: 'hello' }])   // no ?reply ⇒ no id: fire-and-forget envelope
     } finally {
-      emitter.removeListener('message', listener)
+      page.close()
     }
   })
 
   it('delivers an empty body as a bare trigger', async () => {
-    let got: { payload: string } | undefined
-    const listener = (env: { payload: string }) => { got = env }
-    emitter.on('message', listener)
+    await drained()
+    const page = await pageClient()
     try {
       await fetch(url('/__send'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '' })
-      expect(got).toEqual({ payload: '' })
+      expect(await page.settled(1)).toEqual([{ payload: '' }])
     } finally {
-      emitter.removeListener('message', listener)
+      page.close()
     }
   })
 
   it('reports zero connected pages when nothing is listening', async () => {
+    await drained()
     const resp = await fetch(url('/__send'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'x' })
-    expect(await resp.json()).toEqual({ clients: 0 })
+    // `droppedMsAgo` rides along once any page has been here (an earlier case's), which is the
+    // point of that field: which nothing this is.
+    expect(await resp.json()).toMatchObject({ clients: 0 })
   })
 
   it('refuses a same-site (cross-port) browser POST — no foreign page can inject', async () => {
@@ -178,21 +177,18 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
 
   it('delivers once a page attaches mid-wait (no server-side buffering)', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const received: string[] = []
-    // Ack like the shim's page side (no handler returned a value), so the reply hold resolves promptly.
-    const listener = (env: { id?: number; payload: string }) => {
-      received.push(env.payload)
-      if (env.id !== undefined) void fetch(url('/__send-reply'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results: [], errors: [] }) })
-    }
-    // No listener at first (the reload gap); the page "re-attaches" ~400ms in.
-    const attach = setTimeout(() => emitter.on('message', listener), 400)
+    await drained()
+    // No page at first (the reload gap); one attaches ~400ms in and acks like the shim's page side
+    // (no handler returned a value), so the reply hold resolves promptly.
+    let page: Awaited<ReturnType<typeof pageClient>> | undefined
+    const attach = setTimeout(() => { void pageClient(() => ({})).then(p => { page = p }) }, 400)
     const { errs, restore } = capture()
     try {
       await runSend(file, 'go', 2000)
     } finally {
-      restore(); clearTimeout(attach); emitter.removeListener('message', listener); await unregisterServer(process.ppid)
+      restore(); clearTimeout(attach); page?.close(); await unregisterServer(process.ppid)
     }
-    expect(received).toEqual(['go'])              // delivered exactly once
+    expect(page?.received.map(e => e.payload)).toEqual(['go'])   // delivered exactly once
     expect(errs.join('\n')).toContain('Sent to 1 page')
   })
 
@@ -216,43 +212,34 @@ describe('send <file> - — the message from stdin (TB-Get-Put.md Normalization)
 
   it("reads stdin and normalizes it like put's sources", async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const received: string[] = []
-    const listener = (env: { payload: string }) => received.push(env.payload)
-    emitter.on('message', listener)
+    await drained()
+    const page = await pageClient()
     const stdin = vi.spyOn(process, 'stdin', 'get')
       .mockReturnValue(Readable.from([Buffer.from(BOM + 'hello there\r\n', 'utf-8')]) as unknown as NodeJS.ReadStream & { fd: 0 })
     const { restore } = capture()
     try {
       await runSend(file, '-')
+      await page.settled(1)
     } finally {
-      restore(); stdin.mockRestore(); emitter.removeListener('message', listener); await unregisterServer(process.ppid)
+      restore(); stdin.mockRestore(); page.close(); await unregisterServer(process.ppid)
     }
     // BOM stripped, CRLF folded, trailing newline trimmed: identical to `send <file> 'hello there'`.
-    expect(received).toEqual(['hello there'])
+    expect(page.received.map(e => e.payload)).toEqual(['hello there'])
   })
 })
 
 describe('the reply leg — a handler return prints on stdout (TB-Interrogation.md)', () => {
   const file = path.resolve('send-reply.bulb.md')
-  type Envelope = { id?: number; payload: string }
-  /** A minimal stand-in for the shim's page side: receive the envelope, POST the reply (null: stay silent). */
-  const page = (reply: (env: Envelope) => { results?: string[]; errors?: string[] } | null) => {
-    const listener = (env: Envelope) => {
-      const body = reply(env)
-      if (body === null || env.id === undefined) return
-      void fetch(url('/__send-reply'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: env.id, results: [], errors: [], ...body }),
-      })
-    }
-    emitter.on('message', listener)
-    return () => emitter.removeListener('message', listener)
+  /** The shim's page side, on a real stream: receive the envelope, POST the reply (null: stay silent). */
+  const page = async (reply: (env: Envelope) => { results?: string[]; errors?: string[] } | null) => {
+    await drained()
+    const p = await pageClient(reply)
+    return () => p.close()
   }
 
   it('prints a structured return as JSON on stdout; the delivery line moves to stderr', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const off = page(() => ({ results: [JSON.stringify({ count: 7, verdict: 'prime' })] }))
+    const off = await page(() => ({ results: [JSON.stringify({ count: 7, verdict: 'prime' })] }))
     const { out, errs, restore } = capture()
     try {
       await runSend(file, 'selftest', 2000)
@@ -263,7 +250,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
 
   it('prints a bare-string reply raw — a snapshot outline stays readable', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const off = page(() => ({ results: [JSON.stringify('- heading "7" [level=1]')] }))
+    const off = await page(() => ({ results: [JSON.stringify('- heading "7" [level=1]')] }))
     const { out, restore } = capture()
     try {
       await runSend(file, 'tb:snapshot')   // tb:* implies --wait
@@ -273,7 +260,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
 
   it('rejects two replies — one reply owns stdout', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const off = page(() => ({ results: [JSON.stringify(1), JSON.stringify(2)] }))
+    const off = await page(() => ({ results: [JSON.stringify(1), JSON.stringify(2)] }))
     const { out, errs, restore } = capture()
     const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
     try {
@@ -285,7 +272,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
 
   it('a silent page keeps fire-and-forget behavior, with a timeout note on stderr', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const off = page(() => null)
+    const off = await page(() => null)
     const { out, errs, restore } = capture()
     try {
       await runSend(file, 'go', 1200)
@@ -299,7 +286,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
   it('tb:png decodes the reply to the bulb\'s stable path and prints that path', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
-    const off = page(() => ({ results: [JSON.stringify({ png: bytes.toString('base64'), width: 2, height: 1 })] }))
+    const off = await page(() => ({ results: [JSON.stringify({ png: bytes.toString('base64'), width: 2, height: 1 })] }))
     const { out, errs, restore } = capture()
     try {
       await runSend(file, 'tb:png')   // tb:* implies --wait
@@ -315,7 +302,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
   it('states the backdrop it composited and the container it resolved through', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
-    const off = page(() => ({ results: [JSON.stringify({ png, width: 2, height: 1, backdrop: 'rgb(20, 20, 20)', via: 'chart' })] }))
+    const off = await page(() => ({ results: [JSON.stringify({ png, width: 2, height: 1, backdrop: 'rgb(20, 20, 20)', via: 'chart' })] }))
     const { errs, restore } = capture()
     try {
       await runSend(file, 'tb:png "chart"')
@@ -325,7 +312,7 @@ describe('the reply leg — a handler return prints on stdout (TB-Interrogation.
 
   it('a tb:png reply without bytes is an error naming version skew, never a fallback print', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const off = page(() => ({ results: [JSON.stringify('oops')] }))
+    const off = await page(() => ({ results: [JSON.stringify('oops')] }))
     const { out, errs, restore } = capture()
     const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
     try {
@@ -340,50 +327,40 @@ describe('actuation solo guard — /__send?solo=1 (TB-Interrogation-Actuation.md
   const file = path.resolve('send-solo.bulb.md')
 
   it('refuses BEFORE the emit when two pages are connected — the gesture never fires', async () => {
-    const received: string[] = []
-    const l1 = (env: { payload: string }) => received.push(env.payload)
-    const l2 = (env: { payload: string }) => received.push(env.payload)
-    emitter.on('message', l1)
-    emitter.on('message', l2)
+    await drained()
+    const [p1, p2] = [await pageClient(), await pageClient()]
     try {
       const resp = await fetch(url('/__send?reply=1000&solo=1'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"' })
       expect(await resp.json()).toEqual({ clients: 2, refused: true })
-      expect(received).toEqual([])
+      expect([...p1.received, ...p2.received]).toEqual([])
     } finally {
-      emitter.removeListener('message', l1)
-      emitter.removeListener('message', l2)
+      p1.close(); p2.close()
     }
   })
 
   it('dispatches normally to exactly one page', async () => {
-    const received: string[] = []
-    const listener = (env: { id?: number; payload: string }) => {
-      received.push(env.payload)
-      if (env.id !== undefined) void fetch(url('/__send-reply'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results: [], errors: [] }) })
-    }
-    emitter.on('message', listener)
+    await drained()
+    const page = await pageClient(() => ({}))
     try {
       const resp = await fetch(url('/__send?reply=1500&solo=1'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"' })
       expect(((await resp.json()) as { clients: number }).clients).toBe(1)
-      expect(received).toEqual(['tb:click button "x"'])
+      expect(page.received.map(e => e.payload)).toEqual(['tb:click button "x"'])
     } finally {
-      emitter.removeListener('message', listener)
+      page.close()
     }
   })
 
   it('runSend reports the exactly-one error and exits 1 at two pages', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
-    const l1 = () => {}
-    const l2 = () => {}
-    emitter.on('message', l1)
-    emitter.on('message', l2)
+    await drained()
+    const [p1, p2] = [await pageClient(), await pageClient()]
     const { out, errs, restore } = capture()
     const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
     try {
       await expect(runSend(file, 'tb:click button "x"', 2000)).rejects.toThrow('exit 1')
     } finally {
       exit.mockRestore(); restore()
-      emitter.removeListener('message', l1); emitter.removeListener('message', l2)
+      p1.close(); p2.close()
       await unregisterServer(process.ppid)
     }
     expect(out).toEqual([])
@@ -403,8 +380,8 @@ describe("the page-connect wake line — '[page] connected' (TB-Wait.md)", () =>
   })
 
   it('logs once when a page attaches where none was; a second page does not re-fire', async () => {
-    // Let listeners from earlier tests' aborted streams drain, so the 0→1 edge is real.
-    for (let i = 0; i < 40 && emitter.listenerCount('message') > 0; i++) await new Promise(r => setTimeout(r, 50))
+    // Let earlier tests' aborted streams drain, so the 0→1 edge is real.
+    await drained()
     const { out, restore } = capture()
     let a: http.ClientRequest | undefined
     let b: http.ClientRequest | undefined
@@ -437,58 +414,132 @@ describe("the page-connect wake line — '[page] connected' (TB-Wait.md)", () =>
 
 /** Attach a page to a server's events SSE under a given User-Agent (and stream query — the shim's
  *  `?relay=<doc>` for a CLI-opened page); resolves once its `hello` frame lands. */
-function attachPage(userAgent: string, base = url(''), query = ''): Promise<{ frames: () => string; close: () => void }> {
+type Envelope = { id?: number; payload: string }
+
+/**
+ * A page as the server sees one: a real `/__reload` stream. The page set is the delivery list AND
+ * the count (TB-Page-Lifecycle.md, invariant 6), so an in-process listener would be a page the
+ * server never had. `reply` answers a held `--wait` send the way the shim's page side does; `null`
+ * stays silent.
+ */
+function pageClient(
+  reply?: (env: Envelope) => { results?: string[]; errors?: string[] } | null,
+  opts: { ua?: string; query?: string; base?: string } = {},
+): Promise<{ received: Envelope[]; frames: () => string; settled: (n: number) => Promise<Envelope[]>; close: () => void }> {
   return new Promise((resolve, reject) => {
-    const u = new URL(base + '/__reload' + query)
+    const u = new URL((opts.base ?? url('')) + '/__reload' + (opts.query ?? ''))
+    const received: Envelope[] = []
     let buf = ''
-    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: { 'User-Agent': userAgent } }, res => {
+    let cut = 0
+    const api = {
+      received,
+      frames: () => buf,
+      settled: async (n: number) => {
+        for (let i = 0; i < 80 && received.length < n; i++) await new Promise(r => setTimeout(r, 25))
+        return received
+      },
+      close: () => req.destroy(),
+    }
+    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: { 'User-Agent': opts.ua ?? CHROME_UA } }, res => {
       res.setEncoding('utf8')
       res.on('data', (d: string) => {
         buf += d
-        if (buf.includes('event: hello')) resolve({ frames: () => buf, close: () => req.destroy() })
+        // Whole frames only — an envelope can arrive split across chunks.
+        for (let at = buf.indexOf('\n\n', cut); at !== -1; at = buf.indexOf('\n\n', cut)) {
+          const frame = buf.slice(cut, at)
+          cut = at + 2
+          if (!frame.startsWith('event: message')) continue
+          const line = frame.split('\n').find(l => l.startsWith('data: '))
+          if (!line) continue
+          const env = JSON.parse(line.slice(6)) as Envelope
+          received.push(env)
+          const body = reply?.(env)
+          if (body && env.id !== undefined) {
+            void fetch((opts.base ?? url('')) + '/__send-reply', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: env.id, results: [], errors: [], ...body }),
+            })
+          }
+        }
+        if (buf.includes('event: hello')) resolve(api)
       })
       res.on('error', reject)
     })
+    // A declined stream (`close: foreign`) never says hello and ends at once — it must still
+    // resolve, or the test that asserts the refusal would hang on it.
+    req.on('response', res => res.on('end', () => resolve(api)))
     req.on('error', reject)
   })
 }
 
+/** The relay tests' spelling of the same thing: a page with a chosen User-Agent (and, for the
+ *  mirror-open cases, on another of our servers), no reply side. */
+const attachPage = (userAgent: string, base = url(''), query = '') => pageClient(undefined, { ua: userAgent, base, query })
+
+/** The server's own count, which is what "a page" now means (`/__pages`). */
+const pagesAt = async (base: string) => ((await (await fetch(base + '/__pages')).json()) as { pages: number }).pages
+const pagesNow = () => pagesAt(url(''))
+
 /** Let earlier tests' aborted streams drain, so the server's page set holds only this test's. */
-const drained = async () => { for (let i = 0; i < 40 && emitter.listenerCount('message') > 0; i++) await new Promise(r => setTimeout(r, 50)) }
+const drained = async () => { for (let i = 0; i < 40 && (await pagesNow()) > 0; i++) await new Promise(r => setTimeout(r, 50)) }
 
 const VSCODE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.134.0 Chrome/148.0.7778.280 Electron/42.8.1 Safari/537.36'
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 const openVia = (target: string) => fetch(url('/__open'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: target }) })
 
 // One CLI-opened page (TB-VSCode-Browser.md): a page the relay opened announces itself on its stream
-// (`?relay=<doc>`), is provisional for RELAY_PROVISIONAL_MS, and is told to `yield` the moment another
+// (`?relay=<doc>`), is provisional for RELAY_PROVISIONAL_MS, and is told to go the moment another
 // page is attached — whichever page the CLI did NOT open wins; between two of its own, the earlier.
+// One departure event carries every reason (TB-Page-Lifecycle.md, invariant 6), so this is the
+// `close` event with `yielded`.
 describe('one CLI-opened page — a provisional relay page yields (TB-VSCode-Browser.md)', () => {
+  const YIELDED = 'event: close\ndata: yielded'
   /** The stream's frames once the server has had a beat to write the verdict. */
   const frames = async (p: { frames: () => string }) => { await new Promise(r => setTimeout(r, 150)); return p.frames() }
 
   it('stays when it is the only page', async () => {
     await drained()
     const relayed = await attachPage(CHROME_UA, url(''), '?relay=solo')
-    try { expect(await frames(relayed)).not.toContain('event: yield') } finally { relayed.close() }
+    try { expect(await frames(relayed)).not.toContain(YIELDED) } finally { relayed.close() }
   })
 
-  it('yields to a page that was already here, and to one that arrives after it', async () => {
+  it('yields to a page that was already here', async () => {
     await drained()
     const user = await attachPage(CHROME_UA)
     const late = await attachPage(CHROME_UA, url(''), '?relay=late')
     try {
-      expect(await frames(late)).toContain('event: yield')
-      expect(user.frames()).not.toContain('event: yield')
+      expect(await frames(late)).toContain(YIELDED)
+      expect(user.frames()).not.toContain(YIELDED)
     } finally { late.close(); user.close() }
+  })
+
+  // Only the newcomer yields. A page already here is the user's, whatever opened it — a second view
+  // arriving beside it must not take it away, which is the 10% case (a hand-made tab with the URL
+  // pasted in) and what makes the launcher's own tab durable.
+  it('does not yield to a page that arrives after it, and never evicts an unmarked one', async () => {
     await drained()
     // The relaunch shape: the relayed tab lands first, the user's returning tab a beat later.
     const early = await attachPage(CHROME_UA, url(''), '?relay=early')
     const returning = await attachPage(CHROME_UA)
     try {
-      expect(await frames(early)).toContain('event: yield')
-      expect(returning.frames()).not.toContain('event: yield')
+      expect(await frames(early)).not.toContain(YIELDED)
+      expect(returning.frames()).not.toContain(YIELDED)
+      expect(await pagesNow()).toBe(2)
     } finally { early.close(); returning.close() }
+  })
+
+  // A reconnect is not an arrival: a hot reload's drop-and-reattach would otherwise read as a
+  // newcomer and yield the page to whatever else is attached.
+  it('exempts a reconnect of a document already seen', async () => {
+    await drained()
+    const user = await attachPage(CHROME_UA)
+    const relayed = await attachPage(CHROME_UA, url(''), '?relay=rejoin')
+    await frames(relayed)                      // it yields, as the newcomer
+    relayed.close()
+    const back = await attachPage(CHROME_UA, url(''), '?relay=rejoin')
+    try {
+      expect(await frames(back)).not.toContain(YIELDED)
+    } finally { back.close(); user.close() }
   })
 
   it('between two relay pages the earlier stays and the later yields', async () => {
@@ -496,15 +547,16 @@ describe('one CLI-opened page — a provisional relay page yields (TB-VSCode-Bro
     const first = await attachPage(CHROME_UA, url(''), '?relay=first')
     const second = await attachPage(CHROME_UA, url(''), '?relay=second')
     try {
-      expect(await frames(second)).toContain('event: yield')
-      expect(first.frames()).not.toContain('event: yield')
+      expect(await frames(second)).toContain(YIELDED)
+      expect(first.frames()).not.toContain(YIELDED)
     } finally { first.close(); second.close() }
   })
 
-  it('serves the parked note a yielded tab lands on when it cannot close', async () => {
-    const res = await fetch(url('/__parked'))
-    expect(res.status).toBe(200)
-    expect(await res.text()).toContain('already open in another tab')
+  // The note a page lands on when the browser refuses a script the close is the page's own blob
+  // document now, built from the `close` event's reason: a served note cannot cover the case where
+  // the server is leaving (TB-Page-Lifecycle.md, One departure event), so `/__parked` is gone.
+  it('serves no parked route — the note travels with the reason, not from the server', async () => {
+    expect((await fetch(url('/__parked'))).status).toBe(404)
   })
 })
 
@@ -578,7 +630,7 @@ describe('send --wait opens the page where the mirror is', () => {
   afterAll(async () => { mirror?.close(); await unregisterServer(process.pid) })
 
   const freshBulb = async () => {
-    const bulb = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), messageEmitter: new EventEmitter() })
+    const bulb = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), sendChannel: true })
     await new Promise(r => setTimeout(r, RELOAD_SETTLE_MS + 100))
     const send = async () => (await fetch(`http://127.0.0.1:${bulb.port}/__send?reply=1000&open=1`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'x' })).json()
     return { bulb, send }
@@ -612,4 +664,100 @@ describe('send --wait opens the page where the mirror is', () => {
       expect(mirrorPage.frames().split('event: open-url').length - 1).toBe(1)
     } finally { mirrorPage.close(); bulb.close() }
   }, 15000)
+})
+
+// The close half (TB-Page-Lifecycle.md): `/__stop` disposes of the pages, answers with what it
+// OBSERVED, and only then hands the process to its owner's cleanup. Its evidence is the stream
+// dropping — a page that merely acknowledges is a page that did not go.
+describe('the stop verb — /__stop', () => {
+  const owner = async (opts: { bulbKey?: string } = {}) => {
+    const stops: Array<{ pages: string }> = []
+    const srv = await startServer({
+      getHtml: () => '<html></html>', basePath: '.', port: await freePort(), sendChannel: true,
+      onStop: (o) => { stops.push(o) }, ...opts,
+    })
+    return { srv, stops, base: `http://127.0.0.1:${srv.port}` }
+  }
+  const postStop = (base: string, body: unknown = {}) => fetch(base + '/__stop', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  /** A tab that actually goes when told: the close event lands, the tab closes, the stream drops. */
+  const goesWhenTold = (page: { frames: () => string; close: () => void }) => (async () => {
+    for (let i = 0; i < 200; i++) {
+      if (page.frames().includes('event: close')) return page.close()
+      await new Promise(r => setTimeout(r, 20))
+    }
+  })()
+
+  it('tells the pages to go, counts the ones it saw go, and hands over to cleanup', async () => {
+    const { srv, stops, base } = await owner()
+    const page = await pageClient(undefined, { base })
+    const going = goesWhenTold(page)
+    try {
+      expect(await (await postStop(base)).json()).toEqual({ closed: 1, stuck: 0, exiting: true })
+      await going
+      expect(page.frames()).toContain('event: close\ndata: stopped')
+      await new Promise(r => setTimeout(r, 120))
+      expect(stops).toEqual([{ pages: 'close' }])           // the exit runs after the answer
+    } finally { page.close(); srv.close() }
+  })
+
+  // The trap this drain exists to refuse: a page that acknowledged is not a page that went, so a
+  // stream still attached when the wait elapses is reported as one that did not close.
+  it('counts a page that stays attached as one that did not close', async () => {
+    const { srv, base } = await owner()
+    const page = await pageClient(undefined, { base })   // receives the event, never drops its stream
+    try {
+      expect(await (await postStop(base)).json()).toMatchObject({ closed: 0, stuck: 1 })
+    } finally { page.close(); srv.close() }
+  }, 10000)
+
+  it('keeps the pages when the caller says so — a replace hands them to its successor', async () => {
+    const { srv, stops, base } = await owner()
+    const page = await pageClient(undefined, { base })
+    try {
+      expect(await (await postStop(base, { pages: 'keep' })).json()).toEqual({ closed: 0, stuck: 0, exiting: true })
+      await new Promise(r => setTimeout(r, 120))
+      expect(page.frames()).not.toContain('event: close')
+      expect(stops).toEqual([{ pages: 'keep' }])
+    } finally { page.close(); srv.close() }
+  })
+
+  // The CSRF guard admits the page's own origin, which is right for a data channel and wrong for a
+  // route whose blast radius is the whole server.
+  it('refuses a browser caller outright, same-origin included', async () => {
+    expect(await raw('/__stop', { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, '{}')).toBe(403)
+    expect(await raw('/__stop', { 'Content-Type': 'application/json', 'Origin': url('') }, '{}')).toBe(403)
+  })
+})
+
+// A port is a bulb's long-lived identity but cannot prove itself across a gap (TB-Page-Lifecycle.md,
+// invariant 1): the allocator spills a busy slot and recycles a full block's oldest one, so a page
+// that has been reaching for this address a long while may find a different bulb here.
+describe('bulb identity on the stream', () => {
+  it('declines a page announcing another bulb, and never counts it', async () => {
+    const srv = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), sendChannel: true, bulbKey: 'aaaa1111' })
+    const base = `http://127.0.0.1:${srv.port}`
+    const { out, restore } = capture()
+    const mine = await pageClient(undefined, { base, query: '?bulb=aaaa1111' })
+    const stranger = await pageClient(undefined, { base, query: '?bulb=bbbb2222' })
+    // The stranger reaches forever now, so the line must be said once per stranger, not per attempt.
+    const retry = await pageClient(undefined, { base, query: '?bulb=bbbb2222' })
+    try {
+      expect(stranger.frames()).toContain('event: close\ndata: foreign')
+      expect(stranger.frames()).not.toContain('event: hello')
+      expect(await pagesAt(base)).toBe(1)                  // only the page that belongs here
+      expect(out.filter(l => l.includes('[page] closed: foreign'))).toHaveLength(1)
+    } finally { restore(); mine.close(); stranger.close(); retry.close(); srv.close() }
+  })
+
+  it('accepts a page that announces nothing — an older page, or one served without a key', async () => {
+    const srv = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), sendChannel: true, bulbKey: 'aaaa1111' })
+    const base = `http://127.0.0.1:${srv.port}`
+    const page = await pageClient(undefined, { base })
+    try {
+      expect(page.frames()).toContain('event: hello')
+      expect(await pagesAt(base)).toBe(1)
+    } finally { page.close(); srv.close() }
+  })
 })
