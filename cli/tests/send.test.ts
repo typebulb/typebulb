@@ -6,10 +6,10 @@ import * as http from 'http'
 import * as path from 'path'
 import { mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { startServer, type ServerInstance } from '../src/serve/server.js'
+import { startServer, RELOAD_SETTLE_MS, type ServerInstance } from '../src/serve/server.js'
 import { parseArgs } from '../src/args.js'
 import { runSend } from '../src/commands/send.js'
-import { registerServer, unregisterServer } from '../src/serve/serverRegistry.js'
+import { registerServer, unregisterServer, relayOpen } from '../src/serve/serverRegistry.js'
 import { canvasPngPath } from '../src/serve/paths.js'
 
 /**
@@ -204,7 +204,9 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
     } finally {
       restore(); await unregisterServer(process.ppid)
     }
-    expect(errs.join('\n')).toContain('No page connected after 0.3s')
+    // The elapsed figure, not the asked window: a page that dropped moments ago (an earlier case's
+    // stream) is "pending" for the server's settle window, and the sender waits that out.
+    expect(errs.join('\n')).toMatch(/No page connected after \d+\.\ds/)
   })
 })
 
@@ -414,4 +416,134 @@ describe("the page-connect wake line — '[page] connected' (TB-Wait.md)", () =>
     }
     expect(out.filter(l => l.includes('[page] connected'))).toHaveLength(1)
   })
+})
+
+/** Attach a page to a server's events SSE under a given User-Agent; resolves once its `hello` frame lands. */
+function attachPage(userAgent: string, base = url('')): Promise<{ frames: () => string; close: () => void }> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(base + '/__reload')
+    let buf = ''
+    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname, headers: { 'User-Agent': userAgent } }, res => {
+      res.setEncoding('utf8')
+      res.on('data', (d: string) => {
+        buf += d
+        if (buf.includes('event: hello')) resolve({ frames: () => buf, close: () => req.destroy() })
+      })
+      res.on('error', reject)
+    })
+    req.on('error', reject)
+  })
+}
+
+/** Let earlier tests' aborted streams drain, so the server's page set holds only this test's. */
+const drained = async () => { for (let i = 0; i < 40 && emitter.listenerCount('message') > 0; i++) await new Promise(r => setTimeout(r, 50)) }
+
+const VSCODE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.134.0 Chrome/148.0.7778.280 Electron/42.8.1 Safari/537.36'
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
+const openVia = (target: string) => fetch(url('/__open'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: target }) })
+
+// The relay (TB-VSCode-Browser.md): `/__open` streams an `open-url` event to exactly one page that
+// VS Code's integrated browser renders (told by its User-Agent), so the CLI can land a bulb in-editor;
+// its `pages` count is how relayOpen tells a mirror open only externally from no mirror page at all.
+// Last in the file: its attach/drop churn would otherwise leave `droppedMsAgo` on the earlier cases.
+describe('relay open / __open', () => {
+  it('reports no foothold when no attached page is inside VS Code', async () => {
+    await drained()
+    const page = await attachPage(CHROME_UA)
+    try {
+      expect(await (await openVia('http://localhost:3398/')).json()).toEqual({ opened: false, pages: 1 })
+      expect(page.frames()).not.toContain('event: open-url')
+    } finally { page.close() }
+  })
+
+  it('streams `open-url` to exactly one in-editor page', async () => {
+    await drained()
+    const a = await attachPage(VSCODE_UA)
+    const b = await attachPage(VSCODE_UA)
+    try {
+      expect(await (await openVia('http://localhost:3398/')).json()).toEqual({ opened: true, pages: 2 })
+      await new Promise(r => setTimeout(r, 100))
+      expect([a, b].filter(p => p.frames().includes('event: open-url\ndata: http://localhost:3398/'))).toHaveLength(1)
+    } finally { a.close(); b.close() }
+  })
+
+  it('refuses a non-local URL', async () => {
+    expect((await openVia('https://example.com/')).status).toBe(400)
+  })
+
+  const mirrorEntry = () => registerServer({ pid: process.pid, port: server.port, url: url(''), file: 'agent:claude', cwd: process.cwd(), startedAt: Date.now(), agent: 'claude' })
+
+  it('relayOpen asks the project mirror and names it', async () => {
+    await drained()
+    const page = await attachPage(VSCODE_UA)
+    await mirrorEntry()
+    try {
+      expect(await relayOpen('http://localhost:3398/', process.cwd())).toEqual({ where: 'editor', via: 'the agent mirror' })
+      await new Promise(r => setTimeout(r, 100))
+      expect(page.frames()).toContain('data: http://localhost:3398/')
+    } finally { page.close(); await unregisterServer(process.pid) }
+  })
+
+  it('relayOpen follows a mirror open only outside VS Code, and nothing when no mirror page is open', async () => {
+    await drained()
+    await mirrorEntry()
+    try {
+      expect(await relayOpen('http://localhost:3398/', process.cwd())).toBeUndefined()
+      const page = await attachPage(CHROME_UA)
+      try {
+        expect(await relayOpen('http://localhost:3398/', process.cwd())).toEqual({ where: 'external' })
+        expect(page.frames()).not.toContain('event: open-url')
+      } finally { page.close() }
+    } finally { await unregisterServer(process.pid) }
+  })
+})
+
+// `send --wait` → `/__send?open=1`: with nobody listening the server asks the project's mirror to open
+// the page (requestPage), once per arrival window, and reports how it went. Each case gets its own
+// bulb server: the outcome is cached per server for PAGE_ARRIVAL_MS, and a fresh server answers
+// "pending" for its first RELOAD_SETTLE_MS (a predecessor's tab may be reattaching).
+describe('send --wait opens the page where the mirror is', () => {
+  let mirror: ServerInstance
+  const mirrorUrl = () => `http://127.0.0.1:${mirror.port}`
+  beforeAll(async () => {
+    mirror = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), reloadEmitter: new EventEmitter() })
+    await registerServer({ pid: process.pid, port: mirror.port, url: mirrorUrl(), file: 'agent:claude', cwd: process.cwd(), startedAt: Date.now(), agent: 'claude' })
+  })
+  afterAll(async () => { mirror?.close(); await unregisterServer(process.pid) })
+
+  const freshBulb = async () => {
+    const bulb = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), messageEmitter: new EventEmitter() })
+    await new Promise(r => setTimeout(r, RELOAD_SETTLE_MS + 100))
+    const send = async () => (await fetch(`http://127.0.0.1:${bulb.port}/__send?reply=1000&open=1`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'x' })).json()
+    return { bulb, send }
+  }
+
+  it('asks the mirror to open the page once, and answers pending until it arrives', async () => {
+    const { bulb, send } = await freshBulb()
+    const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    try {
+      expect(await send()).toEqual({ clients: 0, opening: 'editor', via: 'the agent mirror' })
+      await new Promise(r => setTimeout(r, 100))
+      expect(mirrorPage.frames()).toContain(`data: http://localhost:${bulb.port}`)
+      expect(await send()).toEqual({ clients: 0, opening: 'pending' })
+    } finally { mirrorPage.close(); bulb.close() }
+  }, 15000)
+
+  it('answers none when no mirror page is open, and never opens an external window for a send', async () => {
+    const { bulb, send } = await freshBulb()
+    try {
+      expect(await send()).toEqual({ clients: 0, opening: 'none' })
+    } finally { bulb.close() }
+  }, 15000)
+
+  it('two concurrent askers get one open and one pending, never a second open or a false none', async () => {
+    const { bulb, send } = await freshBulb()
+    const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    try {
+      const outcomes = (await Promise.all([send(), send()])).map((o: { opening: string }) => o.opening).sort()
+      expect(outcomes).toEqual(['editor', 'pending'])
+      await new Promise(r => setTimeout(r, 100))
+      expect(mirrorPage.frames().split('event: open-url').length - 1).toBe(1)
+    } finally { mirrorPage.close(); bulb.close() }
+  }, 15000)
 })

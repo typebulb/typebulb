@@ -42,7 +42,11 @@ export interface CliArgs {
    *  (serve/portBlocks.ts) — there is no default port to fall back to. */
   port?: number
   watch: boolean
-  open: boolean
+  /** How the served URL is handed over (TB-CLI.md, TB-VSCode-Browser.md). Any mode but 'none' first
+   *  follows the agent mirror's page: relayed into VS Code when the mirror is open there, the external
+   *  browser when it's open only outside. With no mirror page, 'window' opens the external browser and
+   *  'link' prints the URL. `--open` / `--no-open` force the ends. */
+  open: 'window' | 'link' | 'none'
   server: boolean
   /** Grant the privileged capability tier (fs + ai + server.ts) for THIS run. Default false —
    *  bulbs run sandboxed unless explicitly trusted (TB-Security.md). A bulb that was
@@ -102,20 +106,20 @@ function tryParse<T>(fn: () => T): T {
 }
 
 export function parseArgs(args: string[]): CliArgs {
-  // Auto-open the external browser by default — except where the printed URL is the better handoff.
-  // VS Code's integrated terminal: the URL is a clickable link (left-click opens the Simple Browser
-  // pane), so auto-opening external picks the heavier option and throws that per-launch choice away.
-  // An agent harness's shell (detectCallerHarness — CC/pi env markers): the agent's job is to share
-  // the link, and a window popped at the user is the orphaned-window class — worst on a relaunch
-  // whose predecessor DIED, where nothing is "replaced" yet the user's stale tab is one reload from
-  // live on the same sticky port (TB-CLI.md). `--open` / `--no-open` override this either way.
+  // The fallback when no mirror page is open anywhere to follow (the runners try that first).
+  // Outside VS Code: the external browser. Inside VS Code's integrated terminal: the
+  // printed URL, a clickable link (left-click opens the integrated browser, right-click external),
+  // which an external window would throw away. Likewise an agent harness's shell (detectCallerHarness
+  // — CC/pi env markers): a window popped at the user is the orphaned-window class — worst on a
+  // relaunch whose predecessor DIED, where nothing is "replaced" yet the user's stale tab is one
+  // reload from live on the same sticky port (TB-CLI.md). `--open` / `--no-open` override either way.
   const linkIsBetter = process.env.TERM_PROGRAM === 'vscode' || detectCallerHarness() !== undefined
 
   const result: CliArgs = {
     subcommand: 'run',
     file: '',
     watch: true,
-    open: !linkIsBetter,
+    open: linkIsBetter ? 'link' : 'window',
     server: false,
     trust: false,
     noTrust: false,
@@ -160,9 +164,9 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (arg === '--no-watch') {
       result.watch = false
     } else if (arg === '--open') {
-      result.open = true
+      result.open = 'window'
     } else if (arg === '--no-open') {
-      result.open = false
+      result.open = 'none'
     } else if (arg === '--server') {
       result.server = true
     } else if (arg === '--trust') {
@@ -451,9 +455,12 @@ Options:
                               whose reply you read.
   --no-watch                  Disable hot reload (watch is on by default)
   -p, --port <port>           Bind this exact port (fails if taken; default: the project's assigned slot)
-  --open                      Force-open the external browser (default off in
-                              VS Code's integrated terminal and agent shells)
-  --no-open                   Don't auto-open browser
+  --open                      Force a window (default off in VS Code's terminal
+                              and agent shells, where the printed link stands):
+                              inside VS Code when a page of ours is open there,
+                              else the external browser
+  --no-open                   Open nothing at launch, not even inside VS Code
+                              (a later send --wait still opens the page it needs)
   --trust                     Grant privileged capabilities (filesystem, AI,
                               and server.ts) for this run. Without it a bulb runs
                               Restricted: tb.fs / tb.ai / tb.server are blocked and

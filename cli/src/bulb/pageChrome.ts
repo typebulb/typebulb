@@ -114,6 +114,13 @@ export function themeHeadScript(name: string, theme?: 'light' | 'dark'): string 
   </script>`
 }
 
+/** How long a page keeps retrying a dead stream (the reconnect window), and the interval between
+ *  retries. The server announces the interval on connect (SSE `retry`), so a predecessor's tab
+ *  reattaches to a relaunch inside the server's settle window (server.ts RELOAD_SETTLE_MS), where the
+ *  launch hand-over waits for it. */
+export const RECONNECT_WINDOW_MS = 30 * 60000
+export const RECONNECT_RETRY_MS = 1000
+
 /**
  * The `/__reload` client, shared by the bulb page (`shim.ts`) and the mirror (`agentViewer/page.ts`):
  * hot reload, plus the reconnect half of a contract whose server half is `startServer`'s per-instance
@@ -136,7 +143,7 @@ export const reloadClientScript = `
     const es = new EventSource('/__reload');
     let bootId = null;
     let firstErrorAt = 0;
-    const RETRY_WINDOW_MS = 30 * 60000;
+    const RETRY_WINDOW_MS = ${RECONNECT_WINDOW_MS};
     es.addEventListener('open', () => { firstErrorAt = 0; });
     es.addEventListener('hello', (e) => {
       if (bootId === null) bootId = e.data;
@@ -146,6 +153,9 @@ export const reloadClientScript = `
       console.log('[typebulb] Reloading...');
       window.location.reload();
     });
+    // A relay open (TB-VSCode-Browser.md): the CLI asks a page of ours inside VS Code to open a URL,
+    // since its integrated browser honors a gesture-less window.open and keeps the new tab in-editor.
+    es.addEventListener('open-url', (e) => { window.open(e.data, '_blank', 'noopener'); });
     es.onerror = () => {
       if (!firstErrorAt) firstErrorAt = Date.now();
       if (Date.now() - firstErrorAt > RETRY_WINDOW_MS) es.close();

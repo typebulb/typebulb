@@ -2,7 +2,7 @@ import * as path from 'path'
 import { valid as semverValid, lt as semverLt } from 'semver'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, type BulbServer } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopBulbServer, isAlive, readWaitCursor, writeWaitCursor, isProjectMirror, type BulbServer } from '../serve/serverRegistry.js'
 import { VERSION } from '../version.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
@@ -30,7 +30,7 @@ export function findServer(servers: BulbServer[], arg: string, cwd?: string, cal
   const mirrors = arg === 'agent' ? servers.filter(s => s.agent != null) : servers.filter(s => s.agent === arg)
   if (mirrors.length) {
     if (!cwd) return mirrors[0]
-    const inCwd = mirrors.filter(s => s.cwd && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd))
+    const inCwd = mirrors.filter(s => isProjectMirror(s, cwd))
     // The generic `agent` token is disambiguated by the CALLER's OWN harness: a Claude Code process
     // renders its inline bulbs into the claude mirror, a pi process into the pi mirror, and there is ≤1 mirror
     // per (harness, cwd) (Inv. 2) — so (caller-harness, cwd) is a unique target and there is nothing to
@@ -304,9 +304,7 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
   const servers =
     scope === 'global' ? await listBulbServers()
     : scope === 'bulbs' ? await listBulbServers(cwd)
-    : (await listBulbServers()).filter(s =>
-        s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd) &&
-        (!callerHarness || s.agent === callerHarness))
+    : (await listBulbServers()).filter(s => isProjectMirror(s, cwd) && (!callerHarness || s.agent === callerHarness))
   const noun = scope === 'global' ? 'server' : scope === 'agent' ? 'mirror' : 'bulb'
   if (!servers.length) {
     console.log(scope === 'global' ? 'No running bulb servers.' : `No running ${noun}s for this project.`)

@@ -6,11 +6,11 @@ import { loadEnv, reportEnv } from '../env.js'
 import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir, conventionalIdentity, materializeBatchDir } from '../pipeline.js'
 import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
-import open from 'open'
 import { startAndRegister } from '../serve/serveSession.js'
-import { resolvePort } from '../serve/portBlocks.js'
+import { resolvePort, lastRunTimes } from '../serve/portBlocks.js'
 import { watchPath } from '../serve/watcher.js'
 import { startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
+import { RECONNECT_WINDOW_MS } from '../bulb/pageChrome.js'
 import { type ResolvedLocalOverride } from '../localOverride.js'
 
 /**
@@ -45,6 +45,10 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // lands on the same port and an old tab's reload reconnects.
   const replaced = await stopServersForBulb(bulbPath)
   if (replaced.length) console.log(`Replacing the running server for this bulb (pid ${replaced.map(s => s.pid).join(', ')})`)
+
+  // Read before resolvePort refreshes the slot's usedAt: whether a tab from an earlier run may still
+  // be retrying its stream is what the hand-over below watches for.
+  const priorRun = (await lastRunTimes(process.cwd()))(bulbPath)
 
   // The project block's sticky slot for this bulb (TB-CLI.md, Port allocation) — the same port every
   // run, so the replace above cannot move the URL out from under the user's open tab. Resolved right
@@ -94,7 +98,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Start + register the server, and get the shared SIGINT/SIGTERM cleanup shell
   // (serveSession.ts). The cross-project registry entry is what breakout's launch/list/stop
   // builds on (TB-Agent-Mirror-Inline.md).
-  const { port, url, onCleanup } = await startAndRegister({
+  const { port, onCleanup, handOver } = await startAndRegister({
     port: assignedPort,
     portNote,
     displayName: bulb.name,
@@ -212,11 +216,10 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   if (cleanupOverrideWatcher) onCleanup(cleanupOverrideWatcher)
   onCleanup(() => fs.rm(serverModulePath(bulbPath), { force: true }))
 
-  // Open browser — unless this launch replaced a live server on the same port, in which case its
-  // existing tab reconnects over SSE and reloads itself (the shim's boot-id check). Opening a second
-  // tab would only pile up (the orphaned-tab complaint); the relaunch loop reuses one tab instead.
-  if (args.open) {
-    if (replaced.some(s => s.port === port)) console.log('  Reusing the open browser tab.\n')
-    else await open(url)
-  }
+  // Hand over the URL (TB-CLI.md, TB-VSCode-Browser.md). A tab from an earlier run may still be
+  // retrying its stream — a live predecessor's, or a dead one's within the page's reconnect window —
+  // and reloads itself once it reattaches (the boot-id check), so the hand-over waits for it unless
+  // this bulb is fresh.
+  const mayHaveTab = replaced.length > 0 || Date.now() - priorRun < RECONNECT_WINDOW_MS
+  await handOver({ mode: args.open, fresh: !mayHaveTab, replacedLive: replaced.some(s => s.port === port) })
 }

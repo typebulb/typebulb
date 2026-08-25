@@ -38,7 +38,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   const existing = await findProjectViewer(basePath, agent)
   if (existing) {
     console.log(`Mirror '${agent}' is already running for this project:\n  ${existing.url}`)
-    if (args.open) await open(existing.url)
+    if (args.open === 'window') await open(existing.url)
     return
   }
 
@@ -91,7 +91,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // The registry identity is the `agent` field, not a `.bulb.md` path (a mirror has none) —
   // `typebulb agent`'s URL line and the launcher's self-exclusion find it that way
   // (TB-Agent-Mirror.md). `file` is a sentinel for `logs`/`stop` display only.
-  const { port, url, onCleanup } = await startAndRegister({
+  const { port, url, onCleanup, handOver } = await startAndRegister({
     port: assignedPort,
     portNote,
     displayName,
@@ -164,7 +164,8 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     })
   }
 
-  if (args.open) await open(url)
+  // Hand over the URL like runWeb; a restarted mirror's tab may be reattaching, so never fresh.
+  await handOver({ mode: args.open, fresh: false, replacedLive: false })
 
   // Register teardown with the shared cleanup shell (server.close / stopLog / unregister are owned by
   // startAndRegister; each step here runs best-effort). Fail-safe: the agent switcher removes its

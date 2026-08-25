@@ -5,6 +5,7 @@ import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
 import { canvasPngPath } from '../serve/paths.js'
 import { lastRunTimes } from '../serve/portBlocks.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
+import { PAGE_ARRIVAL_MS, type PageOutcome } from '../serve/server.js'
 import { readStdin, normalizeContent } from '../payload.js'
 
 /**
@@ -28,8 +29,12 @@ import { readStdin, normalizeContent } from '../payload.js'
  * stdout: zero keeps the fire-and-forget behavior, more than one (extra handlers, extra pages) is an
  * error, as is a handler throw. `tb:*` messages are shim-answered (never reach `tb.onMessage`) and
  * imply `--wait` — a reply is their only purpose, so silence is an error for them alone.
+ *
+ * A `--wait` that finds no page also asks the server to open one where the agent mirror is
+ * (`?open=1` → server.ts `requestPage`, TB-VSCode-Browser.md): a closed tab reopens for the agent
+ * that needs it, and the window stretches to let the page arrive. `--no-open` governs the launch only.
  */
-interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number; refused?: boolean }
+interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number; refused?: boolean; opening?: PageOutcome['how']; via?: string }
 
 /**
  * POST to the running server over `node:http` rather than global `fetch`. `--wait` is the only ceiling
@@ -88,8 +93,11 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     process.exit(1)
   }
 
+  // An open was acknowledged for this send: ask for no second one. The server's arrival clock starts
+  // before the relay's latency and ours after the reply, so a retry in that gap would re-relay.
+  let opened = false
   const post = async (replyMs: number): Promise<SendOutcome> => {
-    const query = [replyMs > 0 ? `reply=${replyMs}` : '', actuation ? 'solo=1' : ''].filter(Boolean).join('&')
+    const query = [replyMs > 0 ? `reply=${replyMs}` : '', actuation ? 'solo=1' : '', waitMs > 0 && !opened ? 'open=1' : ''].filter(Boolean).join('&')
     const resp = await postToServer(`${server.url}/__send${query ? `?${query}` : ''}`, message ?? '')
     if (resp.status < 200 || resp.status >= 300) {
       console.error(`send failed: HTTP ${resp.status} from ${server.url}/__send`)
@@ -99,11 +107,23 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   }
 
   let outcome: SendOutcome = {}
+  const started = Date.now()
   try {
-    const deadline = Date.now() + waitMs
+    const asked = started + waitMs   // the caller's own window
+    let deadline = asked
     do {
       outcome = await post(waitMs > 0 ? Math.max(deadline - Date.now(), 1000) : 0)
       if ((outcome.clients ?? 0) > 0 || Date.now() >= deadline) break
+      // What the server observed about a page (TB-VSCode-Browser.md): one on its way — opened for
+      // this send, opened by the launch, or reattaching — earns the arrival window, which the
+      // caller's default can't hold; "none" hands the caller's own window back.
+      const justOpened = outcome.opening === 'editor' || outcome.opening === 'external'
+      if (justOpened || outcome.opening === 'pending') deadline = Math.max(deadline, Date.now() + PAGE_ARRIVAL_MS)
+      else if (outcome.opening === 'none') deadline = Math.min(deadline, asked)
+      if (justOpened && !opened) {
+        opened = true
+        console.error(outcome.opening === 'editor' ? `Opened in VS Code via ${outcome.via}; waiting for the page.` : 'Opened in your browser, where the agent mirror is; waiting for the page.')
+      }
       await new Promise(r => setTimeout(r, 150))
     } while (true)
   } catch (e) {
@@ -122,10 +142,13 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     // hasn't come back is a stale tab in front of the user, and saying so is the whole difference
     // between a one-keystroke fix and an hour of hunting (TB-CLI.md, observed state).
     const dropped = outcome.droppedMsAgo
-    const stale = dropped !== undefined
-      ? ` — a page disconnected ${Math.round(dropped / 1000)}s ago and hasn't reconnected; reload it, or open ${server.url}`
-      : ` — no page has ever connected; share ${server.url} and arm: typebulb wait ${file} --match "[page] connected"`
-    if (waitMs > 0) console.error(`No page connected after ${waitMs / 1000}s${stale}`)
+    const noRelay = outcome.opening === 'none' ? ' and no agent mirror page is open to open one through' : ''
+    const stale = opened
+      ? ` — the page was opened but never attached; is the browser it opened in still there?`
+      : dropped !== undefined
+        ? ` — a page disconnected ${Math.round(dropped / 1000)}s ago and hasn't reconnected${noRelay}; reload it, or open ${server.url}`
+        : ` — no page has ever connected${noRelay}; share ${server.url} and arm: typebulb wait ${file} --match "[page] connected"`
+    if (waitMs > 0) console.error(`No page connected after ${((Date.now() - started) / 1000).toFixed(1)}s${stale}`)
     else console.error(`Sent, but no page is connected${stale}`)
     if (reserved) process.exit(1)   // a tb:* message exists only for its reply
     return

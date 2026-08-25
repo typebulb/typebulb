@@ -9,11 +9,13 @@ import { streamSSE } from 'hono/streaming'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
+import open from 'open'
 import { normalizeUpstreamError, consumeStreamResult, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
 import { parseConfig, splitIntoChunks, contentTypeFor, forbiddenAssetExt } from 'typebulb/format'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { inferModalJs } from '../bulb/inferModalUi.js'
-import { recordDenial } from './serverRegistry.js'
+import { RECONNECT_RETRY_MS } from '../bulb/pageChrome.js'
+import { recordDenial, relayOpen } from './serverRegistry.js'
 import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
@@ -44,6 +46,20 @@ function hostnameOf(value: string | undefined): string | undefined {
 function isLocalAddress(value: string | undefined): boolean {
   const host = hostnameOf(value)
   return !!host && LOCAL_HOSTS.has(host)
+}
+
+/** A local http(s) URL — the only kind `/__open` relays. */
+function isLocalHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && isLocalAddress(u.host)
+  } catch { return false }
+}
+
+/** Rendered by VS Code's integrated browser? Its UA carries both `Code/<ver>` and `Electron/<ver>`
+ *  (verified live on 1.134 — TB-VSCode-Browser.md). */
+function isVsCodeUserAgent(ua: string | undefined): boolean {
+  return !!ua && /\bCode\/\d/.test(ua) && /\bElectron\//.test(ua)
 }
 
 /** Does `origin` address the exact host:port given by the request's `Host` — i.e. the
@@ -114,7 +130,35 @@ export interface ServerOptions {
 export interface ServerInstance {
   port: number
   close: () => void
+  /** Have a page for this server, where the agent mirror is (TB-VSCode-Browser.md). See requestPage. */
+  requestPage: (opts: PageRequest) => Promise<PageOutcome>
 }
+
+export interface PageRequest {
+  /** May the CLI open the external browser when no page of ours is inside VS Code to relay through?
+   *  `never` — a replaced server's tab may still return; `follow` — only where the mirror itself is
+   *  open externally; `force` — the CLI's 'window' mode. The relay is tried first either way. */
+  external: 'never' | 'follow' | 'force'
+  /** No earlier tab of this server's can be reattaching (a bulb never run before), so its settle window is skipped. */
+  fresh: boolean
+}
+
+/** How `requestPage` found (or failed to find) the server a page. */
+export type PageOutcome =
+  | { how: 'attached' }              // a page is already here
+  | { how: 'pending' }               // one is on its way: reattaching after a drop, or just opened
+  | { how: 'editor'; via: string }   // relayed into VS Code through `via`
+  | { how: 'external' }              // the external browser was opened
+  | { how: 'none' }                  // nothing to open through, and no external window wanted
+
+/** A page that dropped (a reload, a closed tab) has this long to reattach before it counts as gone —
+ *  comfortably above the retry interval the page is told to use (pageChrome's RECONNECT_RETRY_MS). */
+export const RELOAD_SETTLE_MS = 3000
+/** An opened page has this long to attach; until then a second request is answered "pending". */
+export const PAGE_ARRIVAL_MS = 10000
+/** A request that found nothing to open through is answered "none" for this long before asking the
+ *  registry again — off the 150ms retry cadence, but quick to notice a mirror the user just opened. */
+const RELAY_RETRY_MS = 2000
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
@@ -238,6 +282,44 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   /** When a page's event stream last went away. The difference between "never opened" and "open but
    *  stale", which is the whole diagnosis when a send finds nobody home. */
   let lastPageDropAt = 0
+  /** The pages attached right now, one per event stream, with whether VS Code's integrated browser
+   *  renders each (its UA says so): the footholds `/__open` relays through. */
+  const pages = new Set<{ inEditor: boolean; open: (url: string) => Promise<void> }>()
+  const bootAt = Date.now()
+  /** The last ask that got as far as the relay, and whether it produced a page: which of the two
+   *  windows below applies (the arrival one, or the short don't-re-ask one). */
+  let lastAsk = { at: 0, opened: false }
+
+  // Have a page for this server, where the agent mirror is (TB-VSCode-Browser.md). An attached page
+  // counts; a page still on its way is left to arrive ("pending") — one reattaching after a drop, a
+  // predecessor's during this server's first settle window, or one a recent request already opened;
+  // else the relay into VS Code; else the external browser, as far as `external` allows. The launch
+  // asks through handOver (serveSession.ts), polling while pending; `/__send?open=1` asks on every
+  // `send --wait` retry, so a closed tab reopens for the agent that needs it. One place holds all
+  // three clocks (page count, last drop, last ask), so the two askers can't double-open.
+  const requestPage = async (opts: PageRequest): Promise<PageOutcome> => {
+    if (pages.size > 0) return { how: 'attached' }
+    const now = Date.now()
+    // When a page could last have started coming back on its own: this server's boot (a predecessor's
+    // tab still retrying, unless the bulb is fresh) or a page that just dropped. 0 disables the clock.
+    const reattachSince = Math.max(opts.fresh ? 0 : bootAt, lastPageDropAt)
+    if (now - reattachSince < RELOAD_SETTLE_MS) return { how: 'pending' }
+    if (lastAsk.opened && now - lastAsk.at < PAGE_ARRIVAL_MS) return { how: 'pending' }
+    if (!lastAsk.opened && now - lastAsk.at < RELAY_RETRY_MS) return { how: 'none' }
+    // Counted as opened BEFORE the relay's await: a concurrent asker (the launch's hand-over and a
+    // fast `send --wait` both poll) must see the open in flight, not "none".
+    lastAsk = { at: now, opened: true }
+    const url = `http://localhost:${port}`
+    const relay = await relayOpen(url, basePath)
+    if (relay?.where === 'editor') return { how: 'editor', via: relay.via }
+    if (opts.external === 'force' || (opts.external === 'follow' && relay?.where === 'external')) {
+      await open(url)
+      return { how: 'external' }
+    }
+    lastAsk.opened = false
+    return { how: 'none' }
+  }
+
   if (messageEmitter) {
     /** One held `/__send?reply` awaiting its pages' `/__send-reply` POSTs. */
     type PendingSend = { expected: number; received: number; results: string[]; errors: string[]; finish: (timedOut: boolean) => void }
@@ -253,16 +335,23 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       // here until seconds ago and hasn't come back — a stale tab the user is looking at right now.
       // "No page connected" is true for both and useless for either (TB-CLI.md, observed state).
       const dropped = clients === 0 && lastPageDropAt ? Date.now() - lastPageDropAt : undefined
+      // `?open=1` (every `send --wait` retry): with nobody listening, find the page a home where the
+      // agent mirror is, and say how it went so the sender can announce it and wait for the arrival.
+      const page = clients === 0 && c.req.query('open') !== undefined ? await requestPage({ external: 'follow', fresh: false }) : undefined
+      const status = { clients, droppedMsAgo: dropped, ...(page ? { opening: page.how, via: page.how === 'editor' ? page.via : undefined } : {}) }
       // `?solo=1` marks an actuation (TB-Interrogation-Actuation.md): a gesture broadcast to two
       // pages has fired twice before their replies can disagree, so — unlike the read-side
       // one-reply rule, which judges after the fact — this refuses BEFORE dispatch unless exactly
       // one page is connected. Zero pages keeps the sender's retry-and-report path.
       if (c.req.query('solo') !== undefined && clients !== 1) {
-        return c.json({ clients, droppedMsAgo: dropped, refused: clients > 1 })
+        return c.json({ ...status, refused: clients > 1 })
       }
-      if (replyMs <= 0 || clients === 0) {
+      // Nobody listening: never emit. `clients` was read before requestPage's await, and a page that
+      // attached during it would run this payload AND the sender's retry — a tb:click fired twice.
+      if (clients === 0) return c.json(status)
+      if (replyMs <= 0) {
         messageEmitter.emit('message', { payload })
-        return c.json({ clients, droppedMsAgo: dropped })
+        return c.json(status)
       }
       const id = ++sendSeq
       const outcome = await new Promise<{ results: string[]; errors: string[]; timedOut: boolean }>(resolve => {
@@ -659,6 +748,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         const onMessage = (envelope: { id?: number; payload: string }) => { stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }) }
         reloadEmitter?.on('reload', onReload)
         messageEmitter?.on('message', onMessage)
+        const page = { inEditor: isVsCodeUserAgent(c.req.header('user-agent')), open: (url: string) => stream.writeSSE({ event: 'open-url', data: url }) }
+        pages.add(page)
         // A page attached where none was — the arrival wake (TB-Wait.md, "who speaks"): an agent
         // that needs a live page ends its turn with the link and a background
         // `wait --match "[page] connected"` armed; the user opening the page is the wake, never a
@@ -668,14 +759,16 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         stream.onAbort(() => {
           reloadEmitter?.removeListener('reload', onReload)
           messageEmitter?.removeListener('message', onMessage)
+          pages.delete(page)
           lastPageDropAt = Date.now()
         })
 
         // Who the page just connected to. A replace hands the same port to a NEW process serving new
         // bytes, so a page that reconnects and sees a different boot id reloads itself; the same id
         // (a laptop wake, a network blip) resumes silently. Without this a reconnected tab is a
-        // zombie showing the dead server's render — TB-CLI.md, "A replace keeps the user's tab".
-        await stream.writeSSE({ event: 'hello', data: bootId })
+        // zombie showing the dead server's render — TB-CLI.md, "A replace keeps the user's tab". The
+        // `retry` is the page's reconnect interval, which runWeb's hand-over grace is sized to.
+        await stream.writeSSE({ event: 'hello', data: bootId, retry: RECONNECT_RETRY_MS })
 
         // Keep connection alive. Checking `aborted` is what lets this coroutine end when the
         // page disconnects — Hono's `sleep` ignores abort, and the stream only closes once
@@ -685,6 +778,23 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           await stream.sleep(30000)
         }
       })
+    })
+
+    // A relay open (TB-VSCode-Browser.md): open `url` inside VS Code through a page of ours that its
+    // integrated browser renders — that browser honors a gesture-less window.open and keeps the new
+    // tab in-editor, which no CLI-side route can. Exactly one page gets it: two would open two tabs
+    // and trip the one-page rule. Local URLs only, and CSRF-guarded like /__send: the CLI (no Origin)
+    // passes, a foreign page is refused, so nothing else can pop tabs at the user. `pages` counts every
+    // attached page, in-editor or not: how a caller tells "open only in an external browser" from "not
+    // open at all" (relayOpen's external answer).
+    app.use('/__open', csrfGuard)
+    app.post('/__open', async (c) => {
+      let url = ''
+      try { url = String((await c.req.json<{ url?: unknown }>()).url ?? '') } catch { /* the 400 below */ }
+      if (!isLocalHttpUrl(url)) return c.json({ error: 'a local http URL is required' }, 400)
+      const foothold = [...pages].find(p => p.inEditor)
+      await foothold?.open(url)
+      return c.json({ opened: !!foothold, pages: pages.size })
     })
   }
 
@@ -721,6 +831,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   return {
     port,
     close: () => server.close(),
+    requestPage,
   }
 }
 

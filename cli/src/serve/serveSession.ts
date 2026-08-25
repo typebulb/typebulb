@@ -1,6 +1,7 @@
-import { startServer, type ServerOptions } from './server.js'
+import { startServer, type ServerOptions, type PageRequest } from './server.js'
 import { registerServer, unregisterServer, type BulbServer } from './serverRegistry.js'
 import { reportPortInUse } from './portBlocks.js'
+import { type CliArgs } from '../args.js'
 
 /**
  * The shared server-lifecycle spine of the two long-running runners — the bulb dev server
@@ -16,6 +17,12 @@ import { reportPortInUse } from './portBlocks.js'
 export interface ServeSession {
   port: number
   url: string
+  /** The launch's hand-over of the URL (TB-VSCode-Browser.md): have the server find its page a home
+   *  where the agent mirror is, and say where it landed. Each argument is a fact the caller knows —
+   *  the CLI's open `mode`, whether this bulb is `fresh` (no earlier tab of its own can be
+   *  reattaching), and whether the launch replaced a *live* server on this same port; the policy they
+   *  add up to is this method's alone. */
+  handOver(opts: { mode: CliArgs['open']; fresh: boolean; replacedLive: boolean }): Promise<void>
   /** Register a teardown step, run in registration order on SIGINT/SIGTERM after the HTTP server
    *  closes and before the log tee is restored and the registry entry removed. Each runs
    *  best-effort — a throw is swallowed so one failing step never skips the unregister. */
@@ -76,6 +83,23 @@ export async function startAndRegister(opts: StartAndRegisterOpts): Promise<Serv
   return {
     port,
     url,
+    async handOver({ mode, fresh, replacedLive }) {
+      if (mode === 'none') return
+      // A page may still be on its way (a predecessor's tab reattaching, TB-CLI.md): poll until it
+      // lands or the server's settle window passes, so a relaunch reuses that tab the moment it
+      // returns rather than piling a second one (the orphaned-tab complaint).
+      // A replaced live server's tab reconnects on this very port, so no window may be opened at it;
+      // otherwise `--open`/'window' forces one and the printed-link modes only follow the mirror.
+      const request: PageRequest = { fresh, external: replacedLive ? 'never' : mode === 'window' ? 'force' : 'follow' }
+      let page = await server.requestPage(request)
+      while (page.how === 'pending') {
+        await new Promise(r => setTimeout(r, 150))
+        page = await server.requestPage(request)
+      }
+      if (page.how === 'attached') console.log('  Reusing the open browser tab.\n')
+      else if (page.how === 'editor') console.log(`  Opened in VS Code via ${page.via}.\n`)
+      else if (page.how === 'external') console.log('  Opened in your browser.\n')
+    },
     onCleanup(fn) { cleanups.push(fn) },
   }
 }

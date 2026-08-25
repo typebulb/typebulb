@@ -273,6 +273,17 @@ export async function unregisterServer(pid: number): Promise<void> {
   await unlink(waitCursorPath(pid)).catch(() => {})
 }
 
+/** A mirror reflecting THIS project. A mirror has no bulb path, so its launch `cwd` is the only thing
+ *  to match on (TB-Agent-Mirror.md); a pre-cwd entry can't be claimed, so it never matches. */
+export function isProjectMirror(s: BulbServer, cwd: string): boolean {
+  return s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)
+}
+
+/** A bulb server whose file lives under this project — the mirror's counterpart. */
+export function isProjectBulb(s: BulbServer, cwd: string): boolean {
+  return s.agent == null && isUnderProject(s.file, cwd)
+}
+
 /**
  * Every live server, oldest first. Dead PIDs are pruned (files unlinked) as a side
  * effect, so the list self-heals and a host never shows a server it can't reach.
@@ -312,7 +323,7 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
       else await unregisterServer(pid)
     }),
   )
-  const scoped = cwd ? live.filter(s => s.agent == null && isUnderProject(s.file, cwd)) : live
+  const scoped = cwd ? live.filter(s => isProjectBulb(s, cwd)) : live
   return scoped.sort((a, b) => a.startedAt - b.startedAt)
 }
 
@@ -327,10 +338,40 @@ export async function listBulbServers(cwd?: string): Promise<BulbServer[]> {
  * without, any mirror.
  */
 export async function findProjectViewer(cwd: string, agent?: string): Promise<BulbServer | undefined> {
-  const here = normalizeBulbPath(cwd)
-  return (await listBulbServers()).find(s =>
-    s.cwd != null && normalizeBulbPath(s.cwd) === here &&
-    (agent ? s.agent === agent : s.agent != null))
+  return (await listBulbServers()).find(s => isProjectMirror(s, cwd) && (agent ? s.agent === agent : true))
+}
+
+/** Where a launch's page should open, read from the pages of ours already open (TB-VSCode-Browser.md):
+ *  `editor` — a page VS Code renders has just `window.open`ed the URL in-editor (`via` names it for the
+ *  banner); `external` — this project's mirror is open only outside VS Code, so the caller opens there
+ *  itself (a gesture-less popup from that page would be blocked); undefined — no mirror page anywhere. */
+export type RelayOutcome = { where: 'editor'; via: string } | { where: 'external' } | undefined
+
+/**
+ * Ask this project's servers to open `url` through a page of theirs inside VS Code: mirrors first
+ * (long-lived, so the usual foothold), then bulb servers. Each `/__open` answers whether it had such a
+ * page — the first that did has opened the URL — and how many pages it has at all, which is how a
+ * mirror open only in an external browser is told from no mirror page at all.
+ */
+export async function relayOpen(url: string, cwd: string): Promise<RelayOutcome> {
+  const selfPort = new URL(url).port
+  const all = (await listBulbServers()).filter(s => String(s.port) !== selfPort)   // never ask the server being opened
+  const mirrors = all.filter(s => isProjectMirror(s, cwd))
+  const bulbs = all.filter(s => isProjectBulb(s, cwd))
+  let mirrorPages = 0
+  for (const s of [...mirrors, ...bulbs]) {
+    try {
+      const resp = await fetch(`${s.url}/__open`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+        signal: AbortSignal.timeout(2000),
+      })
+      if (!resp.ok) continue
+      const { opened, pages } = (await resp.json()) as { opened?: boolean; pages?: number }
+      if (opened) return { where: 'editor', via: s.agent ? 'the agent mirror' : `${path.basename(s.file)}'s page` }
+      if (s.agent != null) mirrorPages += pages ?? 0
+    } catch { /* not answering — the next may */ }
+  }
+  return mirrorPages > 0 ? { where: 'external' } : undefined
 }
 
 /**
