@@ -52,7 +52,7 @@ const AGENT_TB_SHIM = `
     })
   });
   if (window.__TYPEBULB_WATCH__) {
-${reloadClientScript}
+${reloadClientScript()}
   }
 })();
 `

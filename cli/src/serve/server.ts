@@ -62,6 +62,12 @@ function isVsCodeUserAgent(ua: string | undefined): boolean {
   return !!ua && /\bCode\/\d/.test(ua) && /\bElectron\//.test(ua)
 }
 
+/** The note a yielded page parks on when its browser refuses a script the close (TB-VSCode-Browser.md,
+ *  one CLI-opened page). The link reopens the bulb as the user's own page: no fragment, so no yielding. */
+const PARKED_PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>typebulb</title>
+<style>body{font:15px system-ui,sans-serif;margin:0;padding:32px;color:CanvasText;background:Canvas;color-scheme:light dark}a{color:inherit}</style></head>
+<body><p>This bulb was already open in another tab, so this one stepped aside.</p><p><a href="/">Open it here too</a></p></body></html>`
+
 /** Does `origin` address the exact host:port given by the request's `Host` — i.e. the
  *  page's *own* origin? This is the only origin allowed to reach a privileged endpoint
  *  when `Sec-Fetch-Site` is absent. Matching against `Host` tracks whichever local name
@@ -156,6 +162,11 @@ export type PageOutcome =
 export const RELOAD_SETTLE_MS = 3000
 /** An opened page has this long to attach; until then a second request is answered "pending". */
 export const PAGE_ARRIVAL_MS = 10000
+/** A page the CLI opened (the relay, or the external browser) yields to any other page of this
+ *  server's for this long after its first attach — the returning tab the launch guessed wrong about,
+ *  a user's own click — after which it is the user's page like any other (TB-VSCode-Browser.md, one
+ *  CLI-opened page). */
+const RELAY_PROVISIONAL_MS = 10000
 /** A request that found nothing to open through is answered "none" for this long before asking the
  *  registry again — off the 150ms retry cadence, but quick to notice a mirror the user just opened. */
 const RELAY_RETRY_MS = 2000
@@ -284,8 +295,31 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let lastPageDropAt = 0
   /** The pages attached right now, one per event stream, with whether VS Code's integrated browser
    *  renders each (its UA says so): the footholds `/__open` relays through. */
-  const pages = new Set<{ inEditor: boolean; open: (url: string) => Promise<void> }>()
+  const pages = new Set<{ inEditor: boolean; doc?: string; open: (url: string) => Promise<void>; yield: () => Promise<void> }>()
+  /** When each CLI-opened document first attached, by the id its shim announces (`/__reload?relay=<id>`):
+   *  what makes a page provisional (RELAY_PROVISIONAL_MS), and what keeps a same-document reconnect from
+   *  counting as a fresh arrival. One entry per relayed open, kept for the server's life. */
+  const relayDocs = new Map<string, number>()
   const bootAt = Date.now()
+
+  // One CLI-opened page (TB-VSCode-Browser.md): on every attach, with more than one page here, each
+  // still-provisional page yields — closes itself, or parks — keeping whichever page we did NOT open
+  // (the returning tab the launch guessed wrong about, the user's own click), or between provisional
+  // pages the earliest. The count is the fact; the launch's settle window is only the polish that
+  // usually stops the second tab opening at all.
+  const firstAttach = (p: { doc?: string }) => relayDocs.get(p.doc ?? '') ?? 0   // 0: not ours, never provisional
+  const yieldProvisional = () => {
+    if (pages.size < 2) return
+    const now = Date.now()
+    const provisional = [...pages].filter(p => now - firstAttach(p) < RELAY_PROVISIONAL_MS)
+    const keep = pages.size > provisional.length ? undefined
+      : provisional.sort((a, b) => firstAttach(a) - firstAttach(b))[0]
+    for (const p of provisional) {
+      if (p === keep) continue
+      console.log('[page] yielded: another page was already open')
+      p.yield().catch(() => { /* the stream may already be gone */ })
+    }
+  }
   /** The last ask that got as far as the relay, and whether it produced a page: which of the two
    *  windows below applies (the arrival one, or the short don't-re-ask one). */
   let lastAsk = { at: 0, opened: false }
@@ -309,7 +343,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     // Counted as opened BEFORE the relay's await: a concurrent asker (the launch's hand-over and a
     // fast `send --wait` both poll) must see the open in flight, not "none".
     lastAsk = { at: now, opened: true }
-    const url = `http://localhost:${port}`
+    // The fragment marks a page WE opened: its shim announces itself provisional and strips the hash,
+    // so the page yields if another turns out to be here (yieldProvisional) and a reload is ordinary.
+    const url = `http://localhost:${port}#tb-relay`
     const relay = await relayOpen(url, basePath)
     if (relay?.where === 'editor') return { how: 'editor', via: relay.via }
     if (opts.external === 'force' || (opts.external === 'follow' && relay?.where === 'external')) {
@@ -748,19 +784,37 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         const onMessage = (envelope: { id?: number; payload: string }) => { stream.writeSSE({ event: 'message', data: JSON.stringify(envelope) }) }
         reloadEmitter?.on('reload', onReload)
         messageEmitter?.on('message', onMessage)
-        const page = { inEditor: isVsCodeUserAgent(c.req.header('user-agent')), open: (url: string) => stream.writeSSE({ event: 'open-url', data: url }) }
+        // One detach for both exits — the page leaving, or being told to yield — so a yielded page
+        // stops counting (and receiving sends) before its tab has actually closed. Returns whether
+        // the page was still here; removeListener is a no-op the second time.
+        const detach = () => {
+          reloadEmitter?.removeListener('reload', onReload)
+          messageEmitter?.removeListener('message', onMessage)
+          return pages.delete(page)
+        }
+        const doc = c.req.query('relay') || undefined
+        const page = {
+          inEditor: isVsCodeUserAgent(c.req.header('user-agent')),
+          doc,
+          open: (url: string) => stream.writeSSE({ event: 'open-url', data: url }),
+          yield: () => { detach(); return stream.writeSSE({ event: 'yield', data: '' }) },
+        }
+        if (doc && !relayDocs.has(doc)) relayDocs.set(doc, Date.now())
         pages.add(page)
         // A page attached where none was — the arrival wake (TB-Wait.md, "who speaks"): an agent
         // that needs a live page ends its turn with the link and a background
         // `wait --match "[page] connected"` armed; the user opening the page is the wake, never a
         // popped window. 0→1 only, so extra tabs don't re-fire; a hot reload's drop-and-reattach
         // re-logs, symmetric with the run markers.
-        if (messageEmitter && messageEmitter.listenerCount('message') === 1) console.log('[page] connected')
+        if (messageEmitter && pages.size === 1) console.log('[page] connected')
+        yieldProvisional()
         stream.onAbort(() => {
-          reloadEmitter?.removeListener('reload', onReload)
-          messageEmitter?.removeListener('message', onMessage)
-          pages.delete(page)
-          lastPageDropAt = Date.now()
+          if (!detach()) return   // already yielded: not a departure
+          const dropAt = lastPageDropAt = Date.now()
+          // The departure line, the arrival's twin: only once the settle window passes with no page
+          // back (a hot reload's drop-and-reattach stays silent), and only for the LAST page. A
+          // page-driven run whose tab closed is otherwise a log that just stops (TB-Wait.md).
+          setTimeout(() => { if (pages.size === 0 && lastPageDropAt === dropAt && messageEmitter) console.log('[page] disconnected') }, RELOAD_SETTLE_MS).unref()
         })
 
         // Who the page just connected to. A replace hands the same port to a NEW process serving new
@@ -796,6 +850,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       await foothold?.open(url)
       return c.json({ opened: !!foothold, pages: pages.size })
     })
+
+    // Where a CLI-opened page parks when it must yield but the browser refuses `window.close()` (a
+    // tab that wasn't script-opened and has history): the bulb stops running there.
+    app.get('/__parked', (c) => c.html(PARKED_PAGE))
   }
 
   // Re-proxy absolute imports an esm.sh module body emits — they resolve against localhost (the

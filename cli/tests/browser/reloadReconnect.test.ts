@@ -110,3 +110,56 @@ describe('a replaced server keeps the open tab (live browser)', () => {
     expect(reloaded).toBe(true)
   }, 120_000)
 })
+
+// One CLI-opened page (TB-VSCode-Browser.md): a tab opened on the relay's `#tb-relay` URL yields
+// when a second page attaches — `window.close()` where the browser lets a script close the tab (one
+// it opened, or one with no history), else parking on `/__parked` so the bulb no longer runs there.
+// Real-browser only: the close rule and the navigation are the browser's, and node can stand in for
+// neither. Verified red→green: with the shim's `yield` listener removed, both tabs stay, both running.
+describe('a relay-opened tab yields to a second page (live browser)', () => {
+  let browser: Browser | undefined
+  let home: string
+  const running: ChildProcess[] = []
+
+  beforeAll(() => {
+    requireDistBuild()
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-yield-'))
+    fs.writeFileSync(path.join(home, 'yield.bulb.md'), bulbSource('yield'))
+  })
+
+  afterAll(async () => {
+    await browser?.close()
+    for (const child of running) child.kill()
+    await new Promise(r => setTimeout(r, 500))
+    try { fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* a temp dir the OS will reap */ }
+  })
+
+  it('closes itself when script-opened, parks when the browser refuses the close', async () => {
+    const url = await launchBulb(path.join(home, 'yield.bulb.md'), {
+      cwd: home, env: { ...process.env, TYPEBULB_SERVERS_DIR: path.join(home, 'servers') }, track: running,
+    })
+    browser = await chromium.launch()
+    const ctx = await browser.newContext()
+
+    // The relay's own shape: a tab a page of ours window.open'ed. It yields by closing.
+    const opener = await ctx.newPage()
+    const [relayed] = await Promise.all([
+      ctx.waitForEvent('page'),
+      opener.evaluate((u: string) => { window.open(u, '_blank') }, url + '#tb-relay'),
+    ])
+    await relayed.waitForFunction(() => document.title === 'yield')
+    const user = await ctx.newPage()
+    await user.goto(url)
+    await relayed.waitForEvent('close', { timeout: 15_000 })
+    expect(relayed.isClosed()).toBe(true)
+    expect(user.isClosed()).toBe(false)
+
+    // A tab with history that no script opened: the browser refuses the close, so it parks.
+    const stuck = await ctx.newPage()
+    await stuck.goto(url + '/?first')
+    await stuck.goto(url + '/#tb-relay')
+    await stuck.waitForURL(/\/__parked$/, { timeout: 15_000 })
+    expect(await stuck.textContent('body')).toContain('already open in another tab')
+    expect(user.isClosed()).toBe(false)
+  }, 120_000)
+})

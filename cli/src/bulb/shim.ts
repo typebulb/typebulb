@@ -804,7 +804,18 @@ export const typebulbShim = `
   // origin, not an inline bulb); a srcdoc inline bulb or a file:// static export has no server, so onMessage just
   // stays inert there. Opening it independent of watch is what lets send reach a --no-watch page.
   if (!isFramed && location.protocol.indexOf('http') === 0) {
-${reloadClientScript}
+    // A page the CLI opened arrives as #tb-relay (TB-VSCode-Browser.md, one CLI-opened page): it
+    // announces itself on its stream under a per-document id, and strips the hash so a reload is an
+    // ordinary page. Told to yield, it closes itself; a tab the browser won't let a script close
+    // parks instead, which still stops the bulb running twice.
+    const relayed = location.hash === '#tb-relay';
+    if (relayed) history.replaceState(null, '', location.pathname + location.search);
+${reloadClientScript("relayed ? '/__reload?relay=' + Math.random().toString(36).slice(2) : '/__reload'")}
+    es.addEventListener('yield', () => {
+      es.close();
+      window.close();
+      setTimeout(() => location.replace('/__parked'), 250);
+    });
     es.addEventListener('message', async (e) => {
       // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved
       // namespace (TB-Interrogation.md): answered by a built-in handler, never delivered to

@@ -416,14 +416,32 @@ describe("the page-connect wake line — '[page] connected' (TB-Wait.md)", () =>
     }
     expect(out.filter(l => l.includes('[page] connected'))).toHaveLength(1)
   })
+
+  it("logs '[page] disconnected' once the last page has been gone for the settle window; a reattach in time stays silent", async () => {
+    await drained()
+    const { out, restore } = capture()
+    try {
+      // A hot reload's shape: a drop, then back inside the window — no line.
+      ;(await openSse()).destroy()
+      await new Promise(r => setTimeout(r, 300))
+      const b = await openSse()
+      await new Promise(r => setTimeout(r, RELOAD_SETTLE_MS + 300))
+      expect(out.filter(l => l.includes('[page] disconnected'))).toHaveLength(0)
+      // The real departure: the last page gone, nothing back.
+      b.destroy()
+      await new Promise(r => setTimeout(r, RELOAD_SETTLE_MS + 300))
+    } finally { restore() }
+    expect(out.filter(l => l.includes('[page] disconnected'))).toHaveLength(1)
+  }, 15000)
 })
 
-/** Attach a page to a server's events SSE under a given User-Agent; resolves once its `hello` frame lands. */
-function attachPage(userAgent: string, base = url('')): Promise<{ frames: () => string; close: () => void }> {
+/** Attach a page to a server's events SSE under a given User-Agent (and stream query — the shim's
+ *  `?relay=<doc>` for a CLI-opened page); resolves once its `hello` frame lands. */
+function attachPage(userAgent: string, base = url(''), query = ''): Promise<{ frames: () => string; close: () => void }> {
   return new Promise((resolve, reject) => {
-    const u = new URL(base + '/__reload')
+    const u = new URL(base + '/__reload' + query)
     let buf = ''
-    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname, headers: { 'User-Agent': userAgent } }, res => {
+    const req = http.get({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: { 'User-Agent': userAgent } }, res => {
       res.setEncoding('utf8')
       res.on('data', (d: string) => {
         buf += d
@@ -441,6 +459,54 @@ const drained = async () => { for (let i = 0; i < 40 && emitter.listenerCount('m
 const VSCODE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.134.0 Chrome/148.0.7778.280 Electron/42.8.1 Safari/537.36'
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 const openVia = (target: string) => fetch(url('/__open'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: target }) })
+
+// One CLI-opened page (TB-VSCode-Browser.md): a page the relay opened announces itself on its stream
+// (`?relay=<doc>`), is provisional for RELAY_PROVISIONAL_MS, and is told to `yield` the moment another
+// page is attached — whichever page the CLI did NOT open wins; between two of its own, the earlier.
+describe('one CLI-opened page — a provisional relay page yields (TB-VSCode-Browser.md)', () => {
+  /** The stream's frames once the server has had a beat to write the verdict. */
+  const frames = async (p: { frames: () => string }) => { await new Promise(r => setTimeout(r, 150)); return p.frames() }
+
+  it('stays when it is the only page', async () => {
+    await drained()
+    const relayed = await attachPage(CHROME_UA, url(''), '?relay=solo')
+    try { expect(await frames(relayed)).not.toContain('event: yield') } finally { relayed.close() }
+  })
+
+  it('yields to a page that was already here, and to one that arrives after it', async () => {
+    await drained()
+    const user = await attachPage(CHROME_UA)
+    const late = await attachPage(CHROME_UA, url(''), '?relay=late')
+    try {
+      expect(await frames(late)).toContain('event: yield')
+      expect(user.frames()).not.toContain('event: yield')
+    } finally { late.close(); user.close() }
+    await drained()
+    // The relaunch shape: the relayed tab lands first, the user's returning tab a beat later.
+    const early = await attachPage(CHROME_UA, url(''), '?relay=early')
+    const returning = await attachPage(CHROME_UA)
+    try {
+      expect(await frames(early)).toContain('event: yield')
+      expect(returning.frames()).not.toContain('event: yield')
+    } finally { early.close(); returning.close() }
+  })
+
+  it('between two relay pages the earlier stays and the later yields', async () => {
+    await drained()
+    const first = await attachPage(CHROME_UA, url(''), '?relay=first')
+    const second = await attachPage(CHROME_UA, url(''), '?relay=second')
+    try {
+      expect(await frames(second)).toContain('event: yield')
+      expect(first.frames()).not.toContain('event: yield')
+    } finally { first.close(); second.close() }
+  })
+
+  it('serves the parked note a yielded tab lands on when it cannot close', async () => {
+    const res = await fetch(url('/__parked'))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('already open in another tab')
+  })
+})
 
 // The relay (TB-VSCode-Browser.md): `/__open` streams an `open-url` event to exactly one page that
 // VS Code's integrated browser renders (told by its User-Agent), so the CLI can land a bulb in-editor;

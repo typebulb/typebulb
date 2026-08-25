@@ -250,7 +250,7 @@ export async function lastRunTimes(cwd: string): Promise<(file: string) => numbe
 
 /**
  * The port to bind. An explicit `--port` is honoured or fails (the caller's decision, not ours to
- * silently move); otherwise the project block's sticky slot, probing within the block and finally
+ * silently move), its run still recorded; otherwise the project block's sticky slot, probing within the block and finally
  * spilling past the band. A just-replaced predecessor may hold the slot for a beat, so the assigned
  * one is retried briefly before we conclude somebody else owns it — that retry is what keeps an open
  * tab pointed at a live server across a relaunch.
@@ -260,6 +260,10 @@ export async function resolvePort(opts: { explicit?: number; target: PortTarget;
     // Never bumped: a flag whose only purpose is to name a port has already decided which URL the
     // caller opens or hands out. Checked here so it fails before a compile's worth of output.
     if (!(await canBind(opts.explicit))) await reportPortInUse(opts.explicit)
+    // The run is still recorded (the slot's usedAt, what `lastRunTimes` answers): a launch reads it
+    // to know whether an earlier tab may be retrying its stream. Unrecorded, a --port relaunch read
+    // as the bulb's first run, skipped the settle window, and stacked a tab on the returning one.
+    if (opts.target.kind === 'bulb') await assignedPortFor(opts.target, opts.cwd)
     return { port: opts.explicit }
   }
 

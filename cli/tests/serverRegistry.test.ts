@@ -122,12 +122,16 @@ describe('serverRegistry', () => {
       expect(await assignedPortFor({ kind: 'mirror', agent: 'claude' }, proj)).toBe(claude)
     })
 
-    it('honours an explicit port without consulting a block', async () => {
+    it('honours an explicit port, and still records the run', async () => {
       const proj = path.join(dir, 'proj')
       await mkdir(proj, { recursive: true })
+      const file = path.join(proj, 'explicit.bulb.md')
       // A port we've just confirmed free, so the strictness check passes and the test stays hermetic.
       const free = await findAvailablePort(45000)
-      expect((await resolvePort({ explicit: free, target: { kind: 'bulb', file: path.join(proj, 'x.bulb.md') }, cwd: proj })).port).toBe(free)
+      const t0 = Date.now()
+      expect((await resolvePort({ explicit: free, target: { kind: 'bulb', file }, cwd: proj })).port).toBe(free)
+      // The launch's "may a tab still be retrying?" read (TB-CLI.md hand-over) must see this run too.
+      expect((await lastRunTimes(proj))(file)).toBeGreaterThanOrEqual(t0)
     })
 
     it('reports when a bulb last ran, and 0 before any run', async () => {

@@ -137,10 +137,11 @@ export const RECONNECT_RETRY_MS = 1000
  * opened with means reload rather than resume.
  *
  * Leaves `es` in scope: the bulb shim adds its own `message` listener (the `typebulb send` channel)
- * to the same stream.
+ * to the same stream. `streamUrl` is a JS expression for the stream to open — the bulb shim passes its
+ * relay-aware one (TB-VSCode-Browser.md, one CLI-opened page); the mirror takes the default.
  */
-export const reloadClientScript = `
-    const es = new EventSource('/__reload');
+export const reloadClientScript = (streamUrl = "'/__reload'") => `
+    const es = new EventSource(${streamUrl});
     let bootId = null;
     let firstErrorAt = 0;
     const RETRY_WINDOW_MS = ${RECONNECT_WINDOW_MS};
