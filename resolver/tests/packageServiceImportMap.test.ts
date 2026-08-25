@@ -118,3 +118,21 @@ describe('PackageService.buildImportMap - subpath externalization', () => {
     expect(importMap.imports['domeleon/']).toMatch(/esm\.sh\/.*domeleon@.*\/$/)
   })
 })
+
+describe('PackageService.buildImportMap - declared ranges', () => {
+  it('re-resolves a pinned version that falls outside the declared range', async () => {
+    // A pin is keyed by (name, range) and no writer stores a non-satisfying version, so this
+    // state only arises from a corrupt or hand-edited cache; the invariant is that it can never
+    // reach an import map (TB-Packages.md, Declared Ranges Reach the Resolver).
+    const cache = new FakeCache()
+    await cache.setPinnedExact('tensorgrad', '^0.4.9', '0.4.8')
+    await cache.setIndex('tensorgrad', ['0.4.9', '0.4.8'], { latest: '0.4.9' })
+    await cache.setMeta('tensorgrad', '0.4.9', undefined, undefined, undefined)
+    const service = createResolver(cache, new FailingHttp()).packageService
+
+    const { importMap } = await service.buildImportMap(`import { packRGBA8 } from 'tensorgrad'`, { tensorgrad: '^0.4.9' })
+
+    expect(importMap.imports['tensorgrad']).toContain('tensorgrad@0.4.9')
+    expect(await cache.getPinnedExact('tensorgrad', '^0.4.9')).toBe('0.4.9')
+  })
+})

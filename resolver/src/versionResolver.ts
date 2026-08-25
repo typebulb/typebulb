@@ -30,15 +30,18 @@ export class VersionResolver {
   async resolveExactForRoot(root: string, range?: string) {
     if (!range) return this.learnExactVersion(root)
 
+    // A dist-tag "range" (`next`) has nothing to check; only a real semver range constrains the pin.
+    const inRange = (v: string) => !this.semver.isRange(range) || this.semver.satisfies(range, v)
+
     const pinned = await this.cache.getPinnedExact(root, range)
     if (pinned) {
-      if (this.semver.isExactVersion(pinned)) return pinned
-      // Routine, not an error: a cached pin that isn't an exact version just gets re-resolved below.
-      console.debug('[typebulb] cached version for', root, 'is not exact (', pinned, '); re-resolving from registry')
+      if (this.semver.isExactVersion(pinned) && inRange(pinned)) return pinned
+      // Routine, not an error: a pin that isn't exact or falls outside the range just gets re-resolved below.
+      console.debug('[typebulb] cached version for', root, 'is not exact or not in', range, '(', pinned, '); re-resolving from registry')
     }
 
     const pinIfExact = async (v: string | undefined) => {
-      if (v && this.semver.isExactVersion(v)) {
+      if (v && this.semver.isExactVersion(v) && inRange(v)) {
         await this.cache.setPinnedExact(root, range, v)
         return v
       }

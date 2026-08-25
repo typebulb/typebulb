@@ -1,6 +1,6 @@
 export type Version = string
 
-import { gt, satisfies as satisfiesFn, maxSatisfying, major, valid } from 'semver'
+import { gt, satisfies as satisfiesFn, maxSatisfying, major, valid, validRange } from 'semver'
 
 export class SemverService {
 
@@ -50,6 +50,11 @@ export class SemverService {
 
   isExactVersion(version: string): boolean {
     return valid(version) !== null
+  }
+
+  /** False for a dist-tag such as `next`, which npm accepts as a spec but no semver check can judge. */
+  isRange(range: string): boolean {
+    return validRange(range) !== null
   }
 }
 export const semverService = new SemverService()
