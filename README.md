@@ -21,7 +21,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
 - **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
-- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes); relative paths land in the bulb's own folder (`--batch <name>` scopes a run to `batches/<name>` inside it). Requires `--trust`.
+- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes); relative paths land in the bulb's own folder (`--batch <name>` scopes a run to `batches/<name>` inside it), and `../` reaches a sibling bulb's; anything outside the project throws. Requires `--trust`.
 - **Hot reload** — Recompiles on save and refreshes the browser (on by default; disable with `--no-watch`)
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
@@ -53,7 +53,7 @@ typebulb get <file> <kind>     Print one block's content (data, insight, code, �
 typebulb put <file> <k>=<src>  Write a file's (or stdin's) content into a block, surgically
 typebulb pull <url|file>       Fetch a bulb from typebulb.com into typebulbs/u/<user>/<slug>.bulb.md
 typebulb push <file>           Upload a local bulb to typebulb.com as you (needs TYPEBULB_TOKEN in .env)
-typebulb check [file.bulb.md]  Type-check a bulb without running it
+typebulb check [file.bulb.md]  Type-check a bulb without running it (exit 2 = no TypeScript installed)
 typebulb predict [file]        Report the capability a bulb probably needs, without running it
 typebulb models                List AI models for tb.ai, filtered by your .env API keys
 typebulb slug <name>           Print the slug a title derives to — the filename to save the bulb as
@@ -96,7 +96,7 @@ A bulb is a single **markdown** file — the minimum viable structure for a smal
 ### Frontmatter and config
 
 - **`name:`** (frontmatter) is the bulb's title — a few words, not a sentence — and the file takes its slug: `<slug>.bulb.md`, in the project's **`typebulbs/`** folder. The slug is derived, not chosen: `Counter` → `counter.bulb.md` is obvious, `Rock & Roll` → `rock-and-roll` is not, so run `npx typebulb slug "<name>"` rather than guess. Once pushed, that name is the bulb's URL.
-- **`description`** (in `config.json`) is the bulb's search-result blurb — what makes someone open it. Keep it short; it truncates past ~160 chars.
+- **`description`** (in `config.json`) is the bulb's search-result blurb: what makes someone open it, read cold by someone who has never seen the bulb, so every reference must resolve inside the sentence. Keep it short; it truncates past ~160 chars.
 
 ### Example
 
@@ -386,6 +386,8 @@ Which must be declared in the dependencies section:
 ```
 
 Typebulb has a package resolver that will load and cache these packages from `esm.sh` when the bulb runs.
+
+Deep paths into a package are bare specifiers too, but the linter rejects a `.js` extension on one: import `three/examples/jsm/controls/OrbitControls`, not `three/addons/controls/OrbitControls.js`.
 
 ## AI Models
 
