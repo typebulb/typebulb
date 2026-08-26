@@ -93,7 +93,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // The registry identity is the `agent` field, not a `.bulb.md` path (a mirror has none) —
   // `typebulb agent`'s URL line and the launcher's self-exclusion find it that way
   // (TB-Agent-Mirror.md). `file` is a sentinel for `logs`/`stop` display only.
-  const { port, url, onCleanup, handOver } = await startAndRegister({
+  const { port, url, onCleanup, handOver, pageCount } = await startAndRegister({
     port: assignedPort,
     portNote,
     displayName,
@@ -158,7 +158,10 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
         building = true
         try {
           if (devSource) await rebuildClient()
-          console.log('Mirror rebuilt. Browser reloading...\n')
+          // Say what the reload reached only when it reached nobody (TB-Page-Lifecycle.md,
+          // invariant 4): a mirror with no tab is a viewer nobody is reading, not a bulb that
+          // stopped running, so the line says that and not the bulb's sentence.
+          console.log(pageCount() ? 'Mirror rebuilt. Reloading.\n' : 'Mirror rebuilt. No tab open on it — nobody is reading this.\n')
           reloadEmitter.emit('reload')
         } catch (e) {
           console.error('Mirror rebuild failed:', e instanceof Error ? e.message : e)

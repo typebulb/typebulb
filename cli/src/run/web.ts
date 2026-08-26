@@ -84,11 +84,14 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     process.exit(1)
   }
 
-  // Run id: run 1 is this process's initial compile, each successful hot reload bumps it. Emitting
-  // the marker here (the first teed line) makes all of run 1's output — startup chrome and the bulb's
-  // own logs — filterable via `typebulb logs --run` (TB-CLI.md).
-  let runId = 1
-  console.log(runMarker(runId))
+  // Open a run: the boundary `logs --run` slices on (TB-CLI.md). A run is one execution of the
+  // bulb's code in the page — run 1 is this process's initial compile, and every reload opens
+  // another, whatever caused it. Emitted here first so all of run 1's output (startup chrome and the
+  // bulb's own logs) is filterable too. One writer: the bump was spelled out at three call sites and
+  // went missing at two of them (TB-Page-Lifecycle.md, incident 4).
+  let runId = 0
+  const openRun = () => console.log(runMarker(++runId))
+  openRun()
 
   // Boot-time materialize + touch of the batch folder (TB-Batch.md Invariant 3), before anything
   // can fail — a compile error still leaves the batch discoverable.
@@ -122,7 +125,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   // Start + register the server, and get the shared SIGINT/SIGTERM cleanup shell
   // (serveSession.ts). The cross-project registry entry is what breakout's launch/list/stop
   // builds on (TB-Agent-Mirror-Inline.md).
-  const { port, onCleanup, handOver } = await startAndRegister({
+  const { port, onCleanup, handOver, pageCount } = await startAndRegister({
     port: assignedPort,
     portNote,
     displayName: bulb.name,
@@ -175,6 +178,22 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   let cleanupWatcher: (() => void) | undefined
   let cleanupOverrideWatcher: (() => void) | undefined
 
+  /** Broadcast a reload, and say so only when it reached nobody (TB-Page-Lifecycle.md, invariant 4).
+   *  A reload goes out over the page set, so with none attached a "Browser reloading..." line
+   *  asserts what could not have happened — that line is what convinced a reader a closed tab had
+   *  come back on its own. The busy case stays quiet, like the port note above: announcing the
+   *  ordinary reads as an event, while the empty one is a change the agent must not assume is live. */
+  const emitReload = () => {
+    if (pageCount() === 0) console.log('  No page attached — nothing reloaded; this change is not live.')
+    reloadEmitter?.emit('reload')
+  }
+
+  /** A reload with no compile of its own: state the cause, open a run, go. Every reload opens one —
+   *  a run is one execution of the bulb's code in the page, which a package rebuild starts exactly
+   *  as a save does. Skipping it here left `logs --run latest` answering with the *previous* run,
+   *  and an agent read a stale benchmark from it (TB-CLI.md, run markers). */
+  const reloadPages = (cause: string) => { console.log(cause); openRun(); emitReload() }
+
   if (args.watch && reloadEmitter) {
     // Serialize recompiles (latest wins): a slow compile (e.g. one that npm-installs a new server
     // dep) must neither run concurrently with a later save's — both write/import the same
@@ -197,9 +216,8 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
             // New run boundary only on a successful build. A build failure still reloads — the page
             // must carry the reason (TB-Interrogation.md) — but opens no run: its error line closes
             // the current run's slice, so `logs --run latest` ends with it (TB-CLI.md § Build failures).
-            if (!result.buildError) { runId++; console.log(runMarker(runId)) }
-            // Signal browser to reload
-            reloadEmitter.emit('reload')
+            if (!result.buildError) openRun()
+            emitReload()
           } catch (e) {
             // Not a build failure (those return a page): the file was unreadable mid-write, or the
             // like. The previous build stays up; the next settled change retries.
@@ -218,10 +236,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       cleanupOverrideWatcher = watchPath({
         target: serveDir,
         events: 'all',
-        onChange: () => {
-          console.log(`Local package '${name}' changed. Browser reloading...\n`)
-          reloadEmitter.emit('reload')
-        },
+        onChange: () => reloadPages(`Local package '${name}' changed.`),
       })
     }
 
@@ -233,10 +248,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         onCleanup(watchPath({
           target: d,
           events: 'all',
-          onChange: () => {
-            console.log('Assets changed. Browser reloading...\n')
-            reloadEmitter.emit('reload')
-          },
+          onChange: () => reloadPages('Assets changed.'),
         }))
       }
     }

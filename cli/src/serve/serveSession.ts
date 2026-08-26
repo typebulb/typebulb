@@ -1,5 +1,6 @@
 import { startServer, type ServerInstance, type ServerOptions, type PageRequest } from './server.js'
-import { registerServer, unregisterServer, type BulbServer } from './serverRegistry.js'
+import { registerServer, unregisterServer, isMirror, type BulbServer } from './serverRegistry.js'
+import { PAGE_LOG } from './pages.js'
 import { reportPortInUse } from './portBlocks.js'
 import { type CliArgs } from '../args.js'
 
@@ -23,6 +24,10 @@ export interface ServeSession {
    *  reattaching), and whether the launch replaced a *live* server on this same port; the policy they
    *  add up to is this method's alone. */
   handOver(opts: { mode: CliArgs['open']; fresh: boolean; replacedLive: boolean }): Promise<void>
+  /** How many pages are attached right now (server.ts, the one count). The watchers read it so a
+   *  reload line says what it reached: broadcasting into an empty page set and announcing a browser
+   *  reload is a status line claiming what it never observed (TB-Page-Lifecycle.md, invariant 4). */
+  pageCount(): number
   /** Register a teardown step, run in registration order on SIGINT/SIGTERM after the HTTP server
    *  closes and before the log tee is restored and the registry entry removed. Each runs
    *  best-effort — a throw is swallowed so one failing step never skips the unregister. */
@@ -55,7 +60,6 @@ export async function startAndRegister(opts: StartAndRegisterOpts): Promise<Serv
 
   const url = `http://localhost:${port}`
   const entry = makeEntry(port, url)
-  const isMirror = entry.agent != null
 
   const cleanups: Array<() => void | Promise<void>> = []
   let serverRef: ServerInstance | undefined
@@ -78,7 +82,7 @@ export async function startAndRegister(opts: StartAndRegisterOpts): Promise<Serv
     console.log('\nShutting down...')
     // A signal states nothing: a bulb closes its pages (nothing of it may run after), a mirror keeps
     // its tab, the foothold a relaunch reuses.
-    if ((stopOpts?.pages ?? (isMirror ? 'keep' : 'close')) === 'close') await serverRef?.closePages('stopped')
+    if ((stopOpts?.pages ?? (isMirror(entry) ? 'keep' : 'close')) === 'close') await serverRef?.closePages('stopped')
     serverRef?.close()
     for (const fn of cleanups) { try { await fn() } catch { /* best-effort teardown */ } }
     stopLog()
@@ -113,30 +117,31 @@ export async function startAndRegister(opts: StartAndRegisterOpts): Promise<Serv
   return {
     port,
     url,
+    pageCount: () => server.pageCount(),
     async handOver({ mode, fresh, replacedLive }) {
       if (mode === 'none') return
-      // A page may still be on its way (a predecessor's tab reattaching, TB-CLI.md): poll until it
-      // lands or the server's settle window passes, so a relaunch reuses that tab the moment it
-      // returns rather than piling a second one (the orphaned-tab complaint).
+      // One ask, one answer: the server waits out a predecessor's tab reattaching (TB-CLI.md), opens
+      // only if nothing came, and holds for the page it opened — so every line below states what was
+      // observed rather than what was hoped for (TB-Page-Lifecycle.md, invariant 4).
       // A replaced live server's tab reconnects on this very port, so no window may be opened at it;
       // otherwise `--open`/'window' forces one and the printed-link modes only follow the mirror.
       const request: PageRequest = { fresh, external: replacedLive ? 'never' : mode === 'window' ? 'force' : 'follow' }
-      let page = await server.requestPage(request)
-      while (page.how === 'pending') {
-        await new Promise(r => setTimeout(r, 150))
-        page = await server.requestPage(request)
-      }
+      const page = await server.requestPage(request)
       if (page.how === 'attached') console.log('  Reusing the open browser tab.\n')
       else if (page.how === 'editor') console.log(`  Opened in VS Code via ${page.via}.\n`)
       else if (page.how === 'external') console.log('  Opened in your browser.\n')
       // A launch that opened nothing says so: silence reads as a bulb that is running, and a bulb
-      // runs in its page (TB-Page-Lifecycle.md, invariant 4). A viewer makes no such claim.
-      else if (page.how === 'none') console.log(
-        `  ${isMirror
-          ? 'No page opened — nothing is reading this mirror until someone opens it.'
-          : 'No page opened — no agent mirror page to open one through, and a bulb runs in its page.'}\n` +
+      // runs in its page (TB-Page-Lifecycle.md, invariant 4). A viewer makes no such claim. An open
+      // that produced no page is its own nothing: the window went somewhere, and saying so is what
+      // separates "nothing to open through" from "opened, and the browser never came back".
+      else console.log(
+        `  ${page.how === 'unreached'
+          ? `Opened ${page.via ? `in VS Code via ${page.via}` : 'in your browser'}, but no page attached — is the browser it opened in still there?`
+          : isMirror(entry)
+            ? 'No page opened — nothing is reading this mirror until someone opens it.'
+            : 'No page opened — no agent mirror page to open one through, and a bulb runs in its page.'}\n` +
         `  Share ${url}, and wake on the arrival:\n` +
-        `  typebulb wait ${waitTarget} --match "[page] connected"\n`)
+        `  typebulb wait ${waitTarget} --match "${PAGE_LOG.connected}"\n`)
     },
     onCleanup(fn) { cleanups.push(fn) },
   }

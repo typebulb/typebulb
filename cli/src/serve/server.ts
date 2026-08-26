@@ -22,6 +22,7 @@ import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
 import { resolvePath, readFsBytes, writeFsFile } from './tbFs.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
+import { PageSet, PAGE_LOG, RELOAD_SETTLE_MS, PAGE_ARRIVAL_MS, type PageCloseReason } from './pages.js'
 
 // The CLI is a local tool: the server binds loopback only and is never reachable
 // off-machine. Sharing / other-device access is typebulb.com's job, not the CLI's.
@@ -142,11 +143,11 @@ export interface ServerInstance {
   /** Tell every page to go and wait to SEE it (TB-Page-Lifecycle.md). Cleanup's first step, so a
    *  Ctrl-C, a POSIX signal and `/__stop` all dispose of the pages by one path. Never throws. */
   closePages: (reason: PageCloseReason) => Promise<{ told: number; gone: number }>
+  /** How many pages are attached right now — the same field `/__pages` and `/__send` report
+   *  (invariant 6), read directly by the process that owns it rather than over its own HTTP. What
+   *  makes a "Browser reloading..." line state what it reached instead of what it hoped. */
+  pageCount: () => number
 }
-
-/** Why a page was told to go. One event, one vocabulary (invariant 6): another page was already
- *  here, the owner is leaving, or this address serves a different bulb now. */
-export type PageCloseReason = 'yielded' | 'stopped' | 'foreign'
 
 export interface PageRequest {
   /** May the CLI open the external browser when no page of ours is inside VS Code to relay through?
@@ -157,25 +158,27 @@ export interface PageRequest {
   fresh: boolean
 }
 
-/** How `requestPage` found (or failed to find) the server a page. */
+/**
+ * How `requestPage` ended. Every member is TERMINAL (TB-Page-Lifecycle.md): the ask holds for the
+ * page itself, so there is no longer an answer that means *ask me again*, and a caller cannot
+ * mishandle one by omission. `editor` and `external` are the two ways it opened one AND saw it
+ * arrive; `unreached` is an open that never produced a page, which is a different nothing from
+ * having nothing to open through.
+ */
 export type PageOutcome =
-  | { how: 'attached' }              // a page is already here
-  | { how: 'pending' }               // one is on its way: reattaching after a drop, or just opened
-  | { how: 'editor'; via: string }   // relayed into VS Code through `via`
-  | { how: 'external' }              // the external browser was opened
-  | { how: 'none' }                  // nothing to open through, and no external window wanted
+  | { how: 'attached' }                 // a page is here: it already was, or it came back on its own
+  | { how: 'editor'; via: string }      // relayed into VS Code through `via`, and the page attached
+  | { how: 'external' }                 // the external browser was opened, and the page attached
+  | { how: 'unreached'; via?: string }  // a page was opened and never attached
+  | { how: 'none' }                     // nothing to open through, and no external window wanted
 
-/** A page that dropped (a reload, a closed tab) has this long to reattach before it counts as gone —
- *  comfortably above the retry interval the page is told to use (pageChrome's RECONNECT_RETRY_MS). */
-export const RELOAD_SETTLE_MS = 3000
-/** An opened page has this long to attach; until then a second request is answered "pending". */
-export const PAGE_ARRIVAL_MS = 10000
-/** A request that found nothing to open through is answered "none" for this long before asking the
+/** Where an outcome opened a page, when it names one — the half of it a status line quotes. */
+export const openedVia = (o: PageOutcome): string | undefined =>
+  o.how === 'editor' || o.how === 'unreached' ? o.via : undefined
+
+/** An ask that found nothing to open through is answered "none" for this long before asking the
  *  registry again — off the 150ms retry cadence, but quick to notice a mirror the user just opened. */
 const RELAY_RETRY_MS = 2000
-/** How long a stop waits to SEE the pages it told to go. Against the page's own ~300ms ladder
- *  (window.close, then the note), with headroom for a background tab whose timers are throttled. */
-export const PAGE_CLOSE_WAIT_MS = 2500
 
 /** Start the local HTTP server */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
@@ -290,18 +293,15 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // capability boundary and needs no --trust. Still CSRF-guarded like /__log: the CLI (no Origin)
   // passes, a cross-site browser POST is refused, so no other page can inject into the bulb. The
   // body is forwarded verbatim; the shim interprets it (JSON-or-string). Returns the connected-page
-  // count so `send` can report delivery — best-effort, never buffered (no listeners ⇒ the agent retries).
+  // count so `send` can report delivery. Never buffered: with nobody listening and nobody coming,
+  // nothing is emitted and the send is reported as the failure it is (invariant 8).
   //
   // The reply leg (TB-Interrogation.md): `?reply=<ms>` broadcasts under an id and holds the
   // response until every page then connected has POSTed `/__send-reply` for that id, or the window
   // elapses. Aggregation only — the one-reply rule is the CLI's to enforce — and still never a
   // queue: zero connected pages resolves immediately, reply or not.
-  /** When a page's event stream last went away. The difference between "never opened" and "open but
-   *  stale", which is the whole diagnosis when a send finds nobody home. */
-  let lastPageDropAt = 0
-  /** The pages attached right now, one per event stream, with whether VS Code's integrated browser
-   *  renders each (its UA says so): the footholds `/__open` relays through. This is the ONE page
-   *  count (invariant 6) — `/__send` reports it, `/__open` answers with it, `/__pages` prints it. */
+  /** One attached page: an event stream, and whether VS Code's integrated browser renders it (its UA
+   *  says so) — the footholds `/__open` relays through. */
   type Page = {
     inEditor: boolean
     doc?: string
@@ -309,11 +309,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     send: (envelope: { id?: number; payload: string }) => Promise<void>
     close: (reason: PageCloseReason) => Promise<void>
   }
-  const pages = new Set<Page>()
-  /** Pages told to go and not yet seen to. They stop counting the moment they are told (they must not
-   *  receive a later send, nor hold up a solo actuation) but a stop reports only what it observed, so
-   *  a page leaves this set when its stream aborts — the tab closing or navigating to the note. */
-  const closing = new Set<Page>()
+  /** The set, and the transitions over it (serve/pages.ts): arrivals, departures, the close drain —
+   *  every "is one here / is one coming / did they all go" is answered from here. It holds the ONE
+   *  page count (invariant 6): `/__send` reports it, `/__open` answers with it, `/__pages` prints
+   *  it, and `pageCount()` hands it to the watchers. */
+  const pages = new PageSet<Page>()
   /** Bulb keys already declined here (below). The departure is said once per stranger, not on every
    *  reconnect of a page that could not navigate to its note — it retries forever now. */
   const declined = new Set<string>()
@@ -324,6 +324,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const bootAt = Date.now()
 
   /**
+   * Every arrival, in one place. The wake line first (a page attached where none was — an agent
+   * ends its turn with the link and a background `wait --match "[page] connected"`, and the user
+   * opening the page is the wake, never a popped window), then the yield rule.
+   *
    * One CLI-opened page (TB-VSCode-Browser.md). **Only the newcomer ever yields**, and only on its
    * FIRST attach: a page that is already here is the user's — whatever opened it — so a second view
    * arriving never takes it away. That asymmetry is the whole rule. It gives both halves of what a
@@ -332,62 +336,56 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
    * into announces no relay id, so it neither yields nor evicts, and two views is simply two views.
    * A reconnect (hot reload, a blip) is not a first attach and is exempt.
    */
-  const yieldArrival = (page: Page, firstAttach: boolean) => {
-    if (!firstAttach || pages.size < 2) return
-    page.close('yielded').catch(() => { /* the stream may already be gone */ })
-  }
+  pages.onArrival(({ page, firstAttach, count }) => {
+    if (sendChannel && count === 1) console.log(PAGE_LOG.connected)
+    if (firstAttach && count > 1) page.close('yielded').catch(() => { /* the stream may already be gone */ })
+  })
+  // The departure line, the arrival's twin, settled so a hot reload's drop-and-reattach stays silent.
+  // A page-driven run whose tab closed is otherwise a log that just stops (TB-Wait.md).
+  if (sendChannel) pages.onSettledEmpty(() => console.log(PAGE_LOG.disconnected))
+
+  /** An ask still in flight. The second asker awaits the SAME one rather than relaying again: never
+   *  a second open, and never a "none" invented while an open is on its way. */
+  let asking: Promise<PageOutcome> | undefined
+  /** When an ask last found nothing to relay through. A different question from "is one coming" —
+   *  purely "should I bother asking the registry again" — which is why it survived the collapse. */
+  let lastNoneAt = 0
 
   /**
-   * Tell every page to go, then wait to see it happen (TB-Page-Lifecycle.md, Observed not asserted).
-   * The page does not close its own stream, so a stream still attached when the wait elapses is a
-   * page that did not go, and is reported as one. Returns how many were told and how many were seen.
+   * Have a page for this server, where the agent mirror is (TB-VSCode-Browser.md), and HOLD for it:
+   * an attached page counts; else wait out any page already on its way back (a predecessor's tab
+   * inside this server's first settle window, or one that just dropped) before opening anything;
+   * else the relay into VS Code, else the external browser as far as `external` allows — and then
+   * wait for the page that open produces. Opening without waiting delivers nothing, which is why
+   * the wait is the ask's own and not each caller's (TB-Page-Lifecycle.md, Delivery).
    */
-  const closePages = async (reason: PageCloseReason): Promise<{ told: number; gone: number }> => {
-    const targets = [...pages]
-    if (!targets.length) return { told: 0, gone: 0 }
-    await Promise.all(targets.map(p => p.close(reason).catch(() => { /* the stream may already be gone */ })))
-    const deadline = Date.now() + PAGE_CLOSE_WAIT_MS
-    while (targets.some(p => closing.has(p)) && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 50))
-    }
-    const gone = targets.filter(p => !closing.has(p)).length
-    for (const p of targets) closing.delete(p)   // give up watching; the count already says what happened
-    return { told: targets.length, gone }
-  }
-  /** The last ask that got as far as the relay, and whether it produced a page: which of the two
-   *  windows below applies (the arrival one, or the short don't-re-ask one). */
-  let lastAsk = { at: 0, opened: false }
-
-  // Have a page for this server, where the agent mirror is (TB-VSCode-Browser.md). An attached page
-  // counts; a page still on its way is left to arrive ("pending") — one reattaching after a drop, a
-  // predecessor's during this server's first settle window, or one a recent request already opened;
-  // else the relay into VS Code; else the external browser, as far as `external` allows. The launch
-  // asks through handOver (serveSession.ts), polling while pending; `/__send?open=1` asks on every
-  // `send --wait` retry, so a closed tab reopens for the agent that needs it. One place holds all
-  // three clocks (page count, last drop, last ask), so the two askers can't double-open.
-  const requestPage = async (opts: PageRequest): Promise<PageOutcome> => {
-    if (pages.size > 0) return { how: 'attached' }
-    const now = Date.now()
+  const askForPage = async (opts: PageRequest): Promise<PageOutcome> => {
     // When a page could last have started coming back on its own: this server's boot (a predecessor's
     // tab still retrying, unless the bulb is fresh) or a page that just dropped. 0 disables the clock.
-    const reattachSince = Math.max(opts.fresh ? 0 : bootAt, lastPageDropAt)
-    if (now - reattachSince < RELOAD_SETTLE_MS) return { how: 'pending' }
-    if (lastAsk.opened && now - lastAsk.at < PAGE_ARRIVAL_MS) return { how: 'pending' }
-    if (!lastAsk.opened && now - lastAsk.at < RELAY_RETRY_MS) return { how: 'none' }
-    // Counted as opened BEFORE the relay's await: a concurrent asker (the launch's hand-over and a
-    // fast `send --wait` both poll) must see the open in flight, not "none".
-    lastAsk = { at: now, opened: true }
+    const reattachSince = Math.max(opts.fresh ? 0 : bootAt, pages.lastDropAt)
+    if (await pages.whenArrives(RELOAD_SETTLE_MS - (Date.now() - reattachSince))) return { how: 'attached' }
+    if (Date.now() - lastNoneAt < RELAY_RETRY_MS) return { how: 'none' }
     // The fragment marks a page WE opened: its shim announces itself provisional and strips the hash,
     // so the page yields if another turns out to be here (yieldProvisional) and a reload is ordinary.
     const url = `http://localhost:${port}#tb-relay`
     const relay = await relayOpen(url, basePath)
-    if (relay?.where === 'editor') return { how: 'editor', via: relay.via }
-    if (opts.external === 'force' || (opts.external === 'follow' && relay?.where === 'external')) {
+    let opened: PageOutcome | undefined
+    if (relay?.where === 'editor') opened = { how: 'editor', via: relay.via }
+    else if (opts.external === 'force' || (opts.external === 'follow' && relay?.where === 'external')) {
       await open(url)
-      return { how: 'external' }
+      opened = { how: 'external' }
     }
-    lastAsk.opened = false
-    return { how: 'none' }
+    if (!opened) { lastNoneAt = Date.now(); return { how: 'none' } }
+    // A page takes seconds to arrive and the channel is never buffered, so an ask that opened one
+    // and walked away has moved a window and lost its caller's message.
+    return await pages.whenArrives(PAGE_ARRIVAL_MS) ? opened : { how: 'unreached', via: openedVia(opened) }
+  }
+
+  const requestPage = (opts: PageRequest): Promise<PageOutcome> => {
+    if (pages.count > 0) return Promise.resolve({ how: 'attached' })
+    // Registered synchronously, before the first await inside: a concurrent asker (the launch's
+    // hand-over and a `send` can land together) must join this ask, not start a second one.
+    return asking ??= askForPage(opts).finally(() => { asking = undefined })
   }
 
   if (sendChannel) {
@@ -400,26 +398,32 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       let payload = ''
       try { payload = await c.req.text() } catch { /* empty body ⇒ a bare trigger */ }
       const replyMs = Number(c.req.query('reply')) || 0
-      const clients = pages.size
+      // `?open=1` (every send): with nobody listening, find the page a home where the agent mirror
+      // is, and HOLD for it here rather than answering "on its way" and leaving the sender to poll.
+      // The hold is what lets a send that reopened a tab still deliver — and what deletes the
+      // sender's own deadline arithmetic, which is where incident 4's bug lived.
+      const page = pages.count === 0 && c.req.query('open') !== undefined ? await requestPage({ external: 'follow', fresh: false }) : undefined
+      // Read ONCE, after the hold, and fanned out over the same set with nothing awaited in between:
+      // the list we deliver to IS the count we report. The old ordering (count first) existed only
+      // because the sender retried behind our answer, and a page attaching mid-ask would then run
+      // the payload AND the retry — a tb:click fired twice. It holds now, so the rule inverts.
+      const clients = pages.count
       // With nobody listening, report WHICH nothing this is: a bulb never opened, or a page that was
       // here until seconds ago and hasn't come back — a stale tab the user is looking at right now.
       // "No page connected" is true for both and useless for either (TB-CLI.md, observed state).
-      const dropped = clients === 0 && lastPageDropAt ? Date.now() - lastPageDropAt : undefined
-      // `?open=1` (every `send --wait` retry): with nobody listening, find the page a home where the
-      // agent mirror is, and say how it went so the sender can announce it and wait for the arrival.
-      const page = clients === 0 && c.req.query('open') !== undefined ? await requestPage({ external: 'follow', fresh: false }) : undefined
-      const status = { clients, droppedMsAgo: dropped, ...(page ? { opening: page.how, via: page.how === 'editor' ? page.via : undefined } : {}) }
+      const dropped = clients === 0 && pages.lastDropAt ? Date.now() - pages.lastDropAt : undefined
+      const status = { clients, droppedMsAgo: dropped, ...(page ? { opening: page.how, via: openedVia(page) } : {}) }
       // `?solo=1` marks an actuation (TB-Interrogation-Actuation.md): a gesture broadcast to two
       // pages has fired twice before their replies can disagree, so — unlike the read-side
       // one-reply rule, which judges after the fact — this refuses BEFORE dispatch unless exactly
-      // one page is connected. Zero pages keeps the sender's retry-and-report path.
+      // one page is connected — applied to the count the hold above settled on, never to a zero it
+      // was about to leave behind.
       if (c.req.query('solo') !== undefined && clients !== 1) {
         return c.json({ ...status, refused: clients > 1 })
       }
-      // Nobody listening: never emit. `clients` was read before requestPage's await, and a page that
-      // attached during it would run this payload AND the sender's retry — a tb:click fired twice.
+      // Nobody listening, and nothing on its way: never emit, never buffer. The sender reports it as
+      // a failed send (TB-Page-Lifecycle.md, invariant 8).
       if (clients === 0) return c.json(status)
-      // Fanned out over the page set itself: the list we deliver to IS the count we just reported.
       const fanOut = (envelope: { id?: number; payload: string }) => {
         for (const p of pages) p.send(envelope).catch(() => { /* a page leaving mid-send */ })
       }
@@ -441,7 +445,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         pendingSends.set(id, entry)
         fanOut({ id, payload })
       })
-      return c.json({ clients, ...outcome })
+      // The status rides the reply too: with one POST for the whole exchange, this is the only
+      // answer the sender gets, so "a page was opened for you" has nowhere else to be said.
+      return c.json({ ...status, ...outcome })
     })
 
     // The page's reply POST — same tier as /__send: data carried, no code run, CSRF-guarded.
@@ -822,19 +828,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         // report and reuse someone else's page as ours.
         const claimed = c.req.query('bulb') || undefined
         if (bulbKey && claimed && claimed !== bulbKey) {
-          if (!declined.has(claimed)) { declined.add(claimed); console.log('[page] closed: foreign') }
+          if (!declined.has(claimed)) { declined.add(claimed); console.log(PAGE_LOG.closed('foreign')) }
           await stream.writeSSE({ event: 'close', data: 'foreign' })
           return
         }
         const onReload = () => { stream.writeSSE({ event: 'reload', data: '' }) }
         reloadEmitter?.on('reload', onReload)
-        // One detach for both exits — the page leaving, or being told to go — so a page told to go
-        // stops counting (and receiving sends) before its tab has actually closed. Returns whether
-        // the page was still here; removeListener is a no-op the second time.
-        const detach = () => {
-          reloadEmitter?.removeListener('reload', onReload)
-          return pages.delete(page)
-        }
+        // Run on both exits — the page leaving, or being told to go. A no-op the second time.
+        const detachReload = () => reloadEmitter?.removeListener('reload', onReload)
         const doc = c.req.query('relay') || undefined
         const page: Page = {
           inEditor: isVsCodeUserAgent(c.req.header('user-agent')),
@@ -846,30 +847,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           // Told to go: stop counting at once, then watch for the stream to drop as the tab closes
           // or navigates. One departure event for every reason (invariant 6).
           close: (reason: PageCloseReason) => {
-            if (detach()) closing.add(page)
-            console.log(`[page] closed: ${reason}`)
+            detachReload()
+            pages.closing(page)
+            console.log(PAGE_LOG.closed(reason))
             return stream.writeSSE({ event: 'close', data: reason })
           },
         }
         const firstAttach = !!doc && !relayDocs.has(doc)
         if (doc) relayDocs.add(doc)
-        pages.add(page)
-        // A page attached where none was — the arrival wake (TB-Wait.md, "who speaks"): an agent
-        // that needs a live page ends its turn with the link and a background
-        // `wait --match "[page] connected"` armed; the user opening the page is the wake, never a
-        // popped window. 0→1 only, so extra tabs don't re-fire; a hot reload's drop-and-reattach
-        // re-logs, symmetric with the run markers.
-        if (sendChannel && pages.size === 1) console.log('[page] connected')
-        yieldArrival(page, firstAttach)
-        stream.onAbort(() => {
-          closing.delete(page)    // seen to go, which is what a stop's count reports
-          if (!detach()) return   // already told to go: not a departure
-          const dropAt = lastPageDropAt = Date.now()
-          // The departure line, the arrival's twin: only once the settle window passes with no page
-          // back (a hot reload's drop-and-reattach stays silent), and only for the LAST page. A
-          // page-driven run whose tab closed is otherwise a log that just stops (TB-Wait.md).
-          setTimeout(() => { if (pages.size === 0 && lastPageDropAt === dropAt && sendChannel) console.log('[page] disconnected') }, RELOAD_SETTLE_MS).unref()
-        })
+        // The arrival: the wake line, the yield rule, and every ask holding for a page are woken
+        // from the one place (pages.onArrival, above).
+        pages.add(page, firstAttach)
+        stream.onAbort(() => { detachReload(); pages.dropped(page) })
 
         // Who the page just connected to. A replace hands the same port to a NEW process serving new
         // bytes, so a page that reconnects and sees a different boot id reloads itself; the same id
@@ -902,7 +891,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       if (!isLocalHttpUrl(url)) return c.json({ error: 'a local http URL is required' }, 400)
       const foothold = [...pages].find(p => p.inEditor)
       await foothold?.open(url)
-      return c.json({ opened: !!foothold, pages: pages.size })
+      return c.json({ opened: !!foothold, pages: pages.count })
     })
 
   }
@@ -926,7 +915,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       const body = await c.req.json<{ pages?: unknown }>()
       if (body?.pages === 'keep' || body?.pages === 'close') disposition = body.pages
     } catch { /* no body ⇒ close, above */ }
-    const outcome = disposition === 'close' ? await closePages('stopped') : { told: 0, gone: 0 }
+    const outcome = disposition === 'close' ? await pages.closeAll('stopped') : { told: 0, gone: 0 }
     // After the response flushes: the count is the caller's, the exit is ours.
     if (onStop) setTimeout(() => { void onStop({ pages: disposition }) }, 50)
     return c.json({ closed: outcome.gone, stuck: outcome.told - outcome.gone, exiting: !!onStop })
@@ -934,7 +923,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // The page count, for the listing that answers "is this bulb actually running" (`typebulb logs`).
   // A read of the one count, off the hot path: probed per row by the listing, never by the registry.
-  app.get('/__pages', (c) => c.json({ pages: pages.size }))
+  app.get('/__pages', (c) => c.json({ pages: pages.count }))
 
   // Re-proxy absolute imports an esm.sh module body emits — they resolve against localhost (the
   // page origin) and 404 without this. Which shapes count lives in isEsmAbsoluteImportPath
@@ -970,7 +959,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     port,
     close: () => server.close(),
     requestPage,
-    closePages,
+    closePages: (reason: PageCloseReason) => pages.closeAll(reason),
+    pageCount: () => pages.count,
   }
 }
 

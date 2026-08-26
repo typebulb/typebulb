@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, rm, readdir } from 'fs/promises'
+import { mkdtemp, rm, readdir, writeFile, appendFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import * as path from 'path'
 import { spawn, type ChildProcess } from 'child_process'
 import * as http from 'http'
 import { registerServer, type BulbServer } from '../src/serve/serverRegistry.js'
-import { runLogs, runStop, runStopScope } from '../src/commands/lifecycle.js'
+import { runLogs, runStop, runStopScope, runWait } from '../src/commands/lifecycle.js'
 import { VERSION } from '../src/version.js'
 
 // `runStopScope` really SIGTERMs each matched pid, so the test registers pids that are safe to kill —
@@ -33,6 +33,66 @@ function spawnSleeper(): ChildProcess {
   c.unref()
   return c
 }
+
+// A bulb runs in its page, so a wait on a page-driven run's completion tag can never fire once the
+// tab is gone — the four-minute park of TB-Page-Lifecycle.md's incident 4. `wait` ends itself on the
+// departure instead, with the same exit 3 a dead server gives. The rule is keyed on a departure THIS
+// wait saw arrive, which is what lets it carry no exemption for the one wait that is armed AT zero
+// pages (`--match "[page] connected"`), and the second case here is that exemption being unnecessary.
+describe('runWait ends when the bulb\'s last page goes (TB-Page-Lifecycle.md, incident 4)', () => {
+  let dir: string
+  const kids: ChildProcess[] = []
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'tb-wait-'))
+    process.env.TYPEBULB_SERVERS_DIR = dir
+  })
+  afterEach(async () => {
+    delete process.env.TYPEBULB_SERVERS_DIR
+    for (const k of kids) { try { if (k.pid) process.kill(k.pid) } catch { /* already gone */ } }
+    kids.length = 0
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  /** A live bulb server whose log already holds a run and an OLD departure — the history a
+   *  `--match` first run scans from 0, and must not mistake for its own observation. */
+  const armed = async (): Promise<{ file: string; log: string }> => {
+    const child = spawnSleeper(); kids.push(child)
+    const file = path.join(process.cwd(), 'waited.bulb.md')
+    await registerServer({ pid: child.pid!, port: 20301, url: 'http://127.0.0.1:20301', file, cwd: process.cwd(), startedAt: 1, version: VERSION })
+    const log = path.join(dir, `${child.pid}.log`)
+    await writeFile(log, '── run 1 ── 00:00:00\nstarted\n[page] disconnected\n')
+    return { file, log }
+  }
+
+  const waitFor = async (file: string, match: string, timeoutSec: number) => {
+    const errs: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)) })
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((c?: number) => { throw new Error(`exit ${c}`) }) as never)
+    try { await runWait(file, { match, timeoutSec }); return { code: 'no exit', errs } }
+    catch (e) { return { code: (e as Error).message, errs } }
+    finally { exit.mockRestore(); err.mockRestore(); log.mockRestore() }
+  }
+
+  it('exits 3 when the page departs mid-wait', async () => {
+    const { file, log } = await armed()
+    const running = waitFor(file, '=== done ===', 10)
+    setTimeout(() => { void appendFile(log, 'step 1\n[page] disconnected\n') }, 700)
+    const { code, errs } = await running
+    expect(code).toBe('exit 3')
+    expect(errs.join('\n')).toContain('closed while waiting')
+  })
+
+  it('does not cut off a wait armed AT zero pages on the departure it is armed to reverse', async () => {
+    // The history written above ends in a departure, and this wait scans from offset 0 to catch an
+    // arrival that landed before it attached. Firing there would break the one documented recipe for
+    // a bulb with no page (TB-VSCode-Browser.md): share the link, wake on `[page] connected`.
+    const { file } = await armed()
+    const { code } = await waitFor(file, '[page] connected', 1)
+    expect(code).toBe('exit 2')
+  })
+})
 
 describe('runStopScope — the batch reaps', () => {
   let dir: string

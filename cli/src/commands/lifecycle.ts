@@ -2,7 +2,8 @@ import * as path from 'path'
 import { valid as semverValid, lt as semverLt } from 'semver'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopServer, pageCount, isAlive, readWaitCursor, writeWaitCursor, isProjectMirror, type BulbServer, type StopOutcome } from '../serve/serverRegistry.js'
+import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopServer, probePageCount, isAlive, readWaitCursor, writeWaitCursor, isMirror, isProjectMirror, type BulbServer, type StopOutcome } from '../serve/serverRegistry.js'
+import { PAGE_LOG } from '../serve/pages.js'
 import { VERSION } from '../version.js'
 
 // The `logs`/`stop`/`wait` lifecycle commands all resolve a running server from the per-user, cross-project registry
@@ -27,7 +28,7 @@ import { VERSION } from '../version.js'
  *  canonical key, so either spelling of the path matches). */
 export function findServer(servers: BulbServer[], arg: string, cwd?: string, callerHarness?: string): BulbServer | undefined {
   if (/^\d+$/.test(arg)) return servers.find(s => s.pid === parseInt(arg, 10))
-  const mirrors = arg === 'agent' ? servers.filter(s => s.agent != null) : servers.filter(s => s.agent === arg)
+  const mirrors = arg === 'agent' ? servers.filter(isMirror) : servers.filter(s => s.agent === arg)
   if (mirrors.length) {
     if (!cwd) return mirrors[0]
     const inCwd = mirrors.filter(s => isProjectMirror(s, cwd))
@@ -71,7 +72,7 @@ function versionNote(v: string | undefined): string {
 function pageNote(s: BulbServer, pages: number | undefined): string {
   if (pages === undefined) return '  pages ?'
   if (pages > 0) return `  ${pages} page${pages === 1 ? '' : 's'}`
-  return s.agent != null ? '  NO PAGE (no tab open on it)' : '  NO PAGE (nothing of it is running)'
+  return isMirror(s) ? '  NO PAGE (no tab open on it)' : '  NO PAGE (nothing of it is running)'
 }
 
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
@@ -86,7 +87,7 @@ function printServerList(servers: BulbServer[], stream: (line: string) => void, 
 async function listServers(servers: BulbServer[], hint: string): Promise<void> {
   if (!servers.length) { console.log('No running bulb servers.'); return }
   // Bounded and parallel: a wedged server costs the listing its own row's count, never the listing.
-  const counts = await Promise.all(servers.map(pageCount))
+  const counts = await Promise.all(servers.map(probePageCount))
   console.log('Running bulb servers:'); printServerList(servers, l => console.log(l), counts)
   console.log('\n' + hint)
 }
@@ -202,7 +203,6 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // the harness anyway — CC's own foreground tool timeout kills a misused foreground wait, and the shim
   // keeps pi waits off the foreground — and a spurious give-up on correct use costs more than the stall
   // it prevented (missed wakes fatal, spurious cheap — TB-Wait.md).
-  const isMirror = server.agent != null
   const shimBackgrounded = process.env.TYPEBULB_WAIT_SHIM === '1'
   // FOLLOW mode (pi's session watcher, TB-Wait.md): a CONTINUOUS consumer — it never exits on a
   // match, so it needs none of the intermittent consumer's machinery below (no stored offset, no
@@ -239,21 +239,38 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   // wait (armed for the agent's re-emitted fix) then delivers it as the NEW version's verdict (field: a
   // model told its fix failed by the old version's leftover line burned a round on an impossible error).
   // 2s drains the burst while keeping the error wake fast — the urgency case is still the broken bulb.
-  const SETTLE_MS = isMirror ? 10_000 : 1000
+  const SETTLE_MS = isMirror(server) ? 10_000 : 1000
   const ERROR_SETTLE_MS = 2000
+  // A bulb runs in its page, so a page-driven run whose tab closes can never log its completion tag
+  // and the wait would park its whole cap on nothing (TB-Page-Lifecycle.md, incident 4). The last
+  // page leaving ends the wait exactly as the server dying does, and with the same code: nothing
+  // more will ever be logged there. Only `[page] disconnected` — `closed: yielded` is a duplicate
+  // page stepping aside with one still attached, `closed: foreign` was never counted, and
+  // `closed: stopped` is followed by the process exiting, which `isAlive` below already answers.
+  // A mirror is out of scope: it is a viewer whose lines come from its host process, and it speaks
+  // perfectly well with no tab open.
+  const watchDeparture = !isMirror(server) && !following
   let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
   let pending = ''                                     // trailing partial line, completed by a later poll
 
   let exitCode = 0
   while (true) {
+    // Where this read starts. A departure only ends the wait if THIS wait saw it arrive, and a read
+    // that begins before the arm-time EOF is replaying history — a `--match` first run scans from 0
+    // (see the no-cursor default above), so without this a `wait --match "[page] connected"` would
+    // cut itself off on the very departure it is armed to reverse. That is the whole exemption the
+    // rule would otherwise need, and it falls out of the offset instead of a special case.
+    const live = cursor >= end
     const r = readServerLog(server.pid, cursor)
     cursor = r.offset
     if (r.text) {
       pending += r.text
       const parts = pending.split('\n')
       pending = parts.pop() ?? ''
+      let departed = false
       for (const line of parts) {
         if (!line.trim()) continue
+        if (watchDeparture && live && line.startsWith(PAGE_LOG.disconnected)) departed = true
         if (opts.match && !line.includes(opts.match)) continue
         console.log(line)
         if (following) continue                  // a tail has no burst to gather: the reader is already attached
@@ -261,8 +278,16 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
         // Anchored on the `]`-delimited verdict so a name/message can't false-positive (a false hit only
         // shortens a working bulb's linger, harmless). Clamp, never extend, so a noisy error stream can't
         // hold the wait open. Mirror-only — a turn-based bulb's event log has no such verdict grammar.
-        if (isMirror && (line.includes('] compile error') || line.includes('] runtime error')))
+        if (isMirror(server) && (line.includes('] compile error') || line.includes('] runtime error')))
           settleUntil = Math.min(settleUntil, Date.now() + ERROR_SETTLE_MS)
+      }
+      // A match in flight wins: the run finished and the tab closed behind it is an ordinary ending,
+      // and the linger below still drains its burst. Exits by the loop's tail so the cursor is
+      // written — this line was read and acted on, unlike the dead-server path, whose files are gone.
+      if (departed && !settleUntil) {
+        console.error(`the last page of ${serverLabel(server)} closed while waiting — a bulb runs in its page, so nothing can log ${opts.match ? `'${opts.match}'` : 'anything'} now`)
+        exitCode = 3
+        break
       }
     }
     if (settleUntil && Date.now() >= settleUntil) break
@@ -348,7 +373,9 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
     return
   }
   // Same verb as the single stop, so a batch reap closes pages too; a mirror keeps its tab.
-  await Promise.all(servers.map(s => stopServer(s)))
+  // And it reports what it observed per row, exactly as the single stop does: a batch reap is a
+  // stop, and invariant 4 is not scoped to the singular (TB-Page-Lifecycle.md).
+  const outcomes = await Promise.all(servers.map(s => stopServer(s)))
   console.log(`Stopped ${servers.length} ${noun}${servers.length === 1 ? '' : 's'}:`)
-  for (const s of servers) console.log(`  ${s.url}  pid ${s.pid}  ${serverLabel(s)}`)
+  servers.forEach((s, i) => console.log(`  ${s.url}  pid ${s.pid}  ${serverLabel(s)}${stopNote(s, outcomes[i])}`))
 }

@@ -6,7 +6,8 @@ import * as http from 'http'
 import * as path from 'path'
 import { mkdtemp, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { startServer, RELOAD_SETTLE_MS, type ServerInstance } from '../src/serve/server.js'
+import { startServer, type ServerInstance } from '../src/serve/server.js'
+import { RELOAD_SETTLE_MS } from '../src/serve/pages.js'
 import { parseArgs } from '../src/args.js'
 import { runSend } from '../src/commands/send.js'
 import { registerServer, unregisterServer, relayOpen } from '../src/serve/serverRegistry.js'
@@ -192,17 +193,50 @@ describe('runSend --wait — client-side retry across the reconnect window', () 
     expect(errs.join('\n')).toContain('Sent to 1 page')
   })
 
-  it('reports no page when the window elapses with nothing attached', async () => {
+  it('reports no page when the window elapses with nothing attached, and exits 1', async () => {
     await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
     const { errs, restore } = capture()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
     try {
-      await runSend(file, 'go', 300)
+      // A send that reached no page is a failed send, whatever its message was: the caller chains
+      // `send … && wait …`, so exit 0 here is what lets a doomed wait run (TB-Page-Lifecycle.md,
+      // invariant 8; incident 4).
+      await expect(runSend(file, 'go', 300)).rejects.toThrow('exit 1')
     } finally {
-      restore(); await unregisterServer(process.ppid)
+      exit.mockRestore(); restore(); await unregisterServer(process.ppid)
     }
     // The elapsed figure, not the asked window: a page that dropped moments ago (an earlier case's
-    // stream) is "pending" for the server's settle window, and the sender waits that out.
+    // stream) may be reattaching, so the server's ask waits out its settle window first.
     expect(errs.join('\n')).toMatch(/No page connected after \d+\.\ds/)
+  })
+
+  it('a PLAIN send asks for a page too, and fails when it reached none', async () => {
+    // The incident-4 shape: the user closed the tab, the agent sent without `--wait`, and the send
+    // neither asked for a page nor said it had failed. `open=1` now rides every send (the ask lands
+    // on `requestPage`, which finds nothing to relay through here and answers `none`), and the
+    // verdict is exit 1 — read after the arrival window, never before it.
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    const { errs, restore } = capture()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`) }) as never)
+    try {
+      await expect(runSend(file, 'go')).rejects.toThrow('exit 1')
+    } finally {
+      exit.mockRestore(); restore(); await unregisterServer(process.ppid)
+    }
+    expect(errs.join('\n')).toContain('nothing was delivered')
+  })
+
+  it('a plain send delivers to a page that is already attached, unchanged', async () => {
+    await registerServer({ pid: process.ppid, port: server.port, url: `http://127.0.0.1:${server.port}`, file, startedAt: Date.now() })
+    await drained()
+    const p = await pageClient()
+    const { errs, restore } = capture()
+    try {
+      await runSend(file, 'go')
+      await p.settled(1)
+    } finally { restore(); p.close(); await unregisterServer(process.ppid) }
+    expect(p.received.map(e => e.payload)).toEqual(['go'])
+    expect(errs.join('\n')).toContain('Sent to 1 page')
   })
 })
 
@@ -616,12 +650,13 @@ describe('relay open / __open', () => {
   })
 })
 
-// `send --wait` → `/__send?open=1`: with nobody listening the server asks the project's mirror to open
-// the page (requestPage), once per arrival window, and reports how it went. Each case gets its own
-// bulb server: the outcome is cached per server for PAGE_ARRIVAL_MS, and a fresh server answers
-// "pending" for its first RELOAD_SETTLE_MS (a predecessor's tab may be reattaching).
-describe('send --wait opens the page where the mirror is', () => {
+// Every `send` → `/__send?open=1`: with nobody listening the server asks the project's mirror to open
+// the page (requestPage) and then HOLDS for it, so the answer is terminal — a page is attached, or
+// there is none — and the sender has no window of its own to get wrong. Each case gets its own bulb
+// server, given its first RELOAD_SETTLE_MS to pass (a predecessor's tab may be reattaching).
+describe('a send opens the page where the mirror is, and holds for it', () => {
   let mirror: ServerInstance
+  const file = path.resolve('send-open.bulb.md')
   const mirrorUrl = () => `http://127.0.0.1:${mirror.port}`
   beforeAll(async () => {
     mirror = await startServer({ getHtml: () => '<html></html>', basePath: '.', port: await freePort(), reloadEmitter: new EventEmitter() })
@@ -636,15 +671,25 @@ describe('send --wait opens the page where the mirror is', () => {
     return { bulb, send }
   }
 
-  it('asks the mirror to open the page once, and answers pending until it arrives', async () => {
+  /** The tab the relay's open would have produced, attaching `ms` in — what the hold is holding for. */
+  const arrivesIn = (bulb: ServerInstance, ms: number) => {
+    const box: { page?: Awaited<ReturnType<typeof pageClient>> } = {}
+    const timer = setTimeout(() => {
+      void pageClient(() => ({}), { base: `http://127.0.0.1:${bulb.port}` }).then(p => { box.page = p })
+    }, ms)
+    return { box, stop: () => { clearTimeout(timer); box.page?.close() } }
+  }
+
+  it('asks the mirror to open the page once, and holds until it arrives', async () => {
     const { bulb, send } = await freshBulb()
     const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    const arriving = arrivesIn(bulb, 400)
     try {
-      expect(await send()).toEqual({ clients: 0, opening: 'editor', via: 'the agent mirror' })
-      await new Promise(r => setTimeout(r, 100))
+      // The answer is terminal: the page it opened is here, delivered to, and counted.
+      expect(await send()).toMatchObject({ clients: 1, opening: 'editor', via: 'the agent mirror' })
       expect(mirrorPage.frames()).toContain(`data: http://localhost:${bulb.port}`)
-      expect(await send()).toEqual({ clients: 0, opening: 'pending' })
-    } finally { mirrorPage.close(); bulb.close() }
+      expect(arriving.box.page?.received.map(e => e.payload)).toEqual(['x'])
+    } finally { arriving.stop(); mirrorPage.close(); bulb.close() }
   }, 15000)
 
   it('answers none when no mirror page is open, and never opens an external window for a send', async () => {
@@ -654,15 +699,69 @@ describe('send --wait opens the page where the mirror is', () => {
     } finally { bulb.close() }
   }, 15000)
 
-  it('two concurrent askers get one open and one pending, never a second open or a false none', async () => {
+  it('two concurrent askers get one open, and both resolve on the same arrival', async () => {
     const { bulb, send } = await freshBulb()
     const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    const arriving = arrivesIn(bulb, 500)
     try {
-      const outcomes = (await Promise.all([send(), send()])).map((o: { opening: string }) => o.opening).sort()
-      expect(outcomes).toEqual(['editor', 'pending'])
-      await new Promise(r => setTimeout(r, 100))
+      // Neither is sent away to ask again: they await the one arrival, and each delivers its own
+      // message to it. One `open-url` frame is the invariant — never a second window.
+      const outcomes = await Promise.all([send(), send()])
+      expect(outcomes.map((o: { clients: number }) => o.clients)).toEqual([1, 1])
+      expect(arriving.box.page?.received.map(e => e.payload)).toEqual(['x', 'x'])
       expect(mirrorPage.frames().split('event: open-url').length - 1).toBe(1)
-    } finally { mirrorPage.close(); bulb.close() }
+    } finally { arriving.stop(); mirrorPage.close(); bulb.close() }
+  }, 15000)
+
+  // Trap 2 (TB-Page-Set.md): the server holds and the sender does NOT retry behind it, so the page
+  // that attaches during the hold runs the payload exactly once. The old ordering — count read
+  // before the ask, sender polling behind it — is what made a `tb:click` fire in two frames.
+  it('a send that opened the page delivers to it exactly once, and says where it opened', async () => {
+    const { bulb } = await freshBulb()
+    await registerServer({ pid: process.ppid, port: bulb.port, url: `http://127.0.0.1:${bulb.port}`, file, startedAt: Date.now() })
+    const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    const arriving = arrivesIn(bulb, 400)
+    const { errs, restore } = capture()
+    try {
+      await runSend(file, 'go', 2000)
+    } finally {
+      restore(); arriving.stop(); mirrorPage.close(); bulb.close(); await unregisterServer(process.ppid)
+    }
+    expect(arriving.box.page?.received.map(e => e.payload)).toEqual(['go'])
+    expect(errs.join('\n')).toContain('Opened in VS Code via the agent mirror.')
+    expect(errs.join('\n')).toContain('Sent to 1 page')
+  }, 15000)
+
+  // Trap 3: with a server-side hold, the solo test applies to the count the hold settled on — a
+  // zero it was about to leave behind is not a refusal, and it must never dispatch to two.
+  it('a solo send holds at zero pages, then dispatches to the one that arrives', async () => {
+    const { bulb } = await freshBulb()
+    const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    const arriving = arrivesIn(bulb, 400)
+    try {
+      const resp = await fetch(`http://127.0.0.1:${bulb.port}/__send?reply=1000&solo=1&open=1`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"',
+      })
+      expect(await resp.json()).toMatchObject({ clients: 1 })
+      expect(arriving.box.page?.received.map(e => e.payload)).toEqual(['tb:click button "x"'])
+    } finally { arriving.stop(); mirrorPage.close(); bulb.close() }
+  }, 15000)
+
+  it('never fires an actuation into two pages, however they arrive during the hold', async () => {
+    const { bulb } = await freshBulb()
+    const base = `http://127.0.0.1:${bulb.port}`
+    const mirrorPage = await attachPage(VSCODE_UA, mirrorUrl())
+    const both: Array<Awaited<ReturnType<typeof pageClient>>> = []
+    const timer = setTimeout(() => {
+      void Promise.all([pageClient(() => ({}), { base }), pageClient(() => ({}), { base })]).then(ps => both.push(...ps))
+    }, 400)
+    try {
+      await fetch(`${base}/__send?reply=1000&solo=1&open=1`, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'tb:click button "x"',
+      })
+      // One page or none — the gesture fired in two frames is the failure this refuses.
+      expect(both.flatMap(p => p.received).length).toBeLessThanOrEqual(1)
+    } finally { clearTimeout(timer); for (const p of both) p.close(); mirrorPage.close(); bulb.close() }
   }, 15000)
 })
 

@@ -837,7 +837,20 @@ ${reloadClientScript('tbStreamUrl')}
         } catch (err) { location.replace('about:blank'); }
       }, 250);
     });
-    tbOn('message', async (e) => {
+    // The stream attaches during this script's own eval, in <head> — before the bulb's module (and
+    // its import graph) have run, so before a single \`tb.onMessage\` handler exists. The server now
+    // delivers the instant the stream attaches (it holds a send for the page it opened), so a
+    // message can beat the page's own code by the width of a CDN fetch. A page that is attached but
+    // has not yet run is not a page with no handlers, so hold the message until the deferred module
+    // scripts have executed (DOMContentLoaded waits for them). Page-side and bounded by one load:
+    // the server still never buffers, and a page that is awake handles inline as before.
+    let pageAwake = document.readyState !== 'loading';
+    const beforeAwake = [];
+    if (!pageAwake) document.addEventListener('DOMContentLoaded', () => {
+      pageAwake = true;
+      for (const run of beforeAwake.splice(0)) run();
+    });
+    const onMessageEvent = async (e) => {
       // Wire envelope { id?, payload } (JSON — SSE-line-safe). tb:* payloads are the shim's reserved
       // namespace (TB-Interrogation.md): answered by a built-in handler, never delivered to
       // tb.onMessage. Each settled non-undefined return is a reply candidate — the CLI enforces the
@@ -879,6 +892,10 @@ ${reloadClientScript('tbStreamUrl')}
       if (env.id !== undefined) {
         try { fetch('/__send-reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: env.id, results, errors }) }); } catch {}
       }
+    };
+    tbOn('message', (e) => {
+      if (pageAwake) { void onMessageEvent(e); return; }
+      beforeAwake.push(() => { void onMessageEvent(e); });
     });
   }
 })();

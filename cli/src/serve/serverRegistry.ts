@@ -274,15 +274,23 @@ export async function unregisterServer(pid: number): Promise<void> {
   await unlink(waitCursorPath(pid)).catch(() => {})
 }
 
+/** A mirror, not a bulb: its registry entry carries an `agent` name and no bulb file. That IS the
+ *  distinction (TB-Page-Lifecycle.md, "a mirror is one thing, spelled once"), and it was being
+ *  hand-written as `s.agent != null` at eight call sites across five files — the shape where one of
+ *  them eventually gets the polarity backwards. */
+export function isMirror(s: BulbServer): boolean {
+  return s.agent != null
+}
+
 /** A mirror reflecting THIS project. A mirror has no bulb path, so its launch `cwd` is the only thing
  *  to match on (TB-Agent-Mirror.md); a pre-cwd entry can't be claimed, so it never matches. */
 export function isProjectMirror(s: BulbServer, cwd: string): boolean {
-  return s.agent != null && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)
+  return isMirror(s) && s.cwd != null && normalizeBulbPath(s.cwd) === normalizeBulbPath(cwd)
 }
 
 /** A bulb server whose file lives under this project — the mirror's counterpart. */
 export function isProjectBulb(s: BulbServer, cwd: string): boolean {
-  return s.agent == null && isUnderProject(s.file, cwd)
+  return !isMirror(s) && isUnderProject(s.file, cwd)
 }
 
 /**
@@ -369,7 +377,7 @@ export async function relayOpen(url: string, cwd: string): Promise<RelayOutcome>
       if (!resp.ok) continue
       const { opened, pages } = (await resp.json()) as { opened?: boolean; pages?: number }
       if (opened) return { where: 'editor', via: s.agent ? 'the agent mirror' : `${path.basename(s.file)}'s page` }
-      if (s.agent != null) mirrorPages += pages ?? 0
+      if (isMirror(s)) mirrorPages += pages ?? 0
     } catch { /* not answering — the next may */ }
   }
   return mirrorPages > 0 ? { where: 'external' } : undefined
@@ -408,8 +416,12 @@ const PAGE_PROBE_MS = 500
  * registry's: an entry is written once at launch and `listBulbServers` is on hot paths, while a page
  * count is a live fact. `undefined` for anything that doesn't answer (a runtime older than the route
  * included), which the listing prints as `?` rather than as a confident zero.
+ *
+ * Named for the probe, not the fact: a server's OWN process reads the same count synchronously off
+ * `ServerInstance.pageCount()`, and two exports called `pageCount` — one exact, one that does I/O and
+ * can answer `undefined` — is a name a caller can pick wrong.
  */
-export async function pageCount(s: BulbServer): Promise<number | undefined> {
+export async function probePageCount(s: BulbServer): Promise<number | undefined> {
   try {
     const resp = await fetch(`${s.url}/__pages`, { signal: AbortSignal.timeout(PAGE_PROBE_MS) })
     if (!resp.ok) return undefined
@@ -430,7 +442,7 @@ export async function pageCount(s: BulbServer): Promise<number | undefined> {
  * keeps its tab (the foothold a relaunch reuses) and still gets its cleanup run. A server that
  * cannot answer (wedged, or a runtime older than the route) falls back to the kill and says so.
  */
-export async function stopServer(s: BulbServer, pages: 'close' | 'keep' = s.agent != null ? 'keep' : 'close'): Promise<StopOutcome> {
+export async function stopServer(s: BulbServer, pages: 'close' | 'keep' = isMirror(s) ? 'keep' : 'close'): Promise<StopOutcome> {
   try {
     const resp = await fetch(`${s.url}/__stop`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
@@ -457,7 +469,7 @@ export async function stopServer(s: BulbServer, pages: 'close' | 'keep' = s.agen
  */
 export function serversForBulb(servers: BulbServer[], file: string): BulbServer[] {
   const key = normalizeBulbPath(file)
-  return servers.filter(s => s.agent == null && s.pid !== process.pid && normalizeBulbPath(s.file) === key)
+  return servers.filter(s => !isMirror(s) && s.pid !== process.pid && normalizeBulbPath(s.file) === key)
 }
 
 /**

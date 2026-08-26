@@ -5,7 +5,8 @@ import { listBulbServers, serversForBulb } from '../serve/serverRegistry.js'
 import { canvasPngPath } from '../serve/paths.js'
 import { lastRunTimes } from '../serve/portBlocks.js'
 import { DEFAULT_SEND_WAIT_MS } from '../args.js'
-import { PAGE_ARRIVAL_MS, type PageOutcome } from '../serve/server.js'
+import { type PageOutcome } from '../serve/server.js'
+import { PAGE_LOG } from '../serve/pages.js'
 import { readStdin, normalizeContent } from '../payload.js'
 
 /**
@@ -17,22 +18,27 @@ import { readStdin, normalizeContent } from '../payload.js'
  *
  * Resolves the target in the cross-project registry by canonical file path (like `logs`/`stop`), POSTs
  * the message to its `/__send` (data-in, trust-free — no capability boundary crossed), and reports the
- * connected-page count the endpoint returns. Delivery is best-effort, never buffered: a send that
- * reaches no page (none open, or its SSE hasn't attached yet) is reported, not queued — retry.
+ * connected-page count the endpoint returns. Never buffered: a message is fanned out over the pages
+ * attached at that instant or not at all — no server-side queue. **A send that reached no page is a
+ * failed send and exits 1** (TB-Page-Lifecycle.md, invariant 8): the caller chains (`send … && wait …`)
+ * and reads a tool result only when the whole chain returns, so a true diagnosis printed ahead of a
+ * blocking successor is one nobody reads until the damage is done.
  *
- * `--wait[=ms]` bounds the whole exchange (TB-Interrogation.md). First the reattach retry: a
- * hot reload aborts the page's SSE before the fresh page re-attaches, so the first POST can land on
- * zero listeners; we re-POST until a page attaches or the window elapses — never a server-side queue,
- * so the "never buffered" contract is intact. Then the reply leg: the delivering POST holds while the
+ * `--wait[=ms]` sizes the REPLY window (TB-Interrogation.md): the delivering POST holds while the
  * page awaits its handlers, and a non-`undefined` return prints on stdout (JSON; a bare string raw) —
  * the delivery line stays on stderr so the reply owns stdout, `call`'s exact contract. One reply owns
  * stdout: zero keeps the fire-and-forget behavior, more than one (extra handlers, extra pages) is an
  * error, as is a handler throw. `tb:*` messages are shim-answered (never reach `tb.onMessage`) and
  * imply `--wait` — a reply is their only purpose, so silence is an error for them alone.
  *
- * A `--wait` that finds no page also asks the server to open one where the agent mirror is
- * (`?open=1` → server.ts `requestPage`, TB-VSCode-Browser.md): a closed tab reopens for the agent
- * that needs it, and the window stretches to let the page arrive. `--no-open` governs the launch only.
+ * **Every** send that finds no page asks the server to open one where the agent mirror is
+ * (`?open=1` → server.ts `requestPage`, TB-VSCode-Browser.md), so a closed tab reopens for the agent
+ * that needs it. **The hold for that arrival is the server's**, not this command's: one POST goes out
+ * and comes back once the page is here or the ask has run out, so there is no deadline arithmetic on
+ * this side to get wrong (opening without waiting would move a window and still lose the message).
+ * It costs a plain send nothing where there is nothing to open through — `none` is an answer and it
+ * fails at once.
+ * `--no-open` governs the launch only.
  */
 interface SendOutcome { clients?: number; results?: string[]; errors?: string[]; timedOut?: boolean; droppedMsAgo?: number; refused?: boolean; opening?: PageOutcome['how']; via?: string }
 
@@ -93,11 +99,8 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     process.exit(1)
   }
 
-  // An open was acknowledged for this send: ask for no second one. The server's arrival clock starts
-  // before the relay's latency and ours after the reply, so a retry in that gap would re-relay.
-  let opened = false
   const post = async (replyMs: number): Promise<SendOutcome> => {
-    const query = [replyMs > 0 ? `reply=${replyMs}` : '', actuation ? 'solo=1' : '', waitMs > 0 && !opened ? 'open=1' : ''].filter(Boolean).join('&')
+    const query = [replyMs > 0 ? `reply=${replyMs}` : '', actuation ? 'solo=1' : '', 'open=1'].filter(Boolean).join('&')
     const resp = await postToServer(`${server.url}/__send${query ? `?${query}` : ''}`, message ?? '')
     if (resp.status < 200 || resp.status >= 300) {
       console.error(`send failed: HTTP ${resp.status} from ${server.url}/__send`)
@@ -109,23 +112,9 @@ export async function runSend(file: string, message: string | undefined, waitMs 
   let outcome: SendOutcome = {}
   const started = Date.now()
   try {
-    const asked = started + waitMs   // the caller's own window
-    let deadline = asked
-    do {
-      outcome = await post(waitMs > 0 ? Math.max(deadline - Date.now(), 1000) : 0)
-      if ((outcome.clients ?? 0) > 0 || Date.now() >= deadline) break
-      // What the server observed about a page (TB-VSCode-Browser.md): one on its way — opened for
-      // this send, opened by the launch, or reattaching — earns the arrival window, which the
-      // caller's default can't hold; "none" hands the caller's own window back.
-      const justOpened = outcome.opening === 'editor' || outcome.opening === 'external'
-      if (justOpened || outcome.opening === 'pending') deadline = Math.max(deadline, Date.now() + PAGE_ARRIVAL_MS)
-      else if (outcome.opening === 'none') deadline = Math.min(deadline, asked)
-      if (justOpened && !opened) {
-        opened = true
-        console.error(outcome.opening === 'editor' ? `Opened in VS Code via ${outcome.via}; waiting for the page.` : 'Opened in your browser, where the agent mirror is; waiting for the page.')
-      }
-      await new Promise(r => setTimeout(r, 150))
-    } while (true)
+    // One POST: the server holds for the page, then for the replies. No retry, so nothing can be
+    // delivered twice (an actuation fired in two frames is the hazard that ordering protects).
+    outcome = await post(waitMs)
   } catch (e) {
     console.error(`send failed: ${e instanceof Error ? e.message : String(e)}`)
     process.exit(1)
@@ -145,17 +134,21 @@ export async function runSend(file: string, message: string | undefined, waitMs 
     // between a one-keystroke fix and an hour of hunting (TB-CLI.md, observed state).
     const dropped = outcome.droppedMsAgo
     const noRelay = outcome.opening === 'none' ? ' and no agent mirror page is open to open one through' : ''
-    const stale = opened
-      ? ` — the page was opened but never attached; is the browser it opened in still there?`
+    const stale = outcome.opening === 'unreached'
+      ? ` — the page was opened ${outcome.via ? `in VS Code via ${outcome.via}` : 'in your browser'} and never attached; is the browser it opened in still there?`
       : dropped !== undefined
         ? ` — a page disconnected ${Math.round(dropped / 1000)}s ago and hasn't reconnected${noRelay}; reload it, or open ${server.url}`
-        : ` — no page has ever connected${noRelay}; share ${server.url} and arm: typebulb wait ${file} --match "[page] connected"`
-    if (waitMs > 0) console.error(`No page connected after ${((Date.now() - started) / 1000).toFixed(1)}s${stale}`)
-    else console.error(`Sent, but no page is connected${stale}`)
-    if (reserved) process.exit(1)   // a tb:* message exists only for its reply
-    return
+        : ` — no page has ever connected${noRelay}; share ${server.url} and arm: typebulb wait ${file} --match "${PAGE_LOG.connected}"`
+    // One outcome for every send, `--wait` or not (invariant 8). "Sent, but no page is connected"
+    // was the old plain-send line and it read as a success it wasn't: nothing was sent.
+    console.error(`No page connected after ${((Date.now() - started) / 1000).toFixed(1)}s, so nothing was delivered${stale}`)
+    process.exit(1)
   }
 
+  // Where the page came from, when this send is why it exists: the launch prints the same fact, and
+  // an agent that asked for a bulb it had closed should read that a window moved.
+  if (outcome.opening === 'editor') console.error(`Opened in VS Code via ${outcome.via}.`)
+  else if (outcome.opening === 'external') console.error('Opened in your browser, where the agent mirror is.')
   // Delivery is a status line; stdout belongs to the one reply.
   console.error(`Sent to ${pages}.`)
 
