@@ -2,12 +2,18 @@
  * HTML page for the debulbified agent mirror.
  *
  * The bulb template (`bulb/template.ts`) builds a page around a compiled bulb: import
- * map, the full `tb` shim, the inline bulb protocol. The mirror needs none of that — it's
+ * map, the full `tb` shim, the inline bulb protocol. The mirror needs none of that: it's
  * ordinary bundled code, so its client (`client.js`) is a self-contained ESM module
  * with no bare imports to resolve, and it talks to its `server.ts` through one tiny
  * surface: `tb.server.<name>()` / `tb.log()`. This builds the trimmed page:
  * the no-flash theme engine (so nested inline bulbs inherit the host theme), the mirror's
- * styles and mount stub, the minimal `tb`, and the module script tag.
+ * styles and mount stub (which carries its own boot overlay), the minimal `tb`, and the module
+ * script tag.
+ *
+ * Every stylesheet is INLINE — the mirror's own and KaTeX's alike. A page whose first paint waits on
+ * a subresource can hang blank on something that is not the mirror's fault (KaTeX's css loaded from
+ * jsdelivr, and a slow CDN held the whole page, module script included); with nothing to fetch, the
+ * boot overlay is on screen the moment the HTML lands.
  */
 
 import { escapeHtml, baseResetStyle, themeHeadScript, reloadClientScript } from '../bulb/pageChrome.js'
@@ -64,7 +70,9 @@ export interface AgentHtmlOptions {
   agent: string
   /** The mirror's `styles.css`, inlined into <head> (read from the dist asset dir). */
   styles: string
-  /** The mount stub (`agents/client/index.html`): katex stylesheet link + `#app`. */
+  /** KaTeX's `katex.min.css`, inlined too (same dist asset dir; its font URLs already absolute). */
+  katex: string
+  /** The mount stub (`agents/client/index.html`): `#app` plus the self-driving boot overlay. */
   mountHtml: string
   /** Wire the hot-reload listener (watch mode). */
   watch: boolean
@@ -74,7 +82,7 @@ export interface AgentHtmlOptions {
 
 /** Build the mirror's complete HTML page. Pure string assembly — no I/O. */
 export function buildAgentHtml(opts: AgentHtmlOptions): string {
-  const { name, agent, styles, mountHtml, watch, theme } = opts
+  const { name, agent, styles, katex, mountHtml, watch, theme } = opts
   const bundleUrl = clientBundleUrl(agent)
   return `<!DOCTYPE html>
 <html>
@@ -88,6 +96,9 @@ ${baseResetStyle}
   </style>
   <style>
 ${styles}
+  </style>
+  <style>
+${katex}
   </style>
 </head>
 <body>

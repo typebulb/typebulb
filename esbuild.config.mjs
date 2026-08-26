@@ -1,5 +1,5 @@
 import { build } from 'esbuild'
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync } from 'fs'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
@@ -63,9 +63,10 @@ await build({
 // self-contained (NO externals — katex/markdown-it/beautiful-mermaid/dompurify/highlight.js, the
 // neutral `agents/client/` modules, and the internal `../../src/render.ts` they import are all
 // inlined). Served as a static asset by runAgentViewer. styles.css + index.html are the neutral chrome
-// (`agents/client/`), copied next to each agent's bundle so runAgentViewer reads them from `dist/` at
-// runtime and they ship via `files: ["dist"]`. The server halves (`agents/<name>/server.ts`) need no
-// copy: they're bundled into `dist/index.js` transitively (serve.ts's static import map).
+// (`agents/client/`), copied next to each agent's bundle — along with KaTeX's stylesheet and fonts —
+// so runAgentViewer reads them from `dist/` at runtime and they ship via `files: ["dist"]`. The server
+// halves (`agents/<name>/server.ts`) need no copy: they're bundled into `dist/index.js` transitively
+// (serve.ts's static import map).
 const MIRROR_AGENTS = ['claude', 'codex', 'pi']
 for (const agent of MIRROR_AGENTS) {
   await build({
@@ -82,6 +83,19 @@ for (const agent of MIRROR_AGENTS) {
       new URL(`./cli/agents/core/client/${asset}`, import.meta.url),
       new URL(`./dist/agents/${agent}/${asset}`, import.meta.url),
     )
+  }
+  // KaTeX's stylesheet, self-hosted: on a CDN it was a render-blocking fetch in a localhost tool's
+  // critical path. Font URLs are absolutised to this agent's mount because page.ts inlines the css
+  // into <head>, where the file's own `fonts/` would resolve against `/`. woff2 only — it is
+  // universally supported, so the css's woff/ttf fallbacks are listed but never fetched.
+  const katexDist = new URL('./node_modules/katex/dist/', import.meta.url)
+  writeFileSync(
+    new URL(`./dist/agents/${agent}/katex.min.css`, import.meta.url),
+    readFileSync(new URL('katex.min.css', katexDist), 'utf8').replaceAll('url(fonts/', `url(/agents/${agent}/fonts/`),
+  )
+  mkdirSync(new URL(`./dist/agents/${agent}/fonts/`, import.meta.url), { recursive: true })
+  for (const font of readdirSync(new URL('fonts/', katexDist)).filter(f => f.endsWith('.woff2'))) {
+    copyFileSync(new URL(`fonts/${font}`, katexDist), new URL(`./dist/agents/${agent}/fonts/${font}`, import.meta.url))
   }
 }
 

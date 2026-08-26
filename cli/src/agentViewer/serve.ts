@@ -59,7 +59,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   reportEnv(envResult, path.join(basePath, 'mirror'))
 
   // The mirror's built assets live beside this bundle in `dist/agents/<agent>/` (client.js +
-  // styles.css + index.html, emitted by esbuild.config.mjs). The client bundle is per-agent; its
+  // styles.css + katex.min.css + index.html, emitted by esbuild.config.mjs). The client bundle is per-agent; its
   // styles/mount are the neutral chrome copied from `agents/client/`. The matching source lives in
   // `cli/agents/` beside `dist/` (repo only — a published install ships just `dist/`, so the dir won't
   // exist there); it drives hot reload.
@@ -67,6 +67,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   const assetDir = path.join(distDir, 'agents', agent)
   const agentsSourceDir = path.join(distDir, '..', 'cli', 'agents')   // repo source root for all agents
   const stylesPath = path.join(assetDir, 'styles.css')
+  const katexPath = path.join(assetDir, 'katex.min.css')
   const mountPath = path.join(assetDir, 'index.html')
 
   // Re-read the page assets per request so a hot-reload (rebuilt styles/mount) is picked
@@ -75,6 +76,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     name: displayName,
     agent,
     styles: readFileSync(stylesPath, 'utf8'),
+    katex: readFileSync(katexPath, 'utf8'),
     mountHtml: readFileSync(mountPath, 'utf8'),
     watch: args.watch,
   })

@@ -5,8 +5,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { createRequire } from 'module'
-import { launchBulb, runCli, requireDistBuild } from './harness/servers.js'
+import { launchBulb, runCli, requireDistBuild, freePort, distBin } from './harness/servers.js'
 import { serverModulePath } from '../../src/pipeline.js'
+import { startServer, type ServerInstance } from '../../src/serve/server.js'
+import { buildAgentHtml } from '../../src/agentViewer/page.js'
 
 /**
  * Tier B — the tab survives its server being replaced (TB-CLI.md, "A replace keeps the user's tab").
@@ -245,4 +247,105 @@ describe('a stop leaves nothing of the bulb running (live browser)', () => {
     await runCli(['stop', served], { cwd: home, env: env() })
     expect(fs.existsSync(temp)).toBe(false)
   }, 120_000)
+})
+
+// The agent mirror's boot overlay (agents/core/client/index.html): a mirror slow to come up shows a
+// live "starting" state, never a blank window or empty chrome, and speaks only when something has
+// actually failed. Real-browser only — the claim is entirely about what paints and when, and its
+// whole point is that the served HTML stands on its own before the client bundle has run. Serves the
+// real page over the real bundle with `info` held open: the stall the overlay exists for, without
+// needing a slow mirror to reproduce it.
+// Verified red→green: dropping root.ts's `getElementById('boot')?.remove()` leaves the overlay up.
+describe('the agent mirror covers a slow boot (live browser)', () => {
+  let browser: Browser | undefined
+  let server: ServerInstance | undefined
+  let url = ''
+  let bareStub = false                   // stand in for a mirror old enough to carry no overlay
+  let missingBundle = false              // point the page at a bundle URL outside the static mount
+  let answer = () => {}                  // releases the held `info`, the stall the overlay exists for
+
+  beforeAll(async () => {
+    requireDistBuild()
+    const assetDir = path.join(path.dirname(distBin), 'agents', 'claude')
+    const read = (f: string) => fs.readFileSync(path.join(assetDir, f), 'utf8')
+    const held = new Promise<void>(resolve => { answer = resolve })
+
+    const port = await freePort()
+    url = `http://localhost:${port}`
+    server = await startServer({
+      getHtml: () => buildAgentHtml({
+        name: 'Claude Mirror',
+        agent: missingBundle ? 'absent' : 'claude',
+        styles: read('styles.css'),
+        katex: read('katex.min.css'),
+        mountHtml: bareStub ? '<div id="app"></div>' : read('index.html'),
+        watch: false,
+      }),
+      basePath: assetDir,
+      port,
+      trusted: true,
+      staticAssets: { mount: '/agents/claude/', dir: assetDir },
+      getServerExports: () => ({
+        info: async () => { await held; return { cwd: assetDir, pid: 0, composer: false } },
+        poll: async () => ({ events: [], cursor: 0, working: false, latestModel: null, busy: [] }),
+      }),
+    })
+    browser = await chromium.launch()
+  })
+
+  afterAll(async () => { await browser?.close(); server?.close() })
+
+  it('covers the window with the named wait, and retires it when the mirror answers', async () => {
+    const tab = await browser!.newPage()
+    await tab.goto(url)
+
+    // The client has mounted its (dataless) chrome by now, and the overlay must still be covering it:
+    // opaque and on top, so the empty chrome never shows through while `info` is outstanding.
+    await tab.waitForSelector('.statusbar', { timeout: 20_000 })
+    const covering = await tab.evaluate(() => {
+      const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
+      return !!hit && !!document.getElementById('boot')?.contains(hit)
+    })
+    expect(covering).toBe(true)
+    // And it stays wordless while it is merely waiting — a phase it cannot explain is left unsaid.
+    expect(await tab.locator('.boot-why').textContent()).toBe('')
+
+    answer()
+    // `info` answering is what retires it — not the first poll, so a poll that never lands cannot
+    // leave our own chrome over a live app.
+    await tab.waitForFunction(() => !document.getElementById('boot'), undefined, { timeout: 20_000 })
+    expect(await tab.locator('.statusbar').count()).toBe(1)
+    await tab.close()
+  }, 60_000)
+
+  // The client is fetched from whichever mirror process is serving, which may predate the overlay: a
+  // bare mount stub, no `#boot`, no script. The client's one interaction with it must tolerate that,
+  // because a blank window under a dead client is worse than the stall the overlay exists for.
+  it('boots against a page that carries no overlay at all', async () => {
+    answer()                             // this case is about the overlay, not the stall
+    bareStub = true
+    const tab = await browser!.newPage()
+    await tab.goto(url)
+    await tab.waitForSelector('.statusbar', { timeout: 20_000 })   // the client mounted, not died
+    await tab.close()
+  }, 60_000)
+
+  // A bundle that never arrives is the failure the overlay is worst placed to see: a module script's
+  // fetch error fires on the element and never reaches window, so untreated the page shimmers on
+  // forever over a bundle that is not coming. Reaching the wording proves both halves: the
+  // capture-phase listener saw it, and the one silent re-fetch ran and gave up rather than looping
+  // (a loop would time this out instead).
+  it('speaks up when the bundle never arrives, after retrying once', async () => {
+    answer()
+    bareStub = false
+    missingBundle = true
+    const tab = await browser!.newPage()
+    await tab.goto(url)
+    await tab.waitForFunction(
+      () => document.querySelector('.boot-why')?.textContent === "The agent mirror didn't finish loading. Reload to retry.",
+      undefined,
+      { timeout: 20_000 },
+    )
+    await tab.close()
+  }, 60_000)
 })

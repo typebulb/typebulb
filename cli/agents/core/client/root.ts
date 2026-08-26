@@ -90,6 +90,12 @@ export class Root extends Component implements IRoot {
     this.#elsewhere = i.elsewhere ?? null
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.ready = true
+    // Take the page's boot overlay off (agents/core/client/index.html). Gated on ready, not on the
+    // first poll: `info` is the call that decides whether the mirror works at all, and everything
+    // after it is content. Gating any later hands a slow or failing poll the power to leave our own
+    // chrome over a live app for good — the wedge the overlay exists to prevent, caused by it.
+    // Removal is the client's own act, so it retires even an overlay whose script never ran.
+    document.getElementById('boot')?.remove()
     this.updateTitle()
     this.update()
     this.pump()

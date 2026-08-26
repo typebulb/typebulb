@@ -1,2 +1,47 @@
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <div id="app"></div>
+
+<!-- The boot overlay: what the window shows between this HTML landing and the client being up. It
+     ships in the served markup, so it paints before any script runs — and its script lives HERE with
+     it rather than in page.ts's chrome, because getHtml re-reads this file per request while page.ts
+     is bundled into the running process: together, the two halves are always the same version as
+     each other and hot-reload as one. The client retires the overlay by removing #boot
+     (client/root.ts), which needs nothing from the script below. -->
+<div id="boot" class="boot">
+  <div class="boot-title"><span class="shimmer-text shimmer-slow">Starting the agent mirror</span> 💡</div>
+  <div class="boot-why"></div>
+</div>
+<script>
+(() => {
+  const el = document.getElementById('boot')
+  const why = el && el.querySelector('.boot-why')
+  // Markup and script ship in this one file, so a mismatch means a truncated or hand-altered stub.
+  // Bail rather than wedge on it; removal is the client's job and needs nothing from here.
+  if (!why) return
+  // The overlay says NOTHING while it is merely loading. The shimmering title already says "working",
+  // and narrating which step is in flight teaches the user nothing they can act on — a wait we cannot
+  // explain is better left unexplained. It speaks only when something has actually FAILED, which is
+  // the one thing they cannot see for themselves.
+  const say = text => { if (el.isConnected) why.textContent = text }
+  let retried = false
+  // A module script's FETCH failure fires on the element and never bubbles to window, hence capture.
+  // Untreated it is invisible: the page shimmers on over a bundle that is never coming.
+  addEventListener('error', e => {
+    const script = e.target
+    if (script instanceof HTMLScriptElement) {
+      // One silent re-fetch first — silent because a retry that works is not news. The common cause
+      // is transient (a mirror serving assets that were rewritten under it mid-load), and
+      // re-appending the script rather than reloading the page cannot loop and cannot cost the page.
+      if (retried) { say("The agent mirror didn't finish loading. Reload to retry."); return }
+      retried = true
+      setTimeout(() => {
+        const again = document.createElement('script')
+        again.type = 'module'
+        again.src = script.src.split('?')[0] + '?retry=' + Date.now()   // past a cached bad response
+        document.body.appendChild(again)
+      }, 1000)
+    } else if (e.message) {
+      say('The agent mirror stopped: ' + e.message)
+    }
+  }, true)
+})()
+</script>

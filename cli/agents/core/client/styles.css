@@ -337,6 +337,30 @@ html:not([data-theme="dark"]) .turn-view > .shimmer-text {
    rides a whole buffering window). */
 .pill-busy { border-color: var(--accent); --shimmer-base: var(--panel); --shimmer-mix: 25%; }
 
+/* ---- Boot overlay (index.html, markup and script both) — what the window shows between the HTML
+   landing and the client having a transcript. Opaque and over #app, so the empty
+   chrome never flashes through first. The 1.2s animation delay is the whole don't-flash-on-a-fast-load
+   mechanism: a normal boot is retired before this fades in, so the wait is only ever announced when
+   there is one. Measured, not guessed — a warm local boot lands at 590-930ms (dev, where the client
+   bundle is unminified and slowest), so the delay has to clear that, not merely beat a blank screen.
+   Geometry follows .cwd-hint, the mirror's other centred whole-window message. */
+.boot {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: .5rem;
+  padding: 2rem;
+  text-align: center;
+  animation: boot-in .35s ease 1.2s both;
+}
+.boot-title { font-size: 1.15rem; }
+/* min-height reserves the line the seconds count lands on, so naming the wait doesn't shift the title. */
+.boot-why { color: var(--muted); font-size: .95rem; max-width: 32rem; min-height: 1.4em; }
+@keyframes boot-in { from { opacity: 0; } to { opacity: 1; } }
+
 /* ── Tooltip — the styled stand-in for native `title`, and only on FIXED EXPLANATORY copy: text
    that teaches what a control does. Dynamic identifiers (a path, a model id, an mcp tool's full
    name) keep the native attribute, which is better at them: they run long, they want to wrap, and
