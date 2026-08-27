@@ -35,6 +35,31 @@ const insight = `
    */
   insight<T = unknown>(): T | undefined;`
 
+// Runtime-state writers — duals of tb.data()/tb.json() and tb.insight() (TB-State.md).
+const runtimeStateWriters = `
+  /**
+   * Replace the data this run is working on, and get back a link that carries it.
+   *
+   * Updates what \`tb.data()\` / \`tb.json()\` return for the rest of this page, and writes the
+   * result into the URL fragment so the address bar addresses this run. The bulb's source
+   * \`data.txt\` is never touched: a reload without the fragment goes back to the file.
+   *
+   * @param chunks - The new data chunks (a bare string is treated as one chunk)
+   * @returns The shareable URL, or undefined when there is no address bar (inline bulbs) or the
+   *   data is too large to fit a URL. Pass only what a share needs, not necessarily everything.
+   */
+  setData(chunks: string | string[]): Promise<string | undefined>;
+  /**
+   * Replace the insight this run is working on, and get back a link that carries it.
+   *
+   * The \`tb.insight()\` counterpart of \`setData\`, with the same fragment behavior and the same
+   * rule: runtime only, never the bulb's source \`insight.json\`.
+   *
+   * @param value - Any JSON-serializable value
+   * @returns The shareable URL, or undefined (see \`setData\`)
+   */
+  setInsight(value: unknown): Promise<string | undefined>;`
+
 // One options shape, reused by tb.ai() and tb.ai.stream().
 const aiOptions = `options: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
@@ -289,7 +314,7 @@ export const clientTbTypings = `${aiChunkType}${aiAccessType}
  * Typebulb utilities namespace.
  * Type \`tb.\` to discover available helpers.
  */
-declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${log}${clientServerProxy}${onMessage}${ai}${fs}${dir}${models}${theme}${mode}
+declare const tb: {${dataAndJson}${clientOnlyMembers}${insight}${runtimeStateWriters}${log}${clientServerProxy}${onMessage}${ai}${fs}${dir}${models}${theme}${mode}
 };
 `
 

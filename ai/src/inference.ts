@@ -255,13 +255,23 @@ export function sanitizeJsonOutput(content: string): SanitizeResult {
   return { parsed: undefined, json, fixesApplied }
 }
 
-// ─── Result encoding (#tb=1:<deflate+base64url>) ─────────────────────────────
+// ─── Runtime state encoding (#tb=1:<deflate+base64url>) ──────────────────────
 
-/** The result of an inference run: the AI's insight plus the data it analyzed */
-export interface InferenceResult {
-  insight: unknown      // Parsed insight object
-  insightJson: string   // Serialized insight (for display/saving)
-  data: string[]        // Data chunks that were analyzed
+/** The pair a page writes: the data it is running on, the insight over it, or either alone. Both
+ *  slots are optional and an absent one falls through to the bulb's source block, so a data-only
+ *  producer (`tb.setData`) and an inference run share one shape. This is the shape on every wire
+ *  the pair crosses — `/__tb-encode`, `/__infer-save`, .com's `SET_RUNTIME_STATE` — where an unset
+ *  slot is ABSENT rather than present-and-undefined, so presence needs no companion flag. */
+export interface RuntimeStatePair {
+  insight?: unknown      // Parsed insight object
+  data?: string[]        // Data chunks
+}
+
+/** A bulb's runtime state: the pair, plus the insight's serialized form. `insightJson` is always
+ *  `JSON.stringify(insight, null, 2)` and travels only in-process — never on a wire, where it
+ *  would be a second copy of a slot that is already there. */
+export interface RuntimeState extends RuntimeStatePair {
+  insightJson?: string   // Serialized insight (for display/saving)
 }
 
 const TB_PREFIX = 'tb='
@@ -269,14 +279,19 @@ const TB_VERSION = '1'
 const MAX_ENCODED_LENGTH = 60000  // ~60KB; Firefox's ~64K URL limit is the cross-browser floor
 
 interface EncodedPayload {
-  i: unknown    // insight (parsed)
-  d: string[]   // data chunks
+  i?: unknown    // insight (parsed)
+  d?: string[]   // data chunks
 }
 
-/** Encode result to URL hash. Returns "#tb=1:..." or empty string if too large. */
-export function encodeToHash(result: InferenceResult): string {
+/** Encode runtime state to a URL hash. Returns "#tb=1:..." — or empty string when the state is
+ *  empty or too large to carry, the two cases a caller handles the same way (no shareable link). */
+export function encodeToHash(state: RuntimeState): string {
   try {
-    const payload: EncodedPayload = { i: result.insight, d: result.data }
+    const payload: EncodedPayload = {}
+    if (state.insight !== undefined) payload.i = state.insight
+    if (state.data !== undefined) payload.d = state.data
+    if (payload.i === undefined && payload.d === undefined) return ''
+
     const json = JSON.stringify(payload)
     const compressed = deflateSync(strToU8(json), { level: 9 })
     const base64 = base64UrlEncode(compressed)
@@ -289,8 +304,8 @@ export function encodeToHash(result: InferenceResult): string {
   }
 }
 
-/** Decode result from URL hash. Returns undefined if no result or decode fails. */
-export function decodeFromHash(hash: string): InferenceResult | undefined {
+/** Decode runtime state from URL hash. Returns undefined if absent or decode fails. */
+export function decodeFromHash(hash: string): RuntimeState | undefined {
   try {
     const fragment = hash.startsWith('#') ? hash.slice(1) : hash
     if (!fragment.startsWith(TB_PREFIX)) return undefined
@@ -301,16 +316,23 @@ export function decodeFromHash(hash: string): InferenceResult | undefined {
 
     const compressed = base64UrlDecode(encoded.slice(colonIndex + 1))
     const payload = JSON.parse(strFromU8(inflateSync(compressed))) as EncodedPayload
+    if (!payload || typeof payload !== 'object') return undefined
 
-    if (!payload || typeof payload.i === 'undefined' || !Array.isArray(payload.d)) {
-      return undefined
-    }
+    // Either slot alone is a valid share; only a payload carrying neither is undecodable.
+    const hasInsight = payload.i !== undefined
+    const hasData = Array.isArray(payload.d)
+    if (!hasInsight && !hasData) return undefined
 
-    return {
-      insight: payload.i,
-      insightJson: JSON.stringify(payload.i, null, 2),
-      data: payload.d
+    // Key by key, so an unset slot is ABSENT rather than present-and-undefined — the shape every
+    // other producer of this pair emits, and the one a `{ ...state, ...patch }` merge can be handed
+    // without a missing slot wiping the one already there.
+    const state: RuntimeState = {}
+    if (hasInsight) {
+      state.insight = payload.i
+      state.insightJson = JSON.stringify(payload.i, null, 2)
     }
+    if (hasData) state.data = payload.d
+    return state
   } catch {
     return undefined
   }

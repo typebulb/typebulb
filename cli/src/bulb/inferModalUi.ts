@@ -86,11 +86,13 @@ function chunkLabel(chunk, i, titles) {
 
 /**
  * Open the inference modal. ctx: { data: string[], readStream(resp), onComplete(final),
- * onError(err), onCancel() }. readStream is the SHIM's NDJSON reader (an async iterable of chunk
+ * onError(err), onCancel(), runtimeState() }. readStream is the SHIM's NDJSON reader (an async iterable of chunk
  * values that throws error envelopes as Error with code/retryable) — passed in so the page has
  * exactly one copy of the transport decoder. onComplete fires on every successful run (a retry
  * after an error included); onError on each displayed terminal error; onCancel when the user
- * closes before any completion.
+ * closes before any completion. runtimeState() returns the wire pair for what a prior run actually
+ * set — a slot nobody set is absent from it, so an empty pair means nothing was — which is what
+ * Save files and what gates these controls.
  */
 export function runInference(ctx) {
   var host = document.createElement('div');
@@ -210,25 +212,34 @@ export function runInference(ctx) {
     // textareas, above the buttons.
     body.appendChild(model);
 
-    // Fragment-driven actions (TB-Inference.md): the address bar holds the last completed run, so
-    // all three appear exactly when one exists. Copy = share it; Save = promote it to the bulb's
-    // source; Discard = drop it and land back on the file's own data + example.
-    if (location.hash.indexOf('tb=') !== -1) {
+    // Actions over a prior run. Save and Discard follow the RUN (runtime state), share follows the
+    // FRAGMENT: filing has no size ceiling, only the URL does, so an over-ceiling run that minted no
+    // link is still savable (TB-State.md, "The ceiling bounds sharing, not saving").
+    // Any key means a slot was set: the pair carries only what someone wrote, so counting keys
+    // asks that without restating which slots exist or how an unset one is spelled.
+    var rt = ctx.runtimeState();
+    if (Object.keys(rt).length) {
       var grp = el('div', 'leftgrp');
-      // Icon-only: the glyph reads as "copy link", the title carries the words, and the footer
-      // keeps room for three actions without wrapping.
-      var LINK_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
-      var share = el('button', 'iconbtn');
-      share.innerHTML = LINK_SVG;
-      share.setAttribute('aria-label', 'Copy share URL');
-      share.title = 'Copies this page URL with the #tb= result fragment \\u2014 paste the fragment onto the published bulb\\u2019s URL to share the last run';
-      share.addEventListener('click', function () {
-        navigator.clipboard.writeText(location.href).then(function () {
-          share.textContent = '\\u2713';
-          setTimeout(function () { share.innerHTML = LINK_SVG; }, 1500);
+      // Drop the run from the address bar. Both actions below leave the page holding the run it is
+      // showing and only stop addressing it: Save because the file now has it, Discard because the
+      // reload that follows is what puts the page back on the file's blocks.
+      var unaddress = function () { history.replaceState(null, '', location.pathname + location.search); };
+      if (location.hash.indexOf('tb=') !== -1) {
+        // Icon-only: the glyph reads as "copy link", the title carries the words, and the footer
+        // keeps room for three actions without wrapping.
+        var LINK_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+        var share = el('button', 'iconbtn');
+        share.innerHTML = LINK_SVG;
+        share.setAttribute('aria-label', 'Copy share URL');
+        share.title = 'Copies this page URL with the #tb= result fragment \\u2014 paste the fragment onto the published bulb\\u2019s URL to share the last run';
+        share.addEventListener('click', function () {
+          navigator.clipboard.writeText(location.href).then(function () {
+            share.textContent = '\\u2713';
+            setTimeout(function () { share.innerHTML = LINK_SVG; }, 1500);
+          });
         });
-      });
-      grp.appendChild(share);
+        grp.appendChild(share);
+      }
       var save = el('button', '', 'Save to bulb');
       save.title = 'Write this run\\u2019s data + insight into the .bulb.md as its new defaults';
       save.addEventListener('click', function () {
@@ -236,13 +247,13 @@ export function runInference(ctx) {
         fetch('/__infer-save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hash: location.hash })
+          body: JSON.stringify(ctx.runtimeState())
         }).then(async function (r) {
           if (!r.ok) { var t = await r.text(); var err; try { err = JSON.parse(t).message; } catch (e) { err = t; } throw new Error(err || 'Save failed'); }
         }).then(function () {
-          // The run is source now — clear the runtime layer. Under watch, the file write is about
-          // to hot-reload the page onto its new defaults anyway.
-          history.replaceState(null, '', location.pathname + location.search);
+          // The run is source now, so the link that carried it is redundant. Under watch, the file
+          // write is about to hot-reload the page onto its new defaults anyway.
+          unaddress();
           save.textContent = 'Saved \\u2713';
         }).catch(function (e) {
           save.textContent = 'Save failed'; save.title = e.message; save.disabled = false;
@@ -254,7 +265,7 @@ export function runInference(ctx) {
       discard.addEventListener('click', function () {
         // The fragment IS the runtime state (TB-Inference.md Invariant 2): strip it and reload,
         // and the page boots from the file's blocks. The file is never touched.
-        history.replaceState(null, '', location.pathname + location.search);
+        unaddress();
         location.reload();
       });
       grp.appendChild(discard);

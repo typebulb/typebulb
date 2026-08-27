@@ -20,7 +20,8 @@ export {
   hashContainsTb,
   type InferenceScriptContent,
   type SanitizeResult,
-  type InferenceResult
+  type RuntimeState,
+  type RuntimeStatePair
 } from './inference.js'
 
 // Per-provider wire DTOs + provider implementations.

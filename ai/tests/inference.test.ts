@@ -342,6 +342,24 @@ describe('encodeToHash / decodeFromHash', () => {
     expect(decoded!.data).toEqual(result.data)
   })
 
+  it('round-trips either slot alone, leaving the other absent', () => {
+    // An absent slot is the signal to fall through to the bulb's own block, so it must survive the
+    // round trip as absent rather than as an empty value (TB-State.md Invariant 3).
+    const dataOnly = decodeFromHash(encodeToHash({ data: ['just data'] }))
+    expect(dataOnly!.data).toEqual(['just data'])
+    expect(dataOnly!.insight).toBeUndefined()
+    expect(dataOnly!.insightJson).toBeUndefined()
+
+    const insightOnly = decodeFromHash(encodeToHash({ insight: { a: 1 } }))
+    expect(insightOnly!.insight).toEqual({ a: 1 })
+    expect(insightOnly!.insightJson).toBe('{\n  "a": 1\n}')
+    expect(insightOnly!.data).toBeUndefined()
+  })
+
+  it('encodes nothing when neither slot was set', () => {
+    expect(encodeToHash({})).toBe('')
+  })
+
   it('returns empty string when the payload exceeds the URL ceiling', () => {
     // Incompressible payload (xorshift over the printable range) comfortably past the 60K encoded cap.
     let s = 88172645463325252n

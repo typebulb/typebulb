@@ -3,6 +3,7 @@
  */
 
 import type { ImportMap } from 'typebulb/resolver'
+import { runtimeStateEngine } from 'typebulb/format'
 import { typebulbShim } from './shim.js'
 import { escapeHtml, escapeScript, baseResetStyle, pageHeightStyle, themeHeadScript, scrollRestoreHeadScript } from './pageChrome.js'
 
@@ -89,6 +90,7 @@ ${bulbKey ? `<script>window.__TB_BULB__ = ${escapeScript(JSON.stringify(bulbKey)
 ${compileError ? `<script>window.__TB_COMPILE_ERROR__ = ${escapeScript(JSON.stringify(compileError))};</script>` : ''}
 
 <script>
+${runtimeStateEngine}
 ${typebulbShim}
 </script>
 

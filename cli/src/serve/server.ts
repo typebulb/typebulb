@@ -10,7 +10,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import type { EventEmitter } from 'events'
 import open from 'open'
-import { normalizeUpstreamError, consumeStreamResult, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError } from 'typebulb/ai'
+import { normalizeUpstreamError, consumeStreamResult, streamAiChunks, buildInferencePrompt, sanitizeJsonOutput, encodeToHash, decodeFromHash, ProviderStreamError, type RuntimeStatePair } from 'typebulb/ai'
 import { parseConfig, splitIntoChunks, contentTypeFor, forbiddenAssetExt } from 'typebulb/format'
 import { FsProxyCache } from '../deps/cache/fsProxyCache.js'
 import { inferModalJs } from '../bulb/inferModalUi.js'
@@ -32,6 +32,26 @@ const LOOPBACK = '127.0.0.1'
 // legitimate request's Host/Origin is always one of these; anything else (e.g. a
 // DNS-rebinding domain pointed at 127.0.0.1) addresses us by a name we don't own.
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+
+/** Did the page send this slot at all? `in`, not `!== undefined`: JSON cannot carry undefined, so
+ *  an absent key is the only spelling of "unset" — which leaves null free to be a real value. */
+const sentSlot = (body: unknown, k: string): boolean =>
+  !!body && typeof body === 'object' && k in body
+
+/** An untrusted request body read as a wire pair, for the two routes that take one. Only slots the
+ *  page actually sent survive, so an untouched one still falls through to the bulb's own block
+ *  (TB-State.md Invariant 3), and an empty result is how both routes ask "did it carry anything?". */
+const readPair = (body: RuntimeStatePair): RuntimeStatePair => {
+  const pair: RuntimeStatePair = {}
+  if (Array.isArray(body.data)) pair.data = body.data
+  if (sentSlot(body, 'insight')) pair.insight = body.insight
+  return pair
+}
+
+/** Request-body cap for `/__tb-encode`, checked before deflating. Generous next to the ~60KB
+ *  encoded ceiling (JSON deflates roughly 5-20x), so it only ever rejects payloads that could
+ *  never have fit — it exists to bound the server's work, not to set the sharing limit. */
+const MAX_ENCODE_BODY = 8 * 1024 * 1024
 
 /** Counts server instances in this process, so two started in the same millisecond still differ. */
 let serverInstances = 0
@@ -100,9 +120,10 @@ export interface ServerOptions {
    *  the TSX source, not transpiled output. A closure over the latest compile, like
    *  `getServerExports`, so hot reload stays fresh. */
   getBulbBlocks?: () => { infer: string; insight: string; code: string; config: string; data: string } | undefined
-  /** "Save to bulb" (TB-Inference.md): write a decoded inference run into the bulb file's
-   *  data.txt/insight.json blocks. Owned by the web runner (it knows the file and the watcher). */
-  saveInferenceResult?: (data: string[], insightJson: string) => Promise<void>
+  /** "Save to bulb" (TB-Inference.md): write a run into the bulb file's data.txt/insight.json
+   *  blocks. Owned by the web runner (it knows the file and the watcher). Either slot may be
+   *  absent, and an absent one leaves its block untouched (TB-State.md Invariant 3). */
+  saveInferenceResult?: (data?: string[], insightJson?: string) => Promise<void>
   /** Local package override: serve `<name>`'s bytes read-only from `serveDir`. */
   localOverride?: { name: string; serveDir: string }
   /** Whether the bulb was launched with `--trust`. When false (the default),
@@ -622,8 +643,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         if (result.fixesApplied.length) {
           console.warn('[tb.infer] sanitized output, fixes applied:', result.fixesApplied.join(', '))
         }
-        const final = { insight: result.parsed, insightJson: result.json, data: chunks }
-        yield { kind: 'complete', ...final, fixesApplied: result.fixesApplied, hash: encodeToHash(final) }
+        // No `hash` and no `insightJson`: the page sets its runtime state through the same writers
+        // tb.setData/tb.setInsight use, which encode the fragment themselves via /__tb-encode. One
+        // encoder call site, and no envelope field the shim has stopped reading.
+        yield { kind: 'complete', insight: result.parsed, data: chunks, fixesApplied: result.fixesApplied }
       })()
       return streamNdjson(c, source)
     } catch (e) {
@@ -631,27 +654,22 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   })
 
-  /** The `{hash}` body shared by /__infer-decode and /__infer-save: the page's `#tb=` fragment,
-   *  decoded or undefined. */
-  const decodeHashBody = async (c: Context): Promise<ReturnType<typeof decodeFromHash>> => {
-    const { hash } = await c.req.json<{ hash?: string }>().catch(() => ({}) as { hash?: string })
-    return typeof hash === 'string' ? decodeFromHash(hash) : undefined
-  }
-
-  // "Save to bulb" — promote the current #tb= run to source (TB-Inference.md). The fragment is the
-  // carrier: the modal POSTs the page's hash, we decode it and rewrite the file's data/insight
-  // blocks. Trust-gated (it writes the bulb file); the explicit modal gesture is the one sanctioned
-  // writer — tb.infer() itself never touches the file (Invariant 2).
+  // "Save to bulb" — promote the page's runtime state to source (TB-Inference.md). The payload
+  // rides the request body, never the `#tb=` fragment: filing has no size ceiling, only the URL
+  // does, and the modal is already holding what a fragment round trip would recover
+  // (TB-State.md, "The ceiling bounds sharing, not saving"). Trust-gated (it writes the bulb file);
+  // the explicit modal gesture is the one sanctioned writer — tb.infer() and tb.setData() never
+  // touch the file (Invariant 2).
   app.post('/__infer-save', async (c) => {
     try {
       if (!saveInferenceResult) {
         return c.json({ message: 'Save is not available for this server.', code: 'unknown', retryable: false }, 400)
       }
-      const result = await decodeHashBody(c)
-      if (!result) {
-        return c.json({ message: 'No decodable #tb= fragment to save.', code: 'unknown', retryable: false }, 400)
+      const pair = readPair(await c.req.json<RuntimeStatePair>().catch(() => ({}) as RuntimeStatePair))
+      if (!Object.keys(pair).length) {
+        return c.json({ message: 'Nothing to save — this page holds no runtime state.', code: 'unknown', retryable: false }, 400)
       }
-      await saveInferenceResult(result.data, result.insightJson)
+      await saveInferenceResult(pair.data, sentSlot(pair, 'insight') ? JSON.stringify(pair.insight, null, 2) : undefined)
       return c.json({ ok: true })
     } catch (e) {
       return c.json(toStreamError(e), 500)
@@ -674,14 +692,33 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     return c.json({ provider: resolved.protocol, model: resolved.model, inference, data })
   })
 
-  // #tb= fragment decode for the shim's boot restore (TB-Inference.md "Sharing a local run").
-  // The fragment never rides an HTTP request on its own (its privacy property), so the page must
-  // send it here — the server has fflate, the page doesn't. Pure function of caller-supplied
-  // data, no capability, so NOT trust-gated: viewing a shared run is page data, and a Restricted
-  // bulb must be able to consume one (parity with .com published pages). CSRF-guarded like /__log.
-  app.use('/__infer-decode', csrfGuard)
-  app.post('/__infer-decode', async (c) => {
-    return c.json((await decodeHashBody(c)) ?? { error: 'invalid fragment' })
+  // #tb= codec for the page (TB-State.md). The page carries no fflate on purpose, so both legs
+  // round-trip to the server: `decode` for the shim's boot restore (TB-Inference.md "Sharing a
+  // local run"), `encode` for tb.setData/tb.setInsight and tb.infer's completion.
+  // Pure functions of caller-supplied data, no capability, so NOT trust-gated: viewing or minting
+  // a share link is page data, and a Restricted bulb must do both (parity with .com published
+  // pages). CSRF-guarded like /__log.
+  app.use('/__tb-decode', csrfGuard)
+  app.post('/__tb-decode', async (c) => {
+    const { hash } = await c.req.json<{ hash?: string }>().catch(() => ({}) as { hash?: string })
+    const result = typeof hash === 'string' ? decodeFromHash(hash) : undefined
+    return c.json(result ?? { error: 'invalid fragment' })
+  })
+
+  app.use('/__tb-encode', csrfGuard)
+  app.post('/__tb-encode', async (c) => {
+    // Body cap before we buffer or deflate anything: the page can hand over an arbitrarily large
+    // payload, and above this it could never fit the fragment anyway. Content-Length first so an
+    // oversized body is refused instead of read into memory and then measured; the length check
+    // after it covers a chunked body that declared none. Over-cap reports the same empty hash the
+    // ceiling reports, so the shim has one "not shareable" outcome, not two.
+    const declared = Number(c.req.header('content-length'))
+    if (Number.isFinite(declared) && declared > MAX_ENCODE_BODY) return c.json({ hash: '' })
+    const raw = await c.req.text().catch(() => '')
+    if (raw.length > MAX_ENCODE_BODY) return c.json({ hash: '' })
+    let body: RuntimeStatePair
+    try { body = JSON.parse(raw) as RuntimeStatePair } catch { return c.json({ hash: '' }) }
+    return c.json({ hash: encodeToHash(readPair(body)) })
   })
 
   // The lazy-loaded inference modal (TB-Inference.md): fetched by the shim on the first

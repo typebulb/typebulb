@@ -35,21 +35,54 @@ export const typebulbShim = `
   // Read from window each time so updates are visible
   const getData = () => window.__TB_DATA__ || [];
 
+  // tb.setData / tb.setInsight (TB-State.md), on the engine both hosts share. The globals and the
+  // transport are all this host owns: encoding round-trips to the server because the page carries
+  // no fflate on purpose, and the fragment write is the address bar the setters exist to fill.
+  // Resolves the shareable URL, or undefined when there is no address bar to put it in (inline) or
+  // the state is too large to encode — the one failure an author must handle.
+  window.__tbState.init({
+    applyData: (chunks) => { window.__TB_DATA__ = chunks; },
+    applyInsight: (json) => { window.__TB_INSIGHT__ = json; },
+    send: (pair) => {
+      if (isFramed || location.protocol.indexOf('http') !== 0) return Promise.resolve(undefined);
+      return fetch('/__tb-encode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pair)
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          const hash = res && res.hash ? res.hash : '';
+          // Always rewrite, including to nothing: a state too large to encode must CLEAR any
+          // earlier fragment, or the address bar keeps addressing a run the page is no longer
+          // showing — and a reload would silently revert to it.
+          history.replaceState(null, '', location.pathname + location.search + hash);
+          return hash ? location.href : undefined;
+        });
+    }
+  });
+
   // #tb= fragment restore (TB-Inference.md "Sharing a local run"): a refreshed or pasted share
   // URL re-injects its run before the bulb code reads tb.insight()/tb.data() — the template's
   // module script awaits __tbBoot, so the async decode still lands ahead of synchronous startup
   // reads. Decode failure falls through to the file's own blocks with a console note.
   if (!isFramed && location.protocol.indexOf('http') === 0 && location.hash.indexOf('#tb=') === 0) {
-    globalThis.__tbBoot = fetch('/__infer-decode', {
+    globalThis.__tbBoot = fetch('/__tb-decode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hash: location.hash })
     })
       .then((r) => r.json())
       .then((res) => {
-        if (res && Array.isArray(res.data)) {
-          window.__TB_INSIGHT__ = res.insightJson;
-          window.__TB_DATA__ = res.data;
+        // Either slot alone is a valid share, so restore what arrived and leave the rest on the
+        // file's blocks. Through seed(), which both applies the globals and records the slots as
+        // SET — so a later tb.setInsight() carries this data along rather than dropping it back to
+        // the file's block. The parent does the same job for .com (TB-State.md).
+        if (res && (Array.isArray(res.data) || typeof res.insightJson === 'string')) {
+          const seed = {};
+          if (Array.isArray(res.data)) seed.data = res.data;
+          if (typeof res.insightJson === 'string') seed.insight = res.insight;
+          window.__tbState.seed(seed);
         } else {
           console.warn('[typebulb] The #tb= fragment could not be decoded (incomplete or corrupted link) — using the bulb file state.');
         }
@@ -234,13 +267,21 @@ export const typebulbShim = `
           // The transport reader is the shim's — one NDJSON decoder per page, never two
           // drifting copies (TB-Streaming.md envelope: payload-side, so drift is not tolerable).
           readStream,
+          // What a prior run set, for the modal's Save and its gate. Read through a getter so a
+          // reopened modal sees the latest, not a snapshot from when the shim loaded it.
+          runtimeState: () => window.__tbState.pair(),
           onComplete: (final) => {
-            // Runtime state only, never the file (TB-Inference.md Invariant 2).
-            window.__TB_INSIGHT__ = final.insightJson;
-            if (final.data && final.data.length) window.__TB_DATA__ = final.data;
-            if (final.hash) history.replaceState(null, '', location.pathname + location.search + final.hash);
-            inferRunning = false;
-            settle(resolve, final.insight);
+            // Runtime state only, never the file (TB-Inference.md Invariant 2) — through the same
+            // writers tb.setData/tb.setInsight use, so one path owns the slot and the fragment.
+            // Both land in this tick, so they coalesce into a single encode.
+            if (final.data && final.data.length) window.__tbState.setData(final.data);
+            // Settle only once the fragment is written, so awaiting tb.infer() leaves the address
+            // bar holding the run — the guarantee the setters already give, and worth a localhost
+            // round trip at the end of a call that just took seconds.
+            void window.__tbState.setInsight(final.insight).then(() => {
+              inferRunning = false;
+              settle(resolve, final.insight);
+            });
           },
           onError: (err) => {
             inferRunning = false;
@@ -297,6 +338,10 @@ export const typebulbShim = `
     data: (index) => getData()[index],
     json: (index) => parseJson(getData()[index]),
     insight: () => window.__TB_INSIGHT__ ? parseJson(window.__TB_INSIGHT__) : undefined,
+
+    // Runtime-state writers (TB-State.md) — duals of the two accessors above
+    setData: (chunks) => window.__tbState.setData(chunks),
+    setInsight: (value) => window.__tbState.setInsight(value),
 
     // Inference (TB-Inference.md) — modal-hosted one-shot LLM call over the bulb's own blocks
     infer,

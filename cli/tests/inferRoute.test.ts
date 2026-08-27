@@ -16,13 +16,28 @@ import { pathToFileURL } from 'url'
 
 let server: ServerInstance
 let blocks: { infer: string; insight: string; code: string; config: string; data: string } | null = null
-let saved: { data: string[]; insightJson: string } | null = null
+let saved: { data?: string[]; insightJson?: string } | null = null
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`
 const post = (p: string, body: unknown) => fetch(url(p), {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
 
 const ENV_KEYS = ['TB_AI_PROVIDER', 'TB_AI_MODEL', 'ANTHROPIC_API_KEY']
+
+/** Deterministic high-entropy filler. Repetitive text deflates to almost nothing, so a size
+ *  assertion written with `'x'.repeat(n)` proves the opposite of what it looks like. xorshift32,
+ *  not an LCG: `s * 1103515245` leaves exact-integer range and the sequence degenerates into runs
+ *  that deflate almost as well as the repeat it replaced. Bitwise ops stay exact in 32 bits. */
+const noise = (n: number) => {
+  let s = 123456789
+  const out: string[] = []
+  for (let i = 0; i < n; i++) {
+    s ^= s << 13; s ^= s >>> 17; s ^= s << 5
+    out.push(String.fromCharCode(33 + (s >>> 0) % 90))
+  }
+  return out.join('')
+}
+
 const savedEnv: Record<string, string | undefined> = {}
 
 beforeAll(async () => {
@@ -133,30 +148,69 @@ describe('/__infer-ui.js', () => {
   })
 })
 
-describe('/__infer-decode', () => {
+describe('/__tb-decode', () => {
   it('round-trips a fragment the encoder produced', async () => {
     const hash = encodeToHash({ insight: { words: 4 }, insightJson: '{"words": 4}', data: ['alpha beta'] })
-    const res = await (await post('/__infer-decode', { hash })).json()
+    const res = await (await post('/__tb-decode', { hash })).json()
     expect(res.insight).toEqual({ words: 4 })
     expect(res.data).toEqual(['alpha beta'])
   })
 
   it('answers { error } for garbage and missing fragments', async () => {
-    expect((await (await post('/__infer-decode', { hash: '#tb=1:corrupt!!' })).json()).error).toBeTruthy()
-    expect((await (await post('/__infer-decode', {})).json()).error).toBeTruthy()
+    expect((await (await post('/__tb-decode', { hash: '#tb=1:corrupt!!' })).json()).error).toBeTruthy()
+    expect((await (await post('/__tb-decode', {})).json()).error).toBeTruthy()
+  })
+})
+
+describe('/__tb-encode', () => {
+  it('round-trips a data-only payload through decode', async () => {
+    const { hash } = await (await post('/__tb-encode', { data: ['alpha'] })).json()
+    expect(hash.startsWith('#tb=1:')).toBe(true)
+    const back = await (await post('/__tb-decode', { hash })).json()
+    expect(back.data).toEqual(['alpha'])
+    // The slot nobody set stays absent, so the page falls through to insight.json.
+    expect(back.insight).toBeUndefined()
+  })
+
+  it('carries the insight slot when the key is present, null included', async () => {
+    const absent = await (await post('/__tb-encode', { data: ['x'] })).json()
+    expect((await (await post('/__tb-decode', { hash: absent.hash })).json()).insight).toBeUndefined()
+    const set = await (await post('/__tb-encode', { data: ['x'], insight: { a: 1 } })).json()
+    expect((await (await post('/__tb-decode', { hash: set.hash })).json()).insight).toEqual({ a: 1 })
+    // Presence is the key, not the value — so null survives as a value rather than reading as unset.
+    const nul = await (await post('/__tb-encode', { data: ['x'], insight: null })).json()
+    expect((await (await post('/__tb-decode', { hash: nul.hash })).json()).insight).toBeNull()
+  })
+
+  it('answers an empty hash for empty state and for a payload past the ceiling', async () => {
+    expect((await (await post('/__tb-encode', {})).json()).hash).toBe('')
+    expect((await (await post('/__tb-encode', { data: [noise(100_000)] })).json()).hash).toBe('')
   })
 })
 
 describe('/__infer-save', () => {
-  it('decodes the fragment and hands data + insightJson to the save callback', async () => {
-    const hash = encodeToHash({ insight: { a: 1 }, insightJson: '{"a": 1}', data: ['chunk'] })
-    const r = await post('/__infer-save', { hash })
+  it('hands the posted payload straight to the save callback', async () => {
+    const r = await post('/__infer-save', { data: ['chunk'], insight: { a: 1 } })
     expect(r.status).toBe(200)
     expect(saved).toEqual({ data: ['chunk'], insightJson: '{\n  "a": 1\n}' })
   })
 
-  it('400s on an undecodable fragment without calling save', async () => {
-    const r = await post('/__infer-save', { hash: '#tb=1:junk' })
+  it('saves a run far past the encoding ceiling — filing has no URL limit', async () => {
+    const huge = noise(100_000)
+    expect(encodeToHash({ data: [huge] })).toBe('')   // unshareable...
+    const r = await post('/__infer-save', { data: [huge] })
+    expect(r.status).toBe(200)                        // ...but still savable
+    expect(saved?.data).toEqual([huge])
+  })
+
+  it('leaves the insight block alone when only data was set', async () => {
+    const r = await post('/__infer-save', { data: ['only-data'] })
+    expect(r.status).toBe(200)
+    expect(saved).toEqual({ data: ['only-data'], insightJson: undefined })
+  })
+
+  it('400s on an empty payload without calling save', async () => {
+    const r = await post('/__infer-save', {})
     expect(r.status).toBe(400)
     expect(saved).toBeNull()
   })

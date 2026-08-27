@@ -147,8 +147,10 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       // Under watch, this write triggers the recompile+reload that re-serves the new defaults.
       saveInferenceResult: async (data, insightJson) => {
         let text = await fs.readFile(bulbPath, 'utf-8')
-        text = replaceBulbBlock(text, 'data', data.join(CHUNK_SEPARATOR))
-        text = replaceBulbBlock(text, 'insight', insightJson)
+        // An absent slot leaves its block alone — a data-only run must not blank insight.json
+        // (TB-State.md Invariant 3).
+        if (data !== undefined) text = replaceBulbBlock(text, 'data', data.join(CHUNK_SEPARATOR))
+        if (insightJson !== undefined) text = replaceBulbBlock(text, 'insight', insightJson)
         await fs.writeFile(bulbPath, text)
       },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,

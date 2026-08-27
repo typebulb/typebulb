@@ -192,6 +192,7 @@ everywhere.
 |-----|--------------|:-----------:|
 | `tb.data(n)` / `tb.json(n)` | Read data chunk `n` from the `data.txt` block — raw string, or parsed JSON | |
 | `tb.insight()` | Read the `insight.json` block as JSON | |
+| `tb.setData(chunks)` / `tb.setInsight(v)` | Replace this run's data / insight and get back a link carrying it; the file is untouched | |
 | `tb.theme` | Get/set the light/dark override; `undefined` follows the OS | |
 | `tb.mode` | Runtime mode — `'local'` (CLI) or `'inline'` (sandboxed iframe); `'ide'`/`'published'` on typebulb.com | |
 | `tb.proxy(url)` | Rewrite a CDN URL to load through the host origin (Web Worker / WASM) | |
@@ -506,6 +507,21 @@ the whole file; `put` replaces it blind, knowing neither its size, its format, n
 - **Get**: `typebulb get <file> <kind>` prints that block to stdout (`kind` is `code`, `css`, `html`, `data`, `infer`, `insight`, `config`, or `notes`), so `… | jq` works. No content — absent or empty — exits **2**, apart from real errors (exit 1), so a probe can tell "nothing there yet" from a bad path.
 - **Put**: `typebulb put <file> <kind>=<source>` writes a file's content into that block; `<kind>=-` reads stdin. Several pairs in one command are one atomic write. It replaces the block, appends it when absent, writes nothing when the content is identical, and **removes** the block when the source is empty — the only way to clear one.
 - Only the named block changes; every other block and the frontmatter survive byte-for-byte. A running bulb hot-reloads on a `put`.
+
+## Runtime data (`tb.setData`)
+
+A bulb that computes its own results (a scrape, a batch score, a simulation, a tournament) can swap
+them in as the data it's running on, and get back a link that carries them:
+
+```ts
+const url = await tb.setData(JSON.stringify(results))
+if (url) tb.copy(url)
+```
+
+- `tb.data()` / `tb.json()` return the new chunks for the rest of the page, and the URL's `#tb=` fragment holds them, so reloading or opening that link restores the run. `tb.setInsight(value)` is the same for `tb.insight()`.
+- **Runtime only, never the file.** A reload without the fragment is back on the bulb's own `data.txt`. Two gestures promote a run to source, and no `tb.*` call does: `typebulb put` from the terminal, or `tb.infer()` to raise the modal and press **Save to bulb**, which files whatever the page holds — an LLM call is not needed and the size ceiling does not apply (needs `--trust`).
+- **The link has a size ceiling; the file doesn't.** Around 60KB encoded, so pass what a share needs rather than everything. `undefined` back means it didn't fit (also what an inline bulb gets — no address bar).
+- **Set only what you changed.** An unset slot stays out of the link and falls through to the bulb's own block, so a data-only run doesn't drag a copy of `insight.json` along. Both in one tick is one encode and one link: `tb.setData(d); const url = await tb.setInsight(i)`.
 
 ## Charts
 
