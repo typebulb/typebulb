@@ -38,8 +38,8 @@ export const typebulbShim = `
   // tb.setData / tb.setInsight (TB-State.md), on the engine both hosts share. The globals and the
   // transport are all this host owns: encoding round-trips to the server because the page carries
   // no fflate on purpose, and the fragment write is the address bar the setters exist to fill.
-  // Resolves the shareable URL, or undefined when there is no address bar to put it in (inline) or
-  // the state is too large to encode — the one failure an author must handle.
+  // Resolves once that write has landed, and hands back nothing: the link is then tb.url() like
+  // any other. An inline bulb has no address bar, so its swap is page-local and never encodes.
   window.__tbState.init({
     applyData: (chunks) => { window.__TB_DATA__ = chunks; },
     applyInsight: (json) => { window.__TB_INSIGHT__ = json; },
@@ -57,7 +57,6 @@ export const typebulbShim = `
           // earlier fragment, or the address bar keeps addressing a run the page is no longer
           // showing — and a reload would silently revert to it.
           history.replaceState(null, '', location.pathname + location.search + hash);
-          return hash ? location.href : undefined;
         });
     }
   });

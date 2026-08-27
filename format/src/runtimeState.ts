@@ -8,11 +8,13 @@
  *   init({ applyData, applyInsight, send })
  *     applyData(chunks)   -> put the chunks in this host's data global
  *     applyInsight(json)  -> put the serialized insight in this host's insight global
- *     send(pair)          -> hand { data?, insight? } to this host's transport; resolve the
- *                            shareable URL, or undefined when there is none. Must never reject:
- *                            every failure reads to a bulb as "no link".
+ *     send(pair)          -> hand { data?, insight? } to this host's transport; resolve once the
+ *                            write has landed. Must never reject: a transport failure costs the
+ *                            fragment, never the swap.
  *
- *   setData(chunks) / setInsight(value) -> the two tb.* writers, resolving send's URL
+ *   setData(chunks) / setInsight(value) -> the two tb.* writers, resolving once the address bar
+ *                            reflects the write. Neither hands back a link: the fragment is
+ *                            already in the URL, which a bulb reads with tb.url() like any other.
  *   seed(pair)  -> apply and record what a decoded `#tb=` fragment carried, without sending it back
  *   pair()      -> the wire pair, for a host that files it (the CLI modal's Save). Empty when
  *                  nothing has been set, which is also how a host asks whether anything has.
@@ -24,10 +26,9 @@
  * which stays exact for a null insight and needs no companion flag.
  *
  * Coalescing keys on whether the in-flight write has read the pair yet, not on whether one is
- * outstanding. Writes landing before that ride it and share its URL, one round trip for the pair;
- * a write landing after it queues one re-send, because the write on the wire carries a state the
- * page has moved past. Answering it with that URL would address a run the page no longer shows,
- * and skipping the re-send would leave the address bar doing so (Invariant 6).
+ * outstanding. Writes landing before that ride it, one round trip for the pair; a write landing
+ * after it queues one re-send, because the write on the wire carries a state the page has moved
+ * past, and skipping the re-send would leave the address bar addressing it (Invariant 6).
  */
 export const runtimeStateEngine = `(function () {
   var W = window;

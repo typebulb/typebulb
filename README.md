@@ -192,13 +192,13 @@ everywhere.
 |-----|--------------|:-----------:|
 | `tb.data(n)` / `tb.json(n)` | Read data chunk `n` from the `data.txt` block — raw string, or parsed JSON | |
 | `tb.insight()` | Read the `insight.json` block as JSON | |
-| `tb.setData(chunks)` / `tb.setInsight(v)` | Replace this run's data / insight and get back a link carrying it; the file is untouched | |
+| `tb.setData(chunks)` / `tb.setInsight(v)` | Replace this run's data / insight; the URL fragment follows, the file is untouched | |
 | `tb.theme` | Get/set the light/dark override; `undefined` follows the OS | |
 | `tb.mode` | Runtime mode — `'local'` (CLI) or `'inline'` (sandboxed iframe); `'ide'`/`'published'` on typebulb.com | |
 | `tb.proxy(url)` | Rewrite a CDN URL to load through the host origin (Web Worker / WASM) | |
 | `tb.dump(...)` | Log values (incl. lazy / device-backed tensors) to the browser console | |
 | `tb.copy(text)` | Copy text to the clipboard | |
-| `tb.url()` | Get the bulb URL (the served localhost URL, locally) | |
+| `tb.url()` | Get the bulb's canonical URL, `#tb=` fragment included (the served localhost URL, locally) | |
 | `tb.models()` | List available AI models (for dynamic model selectors); the `.env` default is flagged (`default: true`); returns `[]` when inline (no host AI) | |
 | `tb.aiAccess()` | What backs `tb.ai` — `'own' \| 'courtesy' \| 'none'` | |
 | `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
@@ -511,17 +511,18 @@ the whole file; `put` replaces it blind, knowing neither its size, its format, n
 ## Runtime data (`tb.setData`)
 
 A bulb that computes its own results (a scrape, a batch score, a simulation, a tournament) can swap
-them in as the data it's running on, and get back a link that carries them:
+them in as the data it's running on, and the page URL then carries them:
 
 ```ts
-const url = await tb.setData(JSON.stringify(results))
-if (url) tb.copy(url)
+await tb.setData(JSON.stringify(results))
+tb.copy(await tb.url())
 ```
 
 - `tb.data()` / `tb.json()` return the new chunks for the rest of the page, and the URL's `#tb=` fragment holds them, so reloading or opening that link restores the run. `tb.setInsight(value)` is the same for `tb.insight()`.
+- **The write is the URL update.** Awaiting a setter means the address bar holds the run. Nothing comes back: `tb.url()` is how you read the link. On typebulb.com the fragment lands in fullscreen, exactly as `tb.infer()` does; an inline bulb has no URL of its own, so there the swap happens and nothing else does.
 - **Runtime only, never the file.** A reload without the fragment is back on the bulb's own `data.txt`. Two gestures promote a run to source, and no `tb.*` call does: `typebulb put` from the terminal, or `tb.infer()` to raise the modal and press **Save to bulb**, which files whatever the page holds — an LLM call is not needed and the size ceiling does not apply (needs `--trust`).
-- **The link has a size ceiling; the file doesn't.** Around 60KB encoded, so pass what a share needs rather than everything. `undefined` back means it didn't fit (also what an inline bulb gets — no address bar).
-- **Set only what you changed.** An unset slot stays out of the link and falls through to the bulb's own block, so a data-only run doesn't drag a copy of `insight.json` along. Both in one tick is one encode and one link: `tb.setData(d); const url = await tb.setInsight(i)`.
+- **The link has a size ceiling; the file doesn't.** Around 60KB encoded, so pass what a share needs rather than everything. Over it the run still swaps, but the fragment clears and there is no link.
+- **Set only what you changed.** An unset slot stays out of the link and falls through to the bulb's own block, so a data-only run doesn't drag a copy of `insight.json` along. Both in one tick is one encode: `tb.setData(d); await tb.setInsight(i)`.
 
 ## Charts
 

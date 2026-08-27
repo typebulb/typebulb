@@ -37,29 +37,44 @@ const noise = (n: number) => {
   return out.join("")
 }
 
-const read = () => ({ data: tb.data(0), insight: tb.insight(), hash: location.hash })
+// The setters hand back nothing, so "one encode or two" is observed on the wire instead.
+let encodes = 0
+const origFetch = window.fetch
+window.fetch = ((...args: any[]) => {
+  if (String(args[0]).indexOf("/__tb-encode") >= 0) encodes++
+  return origFetch.apply(window, args as any)
+}) as typeof fetch
+
+const read = async () => ({
+  data: tb.data(0), insight: tb.insight(), hash: location.hash, url: await tb.url(), encodes
+})
 document.getElementById("out")!.textContent = tb.data(0)
 
 tb.onMessage(async (m: any) => {
-  if (m === "read") return read()
+  if (m === "read") return await read()
   if (m === "set") {
-    const url = await tb.setData("promoted")
-    return { url: url ?? null, ...read() }
+    encodes = 0
+    await tb.setData("promoted")
+    return await read()
   }
   if (m === "both") {
-    const [u1, u2] = await Promise.all([tb.setData("paired"), tb.setInsight({ from: "runtime" })])
-    return { same: u1 === u2, ...read() }
+    encodes = 0
+    await Promise.all([tb.setData("paired"), tb.setInsight({ from: "runtime" })])
+    return await read()
   }
   if (m === "midflight") {
     // The second write lands while the first encode is already on the wire, so it cannot ride it.
+    encodes = 0
     const first = tb.setData("stale")
     await new Promise(r => setTimeout(r, 0))
-    const second = await tb.setInsight({ from: "late" })
-    return { first: (await first) ?? null, second: second ?? null, ...read() }
+    await tb.setInsight({ from: "late" })
+    await first
+    return await read()
   }
   if (m === "big") {
-    const url = await tb.setData(noise(100000))
-    return { url: url ?? null, len: (tb.data(0) as string).length, hash: location.hash }
+    encodes = 0
+    await tb.setData(noise(100000))
+    return { len: (tb.data(0) as string).length, ...(await read()) }
   }
 })
 \`\`\`
@@ -117,11 +132,11 @@ afterAll(async () => {
 })
 
 describe('tb.setData', () => {
-  it('swaps the run, hands back a link, and leaves the untouched slot on the file', async () => {
+  it('swaps the run, writes the address bar, and leaves the untouched slot on the file', async () => {
     const r = await send('set')
     expect(r.data).toBe('promoted')                 // globals moved before the await resolved
-    expect(r.url).toContain('#tb=1:')
-    expect(r.hash.startsWith('#tb=1:')).toBe(true)  // and the address bar holds the run
+    expect(r.hash.startsWith('#tb=1:')).toBe(true)  // and the address bar holds the run...
+    expect(r.url).toContain(r.hash)                 // ...which is how a bulb reads the link back
     // Nobody set insight, so it stays the file's block rather than being carried along empty.
     expect(r.insight).toEqual({ source: 'file' })
   })
@@ -138,9 +153,8 @@ describe('tb.setData', () => {
 
   it('coalesces two setters in one tick into a single encode', async () => {
     const r = await send('both')
-    // Two encodes would have produced two different fragments (data-only, then the pair), so one
-    // shared URL is the observable proof that the pair was deflated and written once.
-    expect(r.same).toBe(true)
+    // Two encodes would have written two fragments: data-only, then the pair.
+    expect(r.encodes).toBe(1)
     expect(r.data).toBe('paired')
     expect(r.insight).toEqual({ from: 'runtime' })
     expect(r.hash.startsWith('#tb=1:')).toBe(true)
@@ -149,9 +163,9 @@ describe('tb.setData', () => {
   it('clears the fragment when the new state is too large to carry', async () => {
     await send('set')                                // a fragment is present...
     const r = await send('big')
-    expect(r.url).toBeNull()                         // ...the oversized set reports no link...
-    expect(r.len).toBe(100000)                       // ...but the run still swapped...
+    expect(r.len).toBe(100000)                       // ...the oversized set still swaps the run...
     expect(r.hash).toBe('')                          // ...and the stale fragment is gone.
+    expect(r.url).not.toContain('#tb=')              // Nothing left to share, and nothing claiming to be.
   })
 
   it('re-encodes a write that lands after the request is already on the wire', async () => {
@@ -159,10 +173,14 @@ describe('tb.setData', () => {
     // write after that cannot ride the request carrying it, so it has to queue its own: otherwise
     // the page moves and the address bar keeps addressing the run before it (Invariant 6).
     const r = await send('midflight')
+    expect(r.encodes).toBe(2)
     expect(r.data).toBe('stale')
     expect(r.insight).toEqual({ from: 'late' })
-    expect(r.second).not.toBe(r.first)               // the late write got its own link...
-    expect(r.second).toContain('#tb=1:')
-    expect(r.hash).toBe(new URL(r.second).hash)      // ...and it is the one in the address bar.
+    // The second encode is the one the address bar kept: reloading it restores the pair, not the
+    // data-only state that was already on the wire when the late write landed.
+    await tab.goto(r.url)
+    const after = await send('read')
+    expect(after.data).toBe('stale')
+    expect(after.insight).toEqual({ from: 'late' })
   })
 })

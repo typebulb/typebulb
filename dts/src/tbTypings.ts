@@ -38,27 +38,28 @@ const insight = `
 // Runtime-state writers — duals of tb.data()/tb.json() and tb.insight() (TB-State.md).
 const runtimeStateWriters = `
   /**
-   * Replace the data this run is working on, and get back a link that carries it.
+   * Replace the data this run is working on.
    *
    * Updates what \`tb.data()\` / \`tb.json()\` return for the rest of this page, and writes the
-   * result into the URL fragment so the address bar addresses this run. The bulb's source
-   * \`data.txt\` is never touched: a reload without the fragment goes back to the file.
+   * result into the URL fragment, so the address bar addresses this run and \`tb.url()\` carries
+   * it. The bulb's source \`data.txt\` is never touched: a reload without the fragment goes back
+   * to the file.
    *
    * @param chunks - The new data chunks (a bare string is treated as one chunk)
-   * @returns The shareable URL, or undefined when there is no address bar (inline bulbs) or the
-   *   data is too large to fit a URL. Pass only what a share needs, not necessarily everything.
+   * @returns Resolves once the address bar reflects the write. Data too large to fit a URL
+   *   (~60KB encoded) still swaps, but carries no fragment: pass what a share needs, not
+   *   necessarily everything.
    */
-  setData(chunks: string | string[]): Promise<string | undefined>;
+  setData(chunks: string | string[]): Promise<void>;
   /**
-   * Replace the insight this run is working on, and get back a link that carries it.
+   * Replace the insight this run is working on.
    *
    * The \`tb.insight()\` counterpart of \`setData\`, with the same fragment behavior and the same
    * rule: runtime only, never the bulb's source \`insight.json\`.
    *
    * @param value - Any JSON-serializable value
-   * @returns The shareable URL, or undefined (see \`setData\`)
    */
-  setInsight(value: unknown): Promise<string | undefined>;`
+  setInsight(value: unknown): Promise<void>;`
 
 // One options shape, reused by tb.ai() and tb.ai.stream().
 const aiOptions = `options: {
@@ -258,9 +259,11 @@ const clientOnlyMembers = `
   /**
    * Get the canonical URL of this bulb.
    *
-   * Returns the parent typebulb.com URL (including path, query, and \`#tb=\` fragment),
-   * resolving correctly from inside the cross-origin sandbox iframe.
-   * Use this instead of \`location.href\` or \`document.referrer\`.
+   * Returns the parent typebulb.com URL (including query and \`#tb=\` fragment), resolving
+   * correctly from inside the cross-origin sandbox iframe. That is the published \`/full\` page
+   * even while authoring in the IDE, because it is the link someone you send it to can open.
+   * Locally it is the served localhost URL. Use this instead of \`location.href\` or
+   * \`document.referrer\`.
    *
    * @returns The full canonical URL
    */
