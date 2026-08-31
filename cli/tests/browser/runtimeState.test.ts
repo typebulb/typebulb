@@ -45,6 +45,16 @@ window.fetch = ((...args: any[]) => {
   return origFetch.apply(window, args as any)
 }) as typeof fetch
 
+/** The modal's root is closed (TB-Inference.md Invariant 1), so nothing outside the page can read
+ *  it. Force it open at the source, before the modal module is ever fetched: this fixture is the
+ *  only vantage point its DOM has. */
+let modalRoot: any = null
+const attachShadow = Element.prototype.attachShadow
+Element.prototype.attachShadow = function (init: any) {
+  modalRoot = attachShadow.call(this, { ...init, mode: "open" })
+  return modalRoot
+}
+
 const read = async () => ({
   data: tb.data(0), insight: tb.insight(), hash: location.hash, url: await tb.url(), encodes
 })
@@ -76,6 +86,22 @@ tb.onMessage(async (m: any) => {
     await tb.setData(noise(100000))
     return { len: (tb.data(0) as string).length, ...(await read()) }
   }
+  if (m === "modal") {
+    void tb.infer()
+    for (let i = 0; i < 200 && !(modalRoot && modalRoot.querySelector(".note")); i++) {
+      await new Promise(r => setTimeout(r, 25))
+    }
+    const root = modalRoot
+    const model = root.querySelector(".model")
+    return {
+      title: root.querySelector("h1").textContent,
+      note: root.querySelector(".note").textContent,
+      buttons: Array.from(root.querySelectorAll("button")).map((b: any) => b.getAttribute("aria-label") || b.textContent),
+      chunks: Array.from(root.querySelectorAll("textarea")).map((t: any) => t.value),
+      readOnly: Array.from(root.querySelectorAll("textarea")).every((t: any) => t.readOnly),
+      model: model ? model.textContent : null,
+    }
+  }
 })
 \`\`\`
 
@@ -100,18 +126,74 @@ from the file
 
 const nodeRequireEnv = () => ({ ...process.env, TYPEBULB_SERVERS_DIR: path.join(home, 'servers') })
 
+/** A second probe, this one WITH an infer.md block, so the modal builds its run half. Only the
+ *  seed is under test: what the page holds beats the file's chunks (TB-Inference.md, "Data seed").
+ *  Nothing runs — /__infer wants a provider, and this server has no --trust either way. */
+const inferBulbSource = `---
+format: typebulb/v1
+name: Infer Seed Probe
+---
+
+**code.tsx**
+
+\`\`\`tsx
+let modalRoot: any = null
+const attachShadow = Element.prototype.attachShadow
+Element.prototype.attachShadow = function (init: any) {
+  modalRoot = attachShadow.call(this, { ...init, mode: "open" })
+  return modalRoot
+}
+
+tb.onMessage(async (m: any) => {
+  if (m === "set") { await tb.setData(["held A", "held B"]); return true }
+  if (m === "modal") {
+    void tb.infer()
+    for (let i = 0; i < 200 && !(modalRoot && modalRoot.querySelector("textarea")); i++) {
+      await new Promise(r => setTimeout(r, 25))
+    }
+    return {
+      title: modalRoot.querySelector("h1").textContent,
+      chunks: Array.from(modalRoot.querySelectorAll("textarea")).map((t: any) => t.value),
+    }
+  }
+})
+\`\`\`
+
+**index.html**
+
+\`\`\`html
+<div id="out">ready</div>
+\`\`\`
+
+**data.txt**
+
+\`\`\`txt
+from the file
+\`\`\`
+
+**infer.md**
+
+\`\`\`md
+Echo the data back.
+\`\`\`
+`
+
 let home: string
 let bulb: string
 let url: string
+let bulb2: string
+let url2: string
 let browser: Browser
 let tab: Page
 const kids: ChildProcess[] = []
 
-const send = async (msg: string) => {
-  const r = await runCli(['send', bulb, msg, '--wait=20000'], { cwd: home, env: nodeRequireEnv() })
+const sendTo = async (file: string, msg: string) => {
+  const r = await runCli(['send', file, msg, '--wait=20000'], { cwd: home, env: nodeRequireEnv() })
   expect(r.code, r.stderr).toBe(0)
   return JSON.parse(r.stdout)
 }
+const send = (msg: string) => sendTo(bulb, msg)
+const send2 = (msg: string) => sendTo(bulb2, msg)
 
 beforeAll(async () => {
   requireDistBuild()
@@ -119,6 +201,9 @@ beforeAll(async () => {
   bulb = path.join(home, 'runtime-state-probe.bulb.md')
   fs.writeFileSync(bulb, bulbSource)
   url = await launchBulb(bulb, { cwd: home, env: nodeRequireEnv(), track: kids })
+  bulb2 = path.join(home, 'infer-seed-probe.bulb.md')
+  fs.writeFileSync(bulb2, inferBulbSource)
+  url2 = await launchBulb(bulb2, { cwd: home, env: nodeRequireEnv(), track: kids })
   browser = await chromium.launch()
   tab = await browser.newPage()
   await tab.goto(url)
@@ -182,5 +267,63 @@ describe('tb.setData', () => {
     const after = await send('read')
     expect(after.data).toBe('stale')
     expect(after.insight).toEqual({ from: 'late' })
+  })
+})
+
+/**
+ * The Bulb state panel (TB-Inference.md). This probe has no `infer.md` block, so tb.infer() opens
+ * the modal with its run half dropped: locally that modal is also the only door to runtime state,
+ * and a bulb that just writes the slots would otherwise meet a Run button whose one outcome is a
+ * 400. Each case reloads first, so the panel reads a known slot rather than the last test's.
+ */
+describe('the Bulb state panel', () => {
+  it('opens without run affordances on a bulb that cannot infer', async () => {
+    await tab.goto(url)
+    const r = await send('modal')
+    expect(r.title).toBe('Bulb state')
+    expect(r.model).toBe(null)         // the model line names a run that cannot happen
+    expect(r.buttons).not.toContain('Run')
+    expect(r.buttons).toContain('Close')
+    // Nothing has overridden the file, so the readout is the file's own chunk: the panel answers
+    // what tb.data() answers, and it is a readout, not an editor — Save posts the pair.
+    expect(r.chunks).toEqual(['from the file'])
+    expect(r.readOnly).toBe(true)
+    // Nothing set, so nothing to file — and the panel says which layer the page is on instead.
+    expect(r.note).toContain('Nothing set')
+    expect(r.buttons).not.toContain('Save to bulb')
+  })
+
+  it('names what Save would file once a setter has written a slot', async () => {
+    await tab.goto(url)
+    await send('set')
+    const r = await send('modal')
+    expect(r.title).toBe('Bulb state')
+    expect(r.chunks).toEqual(['promoted'])            // the slot now, not the file
+    // Save posts the runtime pair, never a textarea, so the caption is what makes its payload
+    // visible. Only what it writes: insight is unset here, and saying so would name a non-event.
+    expect(r.note).toBe('Save writes data.txt (8 chars)')
+    expect(r.buttons).toEqual(expect.arrayContaining(['Save to bulb', 'Discard run', 'Copy share URL', 'Close']))
+  })
+})
+
+/**
+ * The confirm view's data seed (TB-Inference.md, "Data seed"): the page's own slot beats the
+ * file's chunks, so reopening the modal after a setter shows the chunks the page is actually on.
+ * An earlier draft seeded from source only, and "I set 20k of data and the modal still showed the
+ * file's" is what that cost.
+ */
+describe('the modal seeds from what the page holds', () => {
+  it('falls through to the file chunks while the slot is empty', async () => {
+    await tab.goto(url2)
+    const r = await send2('modal')
+    expect(r.title).toBe('Run AI inference')
+    expect(r.chunks).toEqual(['from the file'])
+  })
+
+  it('shows the runtime chunks once a setter has written them', async () => {
+    await tab.goto(url2)
+    await send2('set')
+    const r = await send2('modal')
+    expect(r.chunks).toEqual(['held A', 'held B'])
   })
 })

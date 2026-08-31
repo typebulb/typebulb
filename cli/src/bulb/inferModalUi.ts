@@ -37,6 +37,7 @@ const CSS = '\\n' +
 '.body { padding: 0 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; }\\n' +
 '.model { color: var(--muted); }\\n' +
 '.model.err { color: var(--err); }\\n' +
+'.note { color: var(--muted); }\\n' +
 'label { font-weight: 600; }\\n' +
 '.tabs { display: flex; gap: 4px; }\\n' +
 '.tab { font: inherit; padding: 4px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: inherit; cursor: pointer; opacity: .6; }\\n' +
@@ -92,7 +93,8 @@ function chunkLabel(chunk, i, titles) {
  * after an error included); onError on each displayed terminal error; onCancel when the user
  * closes before any completion. runtimeState() returns the wire pair for what a prior run actually
  * set — a slot nobody set is absent from it, so an empty pair means nothing was — which is what
- * Save files and what gates these controls.
+ * Save files and what gates these controls. With no infer.md block the same call opens the Bulb
+ * state panel instead: the run half dropped, the state half kept (TB-Inference.md).
  */
 export function runInference(ctx) {
   var host = document.createElement('div');
@@ -150,26 +152,42 @@ export function runInference(ctx) {
     foot.appendChild(cancel);
 
     // Build the whole view once the seed arrives (a localhost roundtrip; the shimmer covers it).
-    // Seeding is explicit ctx.data (an arg / a retry's edits) > the bulb's SOURCE
-    // chunks from the server — never the page's post-run runtime data.
+    // The same reply decides which view it is: no infer.md block, no run half (buildConfirm).
     fetch('/__infer-info').then(function (r) { return r.json(); })
       .catch(function () { return {}; })
       .then(function (info) { buildConfirm(info || {}); });
   }
 
-  function buildConfirm(info) {
-    body.textContent = ''; foot.textContent = ''; areas = [];
-    inferCfg = info.inference || {};
-    if (inferCfg.title) title.textContent = inferCfg.title;
+  function formatCount(n) { return n < 10000 ? String(n) : Math.round(n / 1000) + 'K'; }
 
-    var model = el('div', 'model');
-    var runBtn = el('button', 'run', inferCfg.submitTitle || 'Run');
-    if (info.error) { model.textContent = info.error; model.className = 'model err'; runBtn.disabled = true; }
-    else if (info.model) model.textContent = info.model + ' \\u00b7 ' + info.provider;
-    else model.textContent = 'Model info unavailable';
+  // One line naming what Save would file, in the blocks it writes. Only what it writes: a slot
+  // nobody set is left out rather than reported as untouched, which draws the eye to a non-event.
+  function stateSummary(rt) {
+    var chunks = rt.data || [];
+    var hasInsight = 'insight' in rt;
+    if (!chunks.length && !hasInsight) {
+      return 'Nothing set: this page is showing the bulb\\u2019s own data.txt and insight.json';
+    }
+    if (!chunks.length) return 'Save writes insight.json';
+    var chars = 0;
+    for (var i = 0; i < chunks.length; i++) chars += chunks[i].length;
+    var d = 'data.txt (' + (chunks.length > 1 ? chunks.length + ' chunks, ' : '')
+      + formatCount(chars) + ' chars)';
+    return 'Save writes ' + d + (hasInsight ? ' and insight.json' : '');
+  }
 
+  // The data view: an editor for a run, a read-only readout in the Bulb state panel, where edits
+  // would go nowhere (Save posts the pair, never a textarea) and the tab strip is the best display
+  // of a multi-chunk slot there is.
+  // Seeding is explicit ctx.data (an argument, or a retry's edits) > what the
+  // page currently holds > the bulb's SOURCE chunks from the server. Runtime ahead of source so a
+  // reopen shows the chunks the page is actually on, matching .com; the explicit argument ahead of
+  // both, where .com puts the slot first and so loses tb.infer({ data }) after a prior run. An
+  // emptied chunk does not come back this way (run() drops it) — Discard run is what does.
+  function buildEditor(info, rt, readOnly) {
     var chunks = ctx.data && ctx.data.length ? ctx.data
-      : (info.data && info.data.length ? info.data : ['']);
+      : (rt.data && rt.data.length ? rt.data
+      : (info.data && info.data.length ? info.data : ['']));
     var titles = dataTitles();
     // Multi-chunk: .com's shape — a tab per chunk (label + live char count), one textarea visible.
     var multi = chunks.length > 1;
@@ -177,7 +195,6 @@ export function runInference(ctx) {
     var counts = [];
     var strip = multi ? el('div', 'tabs') : null;
     if (strip) body.appendChild(strip);
-    function formatCount(n) { return n < 10000 ? String(n) : Math.round(n / 1000) + 'K'; }
     function selectTab(i) {
       tabBtns.forEach(function (b, j) { b.className = j === i ? 'tab on' : 'tab'; });
       areas.forEach(function (a, j) { a.style.display = j === i ? '' : 'none'; });
@@ -193,10 +210,11 @@ export function runInference(ctx) {
         tabBtns.push(tab);
         strip.appendChild(tab);
       } else {
-        body.appendChild(el('label', '', titles[0] || 'Data to process'));
+        body.appendChild(el('label', '', titles[0] || (readOnly ? 'data.txt' : 'Data to process')));
       }
       var ta = document.createElement('textarea');
       ta.value = chunk;
+      ta.readOnly = !!readOnly;
       if (!chunk) ta.placeholder = 'Paste data to process (optional)\\u2026';
       ta.addEventListener('input', function () {
         // 2 blank lines IS the chunk separator — collapse pasted 3+ so text can't silently split (.com parity)
@@ -208,16 +226,43 @@ export function runInference(ctx) {
       body.appendChild(ta);
     });
     if (multi) selectTab(0);
-    // The model line reads as a footnote to the action, not a header to the data — under the
-    // textareas, above the buttons.
-    body.appendChild(model);
+  }
+
+  function buildConfirm(info) {
+    body.textContent = ''; foot.textContent = ''; areas = [];
+    var rt = ctx.runtimeState();
+    // No infer.md: nothing here can run, so the modal is the page's state surface and nothing else
+    // (TB-Inference.md). Same actions, minus the run — and the config.inference title stays out of
+    // it, because it names a run that cannot happen.
+    var stateOnly = info.hasInfer === false;
+    inferCfg = stateOnly ? {} : (info.inference || {});
+    if (stateOnly) title.textContent = 'Bulb state';
+    else if (inferCfg.title) title.textContent = inferCfg.title;
+
+    var runBtn = null;
+    if (!stateOnly) {
+      var model = el('div', 'model');
+      runBtn = el('button', 'run', inferCfg.submitTitle || 'Run');
+      if (info.error) { model.textContent = info.error; model.className = 'model err'; runBtn.disabled = true; }
+      else if (info.model) model.textContent = info.model + ' \\u00b7 ' + info.provider;
+      else model.textContent = 'Model info unavailable';
+      buildEditor(info, rt, false);
+      // The model line reads as a footnote to the action, not a header to the data — under the
+      // textareas, above the buttons.
+      body.appendChild(model);
+    }
+    // The panel reads out what tb.data() answers: the slot when a setter filled it, the file's
+    // chunks when none did. Skipped only when there is neither, where the caption says so instead.
+    else if ((rt.data && rt.data.length) || (info.data && info.data.length)) buildEditor(info, rt, true);
+    // What Save would file, beside the button that files it: Save posts the runtime pair and never
+    // the textareas above it. In the state panel this line is the whole of the body.
+    if (stateOnly || Object.keys(rt).length) body.appendChild(el('div', 'note', stateSummary(rt)));
 
     // Actions over a prior run. Save and Discard follow the RUN (runtime state), share follows the
     // FRAGMENT: filing has no size ceiling, only the URL does, so an over-ceiling run that minted no
     // link is still savable (TB-State.md, "The ceiling bounds sharing, not saving").
     // Any key means a slot was set: the pair carries only what someone wrote, so counting keys
     // asks that without restating which slots exist or how an unset one is spelled.
-    var rt = ctx.runtimeState();
     if (Object.keys(rt).length) {
       var grp = el('div', 'leftgrp');
       // Drop the run from the address bar. Both actions below leave the page holding the run it is
@@ -272,6 +317,12 @@ export function runInference(ctx) {
       foot.appendChild(grp);
     }
 
+    if (stateOnly) {
+      var closeBtn = el('button', '', 'Close');
+      closeBtn.addEventListener('click', function () { close('cancel'); });
+      foot.appendChild(closeBtn);
+      return;
+    }
     var cancel = el('button', '', 'Cancel');
     cancel.addEventListener('click', function () { close('cancel'); });
     foot.appendChild(cancel);

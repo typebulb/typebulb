@@ -677,19 +677,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   })
 
   // Modal seed for tb.infer's confirmation view: the resolved .env pair (or the resolver's
-  // message, so a broken .env surfaces before any spend), the bulb's config.inference labels,
-  // and the SOURCE data chunks. Source, not runtime: .com's IDE modal always reseeds from the
-  // Data tab, never from post-run runtime state — the file is the local Data tab, and seeding
-  // from runtime globals made a completed run's filtered chunks silently become the next seed
-  // (an emptied chunk's tab vanished on reopen). Ungated like /__models: everything here is
-  // already served in the bulb page itself, never keys.
+  // message, so a broken .env surfaces before any spend), the bulb's config.inference labels, the
+  // SOURCE data chunks, and whether there is an infer.md block at all. The chunks are the modal's
+  // FALLBACK seed only: it prefers what the page currently holds, as .com's does (TB-Inference.md,
+  // "Data seed"). A false `hasInfer` opens it as the Bulb state panel instead, so a bulb that only
+  // calls tb.setData never meets a Run button whose only outcome is this route's 400. Ungated like
+  // /__models: everything here is already served in the bulb page itself, never keys.
   app.get('/__infer-info', (c) => {
     const blocks = getBulbBlocks?.()
     const inference = parseConfig(blocks?.config ?? '').inference
     const data = splitIntoChunks(blocks?.data ?? '')
+    const hasInfer = !!blocks?.infer.trim()
     const resolved = resolveLocalProvider()
-    if (typeof resolved === 'string') return c.json({ error: resolved, inference, data })
-    return c.json({ provider: resolved.protocol, model: resolved.model, inference, data })
+    if (typeof resolved === 'string') return c.json({ error: resolved, inference, data, hasInfer })
+    return c.json({ provider: resolved.protocol, model: resolved.model, inference, data, hasInfer })
   })
 
   // #tb= codec for the page (TB-State.md). The page carries no fflate on purpose, so both legs

@@ -107,13 +107,24 @@ describe('/__infer-info', () => {
     process.env.TB_AI_MODEL = 'claude-haiku-4-5-20251001'
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const info = await (await fetch(url('/__infer-info'))).json()
-    expect(info).toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', data: [] })
+    expect(info).toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', data: [], hasInfer: false })
   })
 
   it('serves the SOURCE data chunks as the modal seed', async () => {
     blocks = { infer: 'x', insight: '', code: '', config: '', data: 'chunk one\n\n\nchunk two' }
     const info = await (await fetch(url('/__infer-info'))).json()
     expect(info.data).toEqual(['chunk one', 'chunk two'])
+  })
+
+  // What makes the modal open as the Bulb state panel instead of the run view (TB-Inference.md):
+  // without it a bulb that only calls tb.setData meets a Run button whose one outcome is a 400.
+  it('reports whether the bulb has an infer.md block', async () => {
+    blocks = { infer: '', insight: '', code: '', config: '', data: 'x' }
+    expect((await (await fetch(url('/__infer-info'))).json()).hasInfer).toBe(false)
+    blocks = { infer: '  \n ', insight: '', code: '', config: '', data: 'x' }
+    expect((await (await fetch(url('/__infer-info'))).json()).hasInfer).toBe(false)
+    blocks = { infer: 'Echo it back.', insight: '', code: '', config: '', data: 'x' }
+    expect((await (await fetch(url('/__infer-info'))).json()).hasInfer).toBe(true)
   })
 
   it('passes the bulb config.inference labels through', async () => {

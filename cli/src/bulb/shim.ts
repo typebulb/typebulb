@@ -253,8 +253,8 @@ export const typebulbShim = `
     if (inferRunning) return Promise.reject(new Error('Inference already in progress'));
     inferRunning = true;
     // Data to preview: the explicit arg, else undefined — the modal then seeds from the SOURCE
-    // chunks (/__infer-info), the local Data tab, exactly as .com's IDE modal reseeds from the
-    // Data tab rather than post-run runtime state.
+    // chunks the page currently holds, else the SOURCE chunks from /__infer-info — the same
+    // precedence .com's modal seeds by (TB-Inference.md, "Data seed").
     let data = opts.data;
     if (data !== undefined && !Array.isArray(data)) data = [data];
     return new Promise((resolve, reject) => {
