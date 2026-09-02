@@ -5,7 +5,7 @@ import * as path from 'path'
 import * as net from 'net'
 import * as http from 'http'
 import { startServer, type ServerInstance } from '../src/serve/server.js'
-import { bulbDataDir, materializeBatchDir } from '../src/pipeline.js'
+import { bulbDataDir } from '../src/pipeline.js'
 import { installServerTb } from '../src/serve/serverTb.js'
 
 /** Reserve an ephemeral port, then release it for the server to bind. */
@@ -160,8 +160,8 @@ describe('local-only guards', () => {
   })
 })
 
-// TB-FS.md: relative paths resolve against the bulb's data folder (fsBase); containment
-// stays the project (basePath) — `../` reaches siblings, escaping the project is denied.
+// TB-FS.md Containment: paths resolve against the bulb's folder (fsBase) and are fenced there —
+// `../` is denied even inside the project.
 describe('data-folder resolution (fsBase)', () => {
   let dataServer: ServerInstance
   let project: string
@@ -194,50 +194,38 @@ describe('data-folder resolution (fsBase)', () => {
     expect(fs.readFileSync(path.join(project, 'typebulbs', 'foo', 'results.json'), 'utf8')).toBe('{"ok":1}')
   })
 
-  it('reads a ../ sibling — contained by the project, not the data folder', async () => {
+  it('denies a ../ sibling — the fence is the bulb\'s folder, not the project', async () => {
     const resp = await dread('../other/sibling.txt')
-    expect(resp.ok).toBe(true)
-    expect(await resp.text()).toBe('sibling')
+    expect(resp.status).toBe(400)
   })
 
-  it('still denies escaping the project', async () => {
-    const resp = await dread('../'.repeat(8) + 'etc/passwd')
+  const dlist = (p: string) =>
+    fetch(durl('/__fs/list'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
+
+  it('lists a folder\'s immediate children with kind and mtime', async () => {
+    fs.mkdirSync(path.join(project, 'typebulbs', 'foo', 'batches', 'pilot'), { recursive: true })
+    const resp = await dlist('batches')
+    expect(resp.ok).toBe(true)
+    const entries = await resp.json() as Array<{ name: string; dir: boolean; mtime: number }>
+    expect(entries).toEqual([expect.objectContaining({ name: 'pilot', dir: true })])
+    expect(entries[0].mtime).toBeGreaterThan(0)
+  })
+
+  it('400s a missing folder on list, like a missing file on read', async () => {
+    const resp = await dlist('nope')
     expect(resp.status).toBe(400)
   })
 })
 
-// TB-Batch.md Invariant 2: --batch re-roots the bulb's folder to batches/<name>; the bulb stays
-// batch-unaware.
-describe('bulbDataDir (--batch scoping)', () => {
+// TB-FS.md: the bulb's folder is the sibling dir named for the filename stem.
+describe('bulbDataDir', () => {
   it('derives the sibling folder from the filename stem', () => {
     expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'))).toBe(path.resolve('typebulbs', 'probe'))
-  })
-
-  it('scopes to batches/<name> when given a --batch name', () => {
-    expect(bulbDataDir(path.join('typebulbs', 'probe.bulb.md'), 'pilot')).toBe(path.resolve('typebulbs', 'probe', 'batches', 'pilot'))
-  })
-
-  // TB-Batch.md Invariant 3: the folder materializes at boot (discovery), and re-materializing
-  // bumps its mtime (last-invocation ordering) — a results-file rewrite alone wouldn't.
-  it('materializeBatchDir creates the folder eagerly and touches it on re-invocation', async () => {
-    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-batchdir-'))
-    try {
-      const bulb = path.join(project, 'probe.bulb.md')
-      await materializeBatchDir(bulb, 'pilot')
-      const dir = path.join(project, 'probe', 'batches', 'pilot')
-      expect(fs.statSync(dir).isDirectory()).toBe(true)
-      const before = fs.statSync(dir).mtimeMs
-      fs.utimesSync(dir, new Date(before - 60_000), new Date(before - 60_000))   // age it
-      await materializeBatchDir(bulb, 'pilot')
-      expect(fs.statSync(dir).mtimeMs).toBeGreaterThan(before - 60_000)
-    } finally {
-      fs.rmSync(project, { recursive: true, force: true })
-    }
   })
 })
 
 // TB-FS.md "tb.fs in server.ts": the server-side mirror shares the routes' core (tbFs.ts) — same
-// resolution, same containment, same on-write parent creation, same non-UTF-8 read error.
+// resolution, same fence, same on-write parent creation, same non-UTF-8 read error.
 describe('server-side tb.fs (shared core)', () => {
   let project: string
   let bulbDir: string
@@ -245,8 +233,8 @@ describe('server-side tb.fs (shared core)', () => {
 
   beforeAll(() => {
     project = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-servertb-'))
-    bulbDir = path.join(project, 'typebulbs', 'probe', 'batches', 'pilot')   // a --batch-scoped folder, not yet created
-    installServerTb(bulbDir, project)
+    bulbDir = path.join(project, 'typebulbs', 'probe')   // not yet created
+    installServerTb(bulbDir)
   })
 
   afterAll(() => {
@@ -257,6 +245,7 @@ describe('server-side tb.fs (shared core)', () => {
     expect(await tb().fs.write('transcripts/x.md', 'héllo')).toBe(true)
     expect(fs.readFileSync(path.join(bulbDir, 'transcripts', 'x.md'), 'utf8')).toBe('héllo')
     expect(await tb().fs.read('transcripts/x.md')).toBe('héllo')
+    expect((await tb().fs.list('transcripts')).map((e: { name: string; dir: boolean }) => [e.name, e.dir])).toEqual([['x.md', false]])
   })
 
   it('readBytes returns raw bytes; read rejects non-UTF-8 like the browser shim', async () => {
@@ -265,7 +254,7 @@ describe('server-side tb.fs (shared core)', () => {
     await expect(tb().fs.read('blob.bin')).rejects.toThrow(/readBytes/)
   })
 
-  it('denies escaping the project — same containment as the /__fs routes', async () => {
-    await expect(tb().fs.read('../'.repeat(8) + 'etc/passwd')).rejects.toThrow(/traversal/)
+  it('denies leaving the bulb\'s folder — same fence as the /__fs routes', async () => {
+    await expect(tb().fs.read('../sibling.txt')).rejects.toThrow(/traversal/)
   })
 })

@@ -76,11 +76,11 @@ function pageNote(s: BulbServer, pages: number | undefined): string {
 }
 
 /** Print the running-server list (the no-arg form of `logs`/`stop`, and the not-found hint). Shows
- *  each server's live tier, `--batch` scope, and any runtime-version skew so an agent sees all
- *  three at a glance. `counts` (the no-arg listing's live page probe) adds the fourth; the
- *  not-found hint omits it, being about resolution rather than page state. */
+ *  each server's live tier and any runtime-version skew so an agent sees both at a glance.
+ *  `counts` (the no-arg listing's live page probe) adds a third; the not-found hint omits it,
+ *  being about resolution rather than page state. */
 function printServerList(servers: BulbServer[], stream: (line: string) => void, counts?: Array<number | undefined>): void {
-  servers.forEach((s, i) => stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${s.batch ? `  --batch ${s.batch}` : ''}${counts ? pageNote(s, counts[i]) : ''}${versionNote(s.version)}  ${s.file}`))
+  servers.forEach((s, i) => stream(`  ${s.url}  pid ${s.pid}  ${s.trust ? 'trusted' : 'restricted'}${counts ? pageNote(s, counts[i]) : ''}${versionNote(s.version)}  ${s.file}`))
 }
 
 /** No-arg form of `logs`/`stop`: list the running servers (or report none), then a per-command hint. */

@@ -119,7 +119,7 @@ body {
   align-items: center;
 }
 /* THE CENTERING RECIPE for EVERY word-label control on any surface — the status-bar pills and
-   floating overlay pills below, and the launcher row's trust switch + B scope chip. One rule = one
+   floating overlay pills below, and the launcher row's trust switch. One rule = one
    source of vertical alignment; when these drift apart it reads as amateurish, so a new word
    control joins this selector rather than centering itself (don't re-tweak per button — fix it
    here or nowhere). Icon buttons opt back out, keeping flex (see .pill.glyph). Segoe UI's font
@@ -128,7 +128,7 @@ body {
    line box to the glyphs (cap→baseline) so centering centers the letters themselves. It only
    applies to block containers (not flex), hence inline-block + align-content, not inline-flex
    + align-items. Browsers without text-box (Firefox) fall back to plain line-box centering. */
-.pill, .token, .overlay-pill, .trust-toggle, .batch-b {
+.pill, .token, .overlay-pill, .trust-toggle {
   display: inline-block;
   align-content: center;
   text-align: center;
@@ -137,7 +137,7 @@ body {
 /* Chip shape shared by the status-bar pills (interactive and passive) AND the floating overlay
    pills (copy, breakout, code⇄run) — opaque, so they read cleanly over the message text the
    transparent strip lets through. The launcher row's pills take only the recipe above; their
-   shape is the row's (.trust-toggle, .batch-b). */
+   shape is the row's (.trust-toggle). */
 .pill, .token, .overlay-pill {
   height: var(--pill-h);
   padding: 0 .7rem;
@@ -986,11 +986,6 @@ a.server-port:hover { text-decoration: underline; }
    present makes that inset one number — the same "effectively always present" the model menu's
    header padding already hardcodes. (scrollbar-gutter is the stated fix and is ignored here.) */
 .bulb-list { display: grid; grid-template-columns: auto 1fr auto auto auto auto; grid-auto-rows: max-content; column-gap: .6rem; row-gap: .15rem; align-items: center; align-content: start; padding-right: 4px; flex: 1; min-height: 0; overflow-y: scroll; }
-/* The scope column (TB-Batch.md Invariant 7): a seventh track heading the control cluster (before
-   trust — a launch scope is an execution concern, like a trust tier), present only while some row
-   carries a scope (bulbsPill.ts anyScope — rows emit a matching cell, spacer included). The B
-   affordance keeps it one --pill-h square. */
-.bulb-list.has-scope { grid-template-columns: auto 1fr auto auto auto auto auto; }
 /* A stopped bulb's name isn't a link (no running URL), so it stays plain foreground. */
 .server-name.stopped { color: var(--fg); }
 /* Downloaded-bulb rows (TB-Agent-Mirror.md): the user link — the folder/user slug (`samples`) in
@@ -1001,24 +996,6 @@ a.server-port:hover { text-decoration: underline; }
 .server-name.remote:hover { text-decoration: none; }
 .sample-link { color: var(--muted); font-size: .76rem; text-decoration: none; cursor: pointer; flex: none; }
 .sample-link:hover { color: var(--accent); text-decoration: underline; }
-/* The batch affordance (bulbsPill.ts scopeCell, TB-Batch.md Invariant 7): one B glyph per row —
-   the row shows THAT a scope applies, the tooltip and click-menu name it. Dim = batches exist but
-   launch is unscoped; lit (.on) = play launches scoped (newest default) or running scoped.
-   Static (running) keeps the lit look without the hand cursor. */
-/* Square (its one glyph has no text pill's width to earn) and otherwise typography-free: the shared
-   pill box, font and trim, so its B is the same size and sits on the same baseline as the trust
-   switch beside it. Its own font-family was the bug — a monospace cap is a different size from a
-   Segoe cap at one font-size, which reads as two badly-aligned widgets. */
-.batch-b { font-size: var(--pill-font); color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; width: var(--pill-h); height: var(--pill-h); padding: 0; cursor: pointer; }
-.batch-b.on { color: var(--accent); border-color: var(--accent); }
-.batch-b.static { cursor: default; }
-/* The B's menu rides the composer popup register (.at-popup/.at-row/.dlg-catcher — one mini-menu
-   UI across the mirror). Only the positioning is local: fixed coords (inline style, measured from
-   the B at open) so the scrolling list can't clip it, sized to its content instead of the
-   composer's full-width anchor. */
-.at-popup.batch-pop { position: fixed; left: auto; right: auto; bottom: auto; width: max-content; min-width: 7rem; margin-inline: 0; }
-/* 'unscoped' is the escape hatch, not a batch — a divider + muted italic set it apart from the list. */
-.batch-pop .at-row.unscoped { color: var(--muted); font-style: italic; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: .15rem; padding-top: .4rem; }
 /* A remote pull's visible failure (bulbsPill.ts pullErrors) — the sample-link register, error-tinted. */
 .pull-error { color: var(--err); font-size: .76rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The remote fold (bulbsPill.ts groupRow / fold-row): the header and the remote rows within share

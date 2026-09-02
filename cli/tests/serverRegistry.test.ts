@@ -422,14 +422,12 @@ describe('bulbServerCommand — the child is pinned to this package, not unpinne
     expect(bulbServerCommand('/x.bulb.md', { open: false }).args).toContain('--no-open')
   })
 
-  // Invocation scope rides the relaunch (TB-Batch.md Invariant 5): launchBulbServer inherits the
-  // replaced run's batch/mode into these opts, and the command must carry them to the child.
-  it('passes --batch and --mode with their values, and omits them by default', () => {
-    const args = bulbServerCommand('/x.bulb.md', { batch: 'pilot', mode: 'staging' }).args
-    expect(args.join(' ')).toContain('--batch pilot')
+  // The env mode rides the relaunch: launchBulbServer inherits the replaced run's mode into these
+  // opts, and the command must carry it to the child.
+  it('passes --mode with its value, and omits it by default', () => {
+    const args = bulbServerCommand('/x.bulb.md', { mode: 'staging' }).args
     expect(args.join(' ')).toContain('--mode staging')
     const bare = bulbServerCommand('/x.bulb.md').args
-    expect(bare).not.toContain('--batch')
     expect(bare).not.toContain('--mode')
   })
 

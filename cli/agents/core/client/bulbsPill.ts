@@ -76,14 +76,6 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
   // otherwise silent (Mirror surface).
   syncBusy = new Set<string>()
   syncDone = new Set<string>()
-  // The stopped-row scope picker's explicit choices, keyed by pathKey ('' = unscoped) — per-open
-  // view state like openFolds, reset in onClosed, never persisted: the default snaps back to the
-  // newest batch on the next open, which tracks the agent's latest work (TB-Batch.md Invariant 7).
-  batchSel = new Map<string, string>()
-  // Which row's batch menu is open (pathKey) + fixed-position coords measured from its B at click
-  // time — position:fixed escapes the scrolling list's overflow clip without the list-edge
-  // anchoring the hover-peek card needs. Transient view state, reset on close.
-  batchMenu?: { key: string; left: number; bottom: number }
 
   protected search(query: string) { return tb.server.searchBulbs(query) as Promise<BulbHit[]> }
   // Enter on the highlighted row: open a running server's tab, or launch a stopped bulb.
@@ -201,7 +193,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       }
     }
     this.files.forEach((f, i) => {
-      byKey.set(fileKeys[i], { path: f.path, name: f.name, recent: Math.max(f.mtime, f.lastRunAt ?? 0), trusted: f.trusted, batches: f.batches })
+      byKey.set(fileKeys[i], { path: f.path, name: f.name, recent: Math.max(f.mtime, f.lastRunAt ?? 0), trusted: f.trusted })
     })
     for (const s of this.servers) {
       if (s.pid === this.parent.ownPid) continue
@@ -281,8 +273,6 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     this.openFolds.clear()
     this.pendingOverwrite = undefined
     this.pullErrors.clear()
-    this.batchSel.clear()
-    this.batchMenu = undefined
     this.spotlightPid = undefined   // close() re-renders right after, so no extra update needed
   }
 
@@ -407,7 +397,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     const key = pathKey(path)
     this.launching.add(key); this.update()
     let started: { pid?: number; url?: string } | undefined
-    try { started = await tb.server.launchBulb(path, trust, this.launchBatch(key)) as { pid?: number; url?: string } }
+    try { started = await tb.server.launchBulb(path, trust) as { pid?: number; url?: string } }
     catch (err) { console.error('[mirror] launchBulb failed', err) }
     finally { this.launching.delete(key) }
     if (suppressNag && started?.pid) this.dismissedDenials.add(started.pid)
@@ -420,77 +410,6 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     // so force the list there to reveal it + its green :port. Unlike keepBottom (a background refresh
     // only holds the bottom if already resting there), this pins regardless of current scroll.
     this.pinToBottom()
-  }
-
-  // Whether any current row carries a scope — the gate on the scope column below. A batch-less
-  // project renders no column at all (the 6-track template), keeping today's layout exactly.
-  get anyScope(): boolean {
-    return this.servers.some(x => x.batch) || this.files.some(f => f.batches?.length)
-  }
-
-  // The scope column: one B chip in its own subgrid track (styles.css .bulb-list.has-scope) — the
-  // row shows THAT a scope applies; the tooltip and click-menu name it (TB-Batch.md Invariant 7).
-  // States: absent (no batches / running unscoped), dim (launch will be unscoped), lit (play
-  // launches scoped — the newest-batch default — or running scoped). Every row must emit this
-  // cell (spacer included) whenever the has-scope template is active, or auto-placement shifts
-  // the row's remaining cells left a track.
-  scopeCell(r: BulbRow, s?: RunningServer) {
-    if (!this.anyScope) return null
-    if (s) {
-      // A running row's scope is a fact, not a control (changing it is a relaunch — TB-Batch.md
-      // Invariant 5), so the lit B is static; the tooltip names the batch.
-      return s.batch
-        ? span({ class: 'batch-b on static bulb-scope', title: `Running with --batch ${s.batch} — its files land in batches/${s.batch} inside the bulb's folder` }, 'B')
-        : span({ class: 'bulb-scope' })
-    }
-    if (r.remote || !r.batches?.length) return span({ class: 'bulb-scope' })
-    const key = pathKey(r.path)
-    const active = this.launchBatch(key)
-    return span({ class: 'bulb-scope' },
-      button({
-        class: ['batch-b', active ? 'on' : ''],
-        title: active ? `Play launches --batch ${active} — click to change` : 'Play launches unscoped — click to pick a batch',
-        ariaLabel: 'Batch scope',
-        onClick: (e: MouseEvent) => this.openBatchMenu(r, e),
-      }, 'B'),
-      this.batchMenu?.key === key ? this.batchMenuPop(r, key, active) : null,
-    )
-  }
-
-  openBatchMenu(r: BulbRow, e: MouseEvent) {
-    e.stopPropagation()
-    const key = pathKey(r.path)
-    if (this.batchMenu?.key === key) { this.closeBatchMenu(); return }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    this.batchMenu = { key, left: rect.left, bottom: window.innerHeight - rect.top + 4 }
-    this.update()
-  }
-
-  closeBatchMenu() { this.batchMenu = undefined; this.update() }
-
-  // The B's menu rides the composer's popup register (.dlg-catcher + .at-popup/.at-row — one
-  // mini-menu UI across the mirror, not another bespoke one): the catcher dismisses on outside
-  // mousedown, rows pick on mousedown so the choice can't be blurred away, the effective choice
-  // wears .active. Only the positioning is local — fixed coords measured from the B — because a
-  // container-anchored absolute popup can't ride a row in a scrolling list.
-  batchMenuPop(r: BulbRow, key: string, active?: string) {
-    const m = this.batchMenu!
-    const pick = (v: string) => (e: MouseEvent) => { e.preventDefault(); this.batchSel.set(key, v); this.closeBatchMenu() }
-    return [
-      div({ class: 'dlg-catcher', onMouseDown: (e: MouseEvent) => { e.preventDefault(); this.closeBatchMenu() } }, ''),
-      div({ class: 'at-popup batch-pop', style: { left: `${m.left}px`, bottom: `${m.bottom}px` } },
-        r.batches!.map(b => div({ class: ['at-row', b === active ? 'active' : ''], onMouseDown: pick(b) }, b)),
-        div({ class: ['at-row', 'unscoped', active ? '' : 'active'], onMouseDown: pick('') }, 'unscoped'),
-      ),
-    ]
-  }
-
-  // The effective scope the row's B shows (TB-Batch.md Invariant 7), resolved again at spawn so
-  // the trust-modal flow (launch → tier choice → doLaunch) uses the same scope the row displayed:
-  // an explicit pick wins, else the newest batch; '' is the explicit unscoped choice → undefined.
-  launchBatch(key: string): string | undefined {
-    const batches = this.files.find(f => pathKey(f.path) === key)?.batches
-    return (this.batchSel.get(key) ?? batches?.[0]) || undefined
   }
 
   // Bulb's frontmatter name when known (nicer than the filename), else the basename sans extension.
@@ -709,7 +628,7 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
     return div({ class: 'servers-pop' },
       rows.length === 0
         ? this.emptyState('No bulbs in this project yet.')
-        : div({ class: ['bulb-list', this.anyScope ? 'has-scope' : ''], onScroll: () => this.onListScroll() },
+        : div({ class: 'bulb-list', onScroll: () => this.onListScroll() },
             rows.map((r, i) => this.row(r, i, dimOthers && r.running?.pid !== spot))),
       // Count the project's own bulbs, not the folded catalog — 4 bulbs, not 54. Also the honest
       // full-text figure: searchBulbs's corpus is project files only.
@@ -773,10 +692,9 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
         hitsBadge(r.hitCount),
         pullError ? span({ class: 'pull-error' }, pullError) : null,
       ),
-      // push/pull sits beside the name cell's typebulb.com link — one sync cluster; the scope column
-      // then heads the execution controls (trust · logs · port), where picking a batch belongs.
+      // push/pull sits beside the name cell's typebulb.com link — one sync cluster, ahead of the
+      // execution controls (trust · logs · port).
       this.syncCell(r),
-      this.scopeCell(r, s),
       // Trust toggle. Shown for a running server (the live tier matters) or a trusted-remembered
       // stopped bulb; a plain restricted stopped bulb shows an empty cell — "restricted" is the
       // implicit default and repeating it down every row is noise — but the cell still holds its grid

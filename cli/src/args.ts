@@ -62,12 +62,6 @@ export interface CliArgs {
   /** `--mode <name>`: also load `.env.<name>` (+ `.env.<name>.local`) on top of the base cascade.
    *  Free-form; selects nothing by default (TB-Env.md). */
   mode?: string
-  /** `--batch <name>`: scope the invocation to a named batch — `tb.dir` and relative `tb.fs` paths
-   *  land in `<bulb-folder>/batches/<name>` for this invocation (per-call under `call`;
-   *  launch-scoped when serving). Batch runs without the bulb knowing (TB-Batch.md). A single
-   *  folder name — separators and dot segments are rejected at parse, so "list the immediate
-   *  subdirectories of batches/" stays the complete enumeration. */
-  batch?: string
   /** `logs --follow`: stream new console output until interrupted (default: snapshot). */
   follow: boolean
   /** `logs --clear`: truncate the target server's captured log instead of printing it. */
@@ -184,18 +178,6 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.mode = m
-    } else if (arg === '--batch') {
-      const b = args[++i]
-      if (!b || b.startsWith('-')) {
-        console.error('Missing value for --batch (a batch name, e.g. --batch pilot)')
-        process.exit(1)
-      }
-      const name = b.replace(/[\\/]+$/, '')
-      if (!name || /[\\/]/.test(name) || name === '.' || name === '..') {
-        console.error(`Invalid --batch value: ${b} (a single folder name — no path separators or dot segments)`)
-        process.exit(1)
-      }
-      result.batch = name
     } else if (arg === '--follow' || arg === '-f') {
       result.follow = true
     } else if (arg === '--clear') {
@@ -335,7 +317,7 @@ export function parseArgs(args: string[]): CliArgs {
     result.blockKind = tryParse(() => parseBlockKind(callPositionals[1]))
   }
 
-  // put <file> <kind>=<source>…: pairs validated at parse, like --batch (TB-Get-Put.md).
+  // put <file> <kind>=<source>…: pairs validated at parse (TB-Get-Put.md).
   if (result.subcommand === 'put') {
     if (callPositionals.length < 2) {
       console.error('Usage: typebulb put <file> <kind>=<source> [<kind>=<source> …]')
@@ -475,12 +457,6 @@ Options:
   --mode <name>               Also load .env.<name> (+ .env.<name>.local) on top
                               of .env / .env.local. Free-form name; loads no mode
                               file by default.
-  --batch <name>              Scope the run to a named batch: tb.dir and
-                              relative tb.fs paths land in
-                              <bulb-folder>/batches/<name>, created at boot.
-                              Batch runs without touching the bulb's code
-                              (e.g. --batch pilot). One folder name — no
-                              path separators.
   --server                    Run server.ts only, no web server (needs --trust)
   --args <json-array>         For 'call': the whole argument list as one JSON
                               array (strict). '--args -' reads it from stdin,
@@ -498,6 +474,7 @@ Filesystem API:
     await tb.fs.read('file.txt')           // UTF-8 text (throws on non-UTF-8)
     await tb.fs.readBytes('image.png')     // raw bytes (Uint8Array)
     await tb.fs.write('output.html', content)  // text or bytes
+    await tb.fs.list('runs')               // immediate children: { name, dir, mtime }[]
 
 Server API:
   Add a **server.ts** section to run Node.js code server-side.

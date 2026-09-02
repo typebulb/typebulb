@@ -190,8 +190,8 @@ const fs = `
    *
    * Relative paths resolve against the bulb's folder (\`tb.dir\` —
    * \`<bulb-dir>/<filename-stem>/\`, created on demand), so
-   * \`tb.fs.write('results.json')\` lands beside the bulb. \`../\` reaches sibling
-   * bulbs' folders; everything stays confined to the project (the launch cwd).
+   * \`tb.fs.write('results.json')\` lands beside the bulb. Nothing reaches outside
+   * that folder: \`../\` and absolute paths beyond it throw.
    * Throws in ide/published mode.
    */
   fs: {
@@ -201,12 +201,13 @@ const fs = `
     readBytes(path: string): Promise<Uint8Array>;
     /** Write text or raw bytes to a file. Creates parent directories if needed. */
     write(path: string, content: string | Uint8Array): Promise<boolean>;
+    /** List a folder's immediate children (default: the bulb's folder): name, whether it is a folder, and mtime (epoch ms). Unsorted; throws if the folder does not exist. */
+    list(path?: string): Promise<Array<{ name: string; dir: boolean; mtime: number }>>;
   };`
 
 const dir = `
   /**
    * The bulb's folder — absolute path to \`<bulb-dir>/<filename-stem>/\`
-   * (or its \`batches/<name>/\` folder when the run is scoped with \`--batch\`).
    *
    * For interop only (handing a path to \`server.ts\` or a spawned tool):
    * \`tb.fs\` already resolves relative paths against it, so bulb code writing

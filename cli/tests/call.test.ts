@@ -47,13 +47,6 @@ describe('parseArgs: call subcommand', () => {
     expect(a.fn).toBe('query')
     expect(a.callArgs).toEqual(['select 1'])
   })
-
-  it('--batch scopes the run to a named batch, normalizing a trailing slash', () => {
-    const a = parseArgs(['call', 'probe.bulb.md', 'run', '--batch', 'pilot/', '--trust'])
-    expect(a.batch).toBe('pilot')
-    expect(a.fn).toBe('run')
-    expect(a.callArgs).toEqual([])
-  })
 })
 
 describe('parsePositionalArgs: JSON-or-string heuristic', () => {

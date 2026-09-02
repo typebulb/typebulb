@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join, isAbsolute } from 'path'
-import { launchBulbServer, listBulbServers, stopBulbServer, stopServer, readServerLog, listBulbFiles as listProjectBulbFiles, listBulbBatches, lastRunTimes, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
+import { launchBulbServer, listBulbServers, stopBulbServer, stopServer, readServerLog, listBulbFiles as listProjectBulbFiles, lastRunTimes, slugifyBulbName, isBulbTrusted, setBulbTrusted, predictBulbTrust, openInEditor, ensureDeclaredDependencies, pullBulb, pushBulb, bulbRelPath, parsePullTarget, readEnvVar } from '../../../src/servers.js'
 import { projectCwd } from './context.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { extractDescription } from 'typebulb/format'
@@ -100,9 +100,7 @@ export async function listBulbFiles() {
     // model — play → `:port` link, stop — can't represent them (a play click spawns a process that
     // never registers). They stay a terminal feature (`typebulb <file>` / `call`), not a launcher row.
     .filter(f => !f.serverOnly)
-    // `batches`: the bulb's named batch scopes (TB-Batch.md Invariant 7), newest first, so the
-    // row's picker can show the scope before launch. Empty for the common batch-less bulb.
-    .map(f => ({ ...f, trusted: isBulbTrusted(f.path), batches: listBulbBatches(f.path), lastRunAt: lastRun(f.path) }))
+    .map(f => ({ ...f, trusted: isBulbTrusted(f.path), lastRunAt: lastRun(f.path) }))
 }
 
 // Full-text search over the project's bulb files — the launcher's analogue of searchSessions, for
@@ -135,7 +133,7 @@ export async function searchBulbs(query: string) {
 // elevation modal / toggle); passing it persists the decision to the CLI store. When omitted, the
 // spawned server resolves the remembered tier itself (its main() consults the same store) — so the
 // effective-tier decision lives in one place; we just report the tier it actually came up in.
-export async function launchBulb(file: string, trust?: boolean, batch?: string) {
+export async function launchBulb(file: string, trust?: boolean) {
   const cwd = projectCwd
   // Only a real boolean is an explicit decision. `undefined` (no decision) crosses the tb.server
   // JSON boundary as `null`, so guard on `!= null` — a bare launch must NOT clobber the store.
@@ -148,10 +146,7 @@ export async function launchBulb(file: string, trust?: boolean, batch?: string) 
   // the mirror from anywhere else (an agent/tool-runner shell, a plain terminal) and TERM_PROGRAM is
   // unset, so the inherited default flips to open and a window pops. Forcing it here makes windowless
   // a property of *being launched by the mirror*, not of the mirror's accidental environment.
-  // `batch` is the scope the row displayed (TB-Batch.md Invariant 7). Crosses the RPC boundary as
-  // `null` when unset — launchBulbServer's `??` merge treats that as "no opinion" (inherit a
-  // replaced run's scope), which is exactly the trust-toggle-preserves-scope behavior.
-  const server = await launchBulbServer(file, { cwd, open: false, trust, batch: batch ?? undefined })
+  const server = await launchBulbServer(file, { cwd, open: false, trust })
   return { ok: true, file: server.file, pid: server.pid, url: server.url, trust: !!server.trust }
 }
 

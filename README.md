@@ -21,7 +21,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
 - **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
-- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), and `tb.fs.write()` (text or bytes); relative paths land in the bulb's own folder (`--batch <name>` scopes a run to `batches/<name>` inside it), and `../` reaches a sibling bulb's; anything outside the project throws. Requires `--trust`.
+- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), `tb.fs.write()` (text or bytes), and `tb.fs.list()` (a folder's immediate children as `{ name, dir, mtime }`); relative paths land in the bulb's own folder, and nothing reaches outside it (`../` throws). Requires `--trust`.
 - **Hot reload** — Recompiles on save and refreshes the browser (on by default; disable with `--no-watch`)
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
@@ -69,7 +69,6 @@ typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
 typebulb --no-watch <file>     Disable hot reload
 typebulb --no-open <file>      Open nothing at launch, not even inside VS Code
 typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
-typebulb --batch <name> <file> Scope tb.dir + relative tb.fs paths to <bulb-folder>/batches/<name> (batch runs)
 typebulb --trust <file>        Grant filesystem + AI + server.ts for this run (default: Restricted)
 typebulb --no-trust <file>     Force Restricted even if the bulb is remembered-trusted
 typebulb --server <file>       Run server.ts only, no web server (needs --trust)
@@ -203,7 +202,7 @@ everywhere.
 | `tb.aiAccess()` | What backs `tb.ai` — `'own' \| 'courtesy' \| 'none'` | |
 | `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
 | `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when inline (no sender) | |
-| `tb.fs.read/readBytes/write` | Read and write local files | yes |
+| `tb.fs.read/readBytes/write/list` | Read, write, and list local files | yes |
 | `tb.dir` | The bulb's folder (absolute path), where relative `tb.fs` paths land | |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | yes |
 | `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | yes |
@@ -320,8 +319,7 @@ The host owns light/dark; you style for both.
 ## Tips for Agents
 
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
-- **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except inline.
-- **Batch runs: scope with `--batch`, don't hand-roll plumbing** — `--batch pilot` on a run or `call` lands `tb.dir` and relative `tb.fs` paths in `<bulb-folder>/batches/pilot/`; the bulb's code stays batch-unaware, an unscoped run sees `batches/` as an ordinary subfolder, and the agent mirror lists a bulb's batches on its launcher row (play opens the newest).
+- **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except inline. It holds what the bulb ships in order to run (e.g. images), never results.
 - **See what's already running** — `typebulb logs` with no argument lists every running bulb and mirror; check it before launching anything.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.log(...)`, and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).

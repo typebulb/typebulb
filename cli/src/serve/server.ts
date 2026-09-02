@@ -20,7 +20,7 @@ import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
-import { resolvePath, readFsBytes, writeFsFile } from './tbFs.js'
+import { resolvePath, readFsBytes, writeFsFile, listFsDir } from './tbFs.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 import { PageSet, PAGE_LOG, RELOAD_SETTLE_MS, PAGE_ARRIVAL_MS, type PageCloseReason } from './pages.js'
 
@@ -102,9 +102,9 @@ function errorMessage(e: unknown): string {
 export interface ServerOptions {
   getHtml: () => string
   basePath: string
-  /** Base for RELATIVE /__fs paths: the bulb's folder, or its --batch folder (TB-FS.md, TB-Batch.md). Containment stays
-   *  `basePath` (the project), so `../` reaches siblings but never escapes the project.
-   *  Absent (agent mirror, older tests) → falls back to basePath, the old cwd-relative rule. */
+  /** The one root for /__fs paths: relative paths resolve here and nothing escapes it (TB-FS.md
+   *  Containment). The bulb's folder for a bulb's server; absent (agent mirror, older tests) →
+   *  basePath, the cwd, so the host's surface stays project-wide. */
   fsBase?: string
   port: number
   reloadEmitter?: EventEmitter
@@ -138,13 +138,11 @@ export interface ServerOptions {
    *  `--replace` mechanism — just static bytes from disk, content-typed and
    *  traversal-guarded. The global COOP/COEP middleware wraps these too. */
   staticAssets?: { mount: string; dir: string }
-  /** The bulb's `assets/` folder(s) (TB-Assets.md), served read-only at `/assets/` in every
-   *  paged tier — NOT trust-gated: its exposure class equals the `/` route's compiled source.
-   *  `dirs` is the ordered shadowing chain — under `--batch` the batch's `assets/` precedes the
-   *  authored one (batch shadows authored shadows remote). `remoteBase` is the bulb's derived
-   *  hosted base (TB-Assets-Push.md Invariant 2); a miss in every dir 302s there when set,
-   *  else 404s. */
-  bulbAssets?: { dirs: string[]; remoteBase?: string }
+  /** The bulb's `assets/` folder (TB-Assets.md), served read-only at `/assets/` in every paged
+   *  tier — NOT trust-gated: its exposure class equals the `/` route's compiled source.
+   *  `remoteBase` is the bulb's derived hosted base (TB-Assets-Push.md Invariant 2); a local
+   *  miss 302s there when set, else 404s (local shadows remote). */
+  bulbAssets?: { dir: string; remoteBase?: string }
   /** The `.bulb.md` this page was compiled from. Served read-only at `/__source/…` so devtools can
    *  fetch the file the page's source map points at (TB-CLI.md, One coordinate space). */
   sourceFile?: string
@@ -210,7 +208,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // instance, not per process — a process can hold more than one server, and "the server you are
   // talking to" is the thing the page actually needs to identify.
   const bootId = `${process.pid}-${++serverInstances}-${Date.now()}`
-  // Relative /__fs paths resolve here (the bulb's folder — TB-FS.md); containment stays basePath.
+  // /__fs paths resolve here and are fenced here (the bulb's folder — TB-FS.md Containment).
   const fsRoot = fsBase ?? basePath
 
   const app = new Hono()
@@ -497,7 +495,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.post('/__fs/read', async (c) => {
     try {
       const { path: reqPath } = await c.req.json<{ path: string }>()
-      const data = await readFsBytes(reqPath, fsRoot, basePath)
+      const data = await readFsBytes(reqPath, fsRoot)
       return new Response(new Uint8Array(data), {
         headers: { 'Content-Type': 'application/octet-stream' },
       })
@@ -513,11 +511,22 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     try {
       const reqPath = c.req.query('path')
       if (!reqPath) return c.json({ error: 'Missing path' }, 400)
-      await writeFsFile(reqPath, new Uint8Array(await c.req.arrayBuffer()), fsRoot, basePath)
+      await writeFsFile(reqPath, new Uint8Array(await c.req.arrayBuffer()), fsRoot)
       return c.json({ success: true })
     } catch (e) {
       const message = errorMessage(e)
       return c.json({ error: message }, 400)
+    }
+  })
+
+  // Filesystem API - list a folder's immediate children (TB-FS.md `tb.fs.list`). JSON in, JSON
+  // out; a missing folder is a 400 carrying the error, like a missing file on read.
+  app.post('/__fs/list', async (c) => {
+    try {
+      const { path: reqPath } = await c.req.json<{ path?: string }>()
+      return c.json(await listFsDir(reqPath ?? '.', fsRoot))
+    } catch (e) {
+      return c.json({ error: errorMessage(e) }, 400)
     }
   })
 
@@ -784,8 +793,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   if (staticAssets) serveStaticDir(app, staticAssets.mount, staticAssets.dir)
 
   // Bulb assets (TB-Assets.md): `<img src="assets/x.png">` served from the bulb's own folder,
-  // first dir in the chain wins. `no-cache` so hot iteration sees fresh bytes; remote caching
-  // belongs to the author's host via the 302 fallback.
+  // local shadowing remote. `no-cache` so hot iteration sees fresh bytes; remote caching belongs
+  // to the author's host via the 302 fallback.
   if (bulbAssets) {
     app.get('/assets/*', async (c) => {
       const { pathname } = new URL(c.req.url)
@@ -801,10 +810,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       const forbidden = forbiddenAssetExt(rel)
       if (forbidden) return c.text(`${forbidden} is not an asset type: a bulb's code and markup live in the bulb; assets are media and data`, 403)
       try {
-        for (const dir of bulbAssets.dirs) {
-          const found = await readServable(rel, dir, { 'Cache-Control': 'no-cache' })
-          if (found) return found
-        }
+        const found = await readServable(rel, bulbAssets.dir, { 'Cache-Control': 'no-cache' })
+        if (found) return found
       } catch {
         return c.text('Not Found', 404)   // traversal — never redirected, never falls through
       }

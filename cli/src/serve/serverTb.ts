@@ -20,7 +20,7 @@ import { consumeStreamResult, streamAiChunks, normalizeUpstreamError } from 'typ
 import { MODE } from 'typebulb/format'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { getFilteredModels, aiAccess } from './modelCatalog.js'
-import { readFsBytes, writeFsFile } from './tbFs.js'
+import { readFsBytes, writeFsFile, listFsDir, type FsEntry } from './tbFs.js'
 
 interface TbAiOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -56,26 +56,27 @@ async function* tbAiStream(opts: TbAiOptions): AsyncGenerator<AiChunk> {
 }
 
 /** Install the server-side `tb` global. Idempotent — safe to call on every (re)import under watch.
- *  `containRoot` is tb.fs's project envelope, mirroring the web server's `basePath`. */
-export function installServerTb(dir: string, containRoot = process.cwd()): void {
+ *  `dir` is both the resolution root and the fence, mirroring the web server's `fsRoot`. */
+export function installServerTb(dir: string): void {
   const ai = Object.assign(tbAi, { stream: tbAiStream })
-  // Same contract as the browser tb.fs, backed by the same core (tbFs.ts) — relative paths
-  // resolve against the bulb's folder, contained to the project, parents created on write.
+  // Same contract as the browser tb.fs, backed by the same core (tbFs.ts) — paths resolve
+  // against the bulb's folder and are fenced there, parents created on write.
   // The non-UTF-8 read error matches the shim's wording, so bulb code sees one behavior.
   const tbFs = {
     read: async (p: string): Promise<string> => {
-      const buf = await readFsBytes(p, dir, containRoot)
+      const buf = await readFsBytes(p, dir)
       try {
         return new TextDecoder('utf-8', { fatal: true }).decode(buf)
       } catch {
         throw new Error(`File is not valid UTF-8 text: ${p} — use tb.fs.readBytes() for binary files.`)
       }
     },
-    readBytes: async (p: string): Promise<Uint8Array> => new Uint8Array(await readFsBytes(p, dir, containRoot)),
+    readBytes: async (p: string): Promise<Uint8Array> => new Uint8Array(await readFsBytes(p, dir)),
     write: async (p: string, content: string | Uint8Array): Promise<boolean> => {
-      await writeFsFile(p, content, dir, containRoot)
+      await writeFsFile(p, content, dir)
       return true
     },
+    list: async (p = '.'): Promise<FsEntry[]> => listFsDir(p, dir),
   }
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     // The uniformity exception (see header): the server's console IS the bulb's log channel.
@@ -83,7 +84,7 @@ export function installServerTb(dir: string, containRoot = process.cwd()): void 
     ai,
     fs: tbFs,
     // The bulb's folder, absolute (TB-FS.md) — for interop (paths handed to spawned tools);
-    // tb.fs already resolves relative paths against it. --batch scopes both (TB-Batch.md).
+    // tb.fs already resolves relative paths against it.
     dir,
     models: (): Promise<TbModelDto[]> => getFilteredModels(),
     aiAccess,

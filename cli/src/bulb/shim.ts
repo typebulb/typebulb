@@ -136,6 +136,17 @@ export const typebulbShim = `
       });
       await failIfNotOk(resp, 'write', path);
       return true;
+    },
+    // Immediate children of a folder (default: the bulb's own), as { name, dir, mtime }[].
+    list: async (path = '.') => {
+      if (isFramed) throw inlineErr('tb.fs');
+      const resp = await fetch('/__fs/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      await failIfNotOk(resp, 'list', path);
+      return resp.json();
     }
   };
 

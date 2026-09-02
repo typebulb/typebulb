@@ -119,14 +119,12 @@ describe('serveStaticDir refuses traversal out of the served dir', () => {
  * The bulb-assets route (TB-Assets.md): same URL shape, different contract — media MIME types,
  * no-cache, and a local miss 302s to the bulb's remote base (local shadows remote). A
  * traversal must 404, never redirect (a redirect would leak the probe to the remote host).
- * `dirs` is the --batch shadowing chain: the batch's assets/ precedes the authored one.
  */
 describe('bulbAssets route', () => {
   let srv: ServerInstance
   let dir: string
-  let batchDir: string
   // Mutated between cases; the route reads it per request off this shared object.
-  const bulbAssets: { dirs: string[]; remoteBase?: string } = { dirs: [] }
+  const bulbAssets: { dir: string; remoteBase?: string } = { dir: '' }
 
   const get = (rawPath: string) => rawGetPort(srv.port, rawPath)
 
@@ -134,13 +132,9 @@ describe('bulbAssets route', () => {
     dir = path.join(root, 'bulb-assets')
     fs.mkdirSync(dir)
     fs.writeFileSync(path.join(dir, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')
-    fs.writeFileSync(path.join(dir, 'shadowed.png'), 'local-bytes', 'utf8')
     fs.writeFileSync(path.join(dir, 'authored-only.png'), 'authored-bytes', 'utf8')
     fs.writeFileSync(path.join(dir, 'sneaky.js'), 'alert(1)', 'utf8')
-    batchDir = path.join(root, 'batch-assets')
-    fs.mkdirSync(batchDir)
-    fs.writeFileSync(path.join(batchDir, 'shadowed.png'), 'batch-bytes', 'utf8')
-    bulbAssets.dirs = [batchDir, dir]
+    bulbAssets.dir = dir
     srv = await startServer({
       getHtml: () => '<html></html>',
       basePath: root,
@@ -170,13 +164,7 @@ describe('bulbAssets route', () => {
     expect(r.headers['location']).toBe('https://cdn.example.com/birds/sub/absent.png')
   })
 
-  it('the first dir in the chain (batch) shadows the second (authored)', async () => {
-    const r = await get('/assets/shadowed.png')
-    expect(r.status).toBe(200)
-    expect(r.body).toBe('batch-bytes')
-  })
-
-  it('a batch miss falls through to the authored dir, shadowing the remote', async () => {
+  it('a local hit is served even when a base is set — local shadows remote', async () => {
     bulbAssets.remoteBase = 'https://cdn.example.com/birds/'
     const r = await get('/assets/authored-only.png')
     expect(r.status).toBe(200)

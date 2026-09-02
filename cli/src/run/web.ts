@@ -3,7 +3,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import { type CliArgs } from '../args.js'
 import { loadEnv, reportEnv } from '../env.js'
-import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir, conventionalIdentity, materializeBatchDir } from '../pipeline.js'
+import { loadAndCompile, serverModulePath, bulbDataDir, bulbAssetsDir, conventionalIdentity } from '../pipeline.js'
 import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/format'
 import { predictTrust } from '../bulb/predictTrust.js'
 import { startAndRegister } from '../serve/serveSession.js'
@@ -93,24 +93,14 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
   const openRun = () => console.log(runMarker(++runId))
   openRun()
 
-  // Boot-time materialize + touch of the batch folder (TB-Batch.md Invariant 3), before anything
-  // can fail — a compile error still leaves the batch discoverable.
-  if (args.batch) await materializeBatchDir(bulbPath, args.batch)
-
   // Initial compile
   console.log(`Loading ${path.basename(bulbPath)}...`)
-  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local, args.batch)
+  let { html, bulb, serverExports } = await loadAndCompile(bulbPath, args.watch, args.trust, local)
   reportEnv(envResult, bulbPath, bulb.server)
 
   // Bulb assets (TB-Assets.md): /assets/ serves the bulb's own folder's assets/ subfolder
-  // (birds.bulb.md → birds/assets/). Under --batch the batch's assets/ shadows the authored one —
-  // so a batch run's generated `tb.fs.write('assets/x')` serves, and authored assets still show
-  // through where the batch has no override (batch shadows authored shadows remote — TB-Batch.md
-  // Invariant 6).
-  const assetsDirs = [
-    ...(args.batch ? [bulbAssetsDir(bulbPath, args.batch)] : []),
-    bulbAssetsDir(bulbPath),
-  ]
+  // (birds.bulb.md → birds/assets/); a local miss falls through to the remote base (local shadows remote).
+  const assetsDir = bulbAssetsDir(bulbPath)
   // Remote layer of the shadow chain: the typebulb-hosted base derived from a conventional
   // path (TB-Assets-Push.md Invariant 2). No identity → no remote layer.
   const identity = conventionalIdentity(path.resolve(bulbPath))
@@ -134,7 +124,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
     makeServerOptions: (port) => ({
       getHtml: () => html,
       basePath,
-      fsBase: bulbDataDir(bulbPath, args.batch),
+      fsBase: bulbDataDir(bulbPath),
       port,
       reloadEmitter,
       // The `typebulb send` channel, on regardless of watch (send must work under --no-watch too).
@@ -154,7 +144,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
         await fs.writeFile(bulbPath, text)
       },
       localOverride: local ? { name: local.name, serveDir: local.serveDir } : undefined,
-      bulbAssets: { dirs: assetsDirs, remoteBase: identity && hostedAssetsBase(identity.userSlug, identity.slug) },
+      bulbAssets: { dir: assetsDir, remoteBase: identity && hostedAssetsBase(identity.userSlug, identity.slug) },
       // Backs the page's source map: devtools fetches the bulb itself from /__source/.
       sourceFile: bulbPath,
       // Which bulb this address serves, checked against what a reattaching page announces
@@ -163,7 +153,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       trusted: args.trust,
       trustHint,
     }),
-    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, batch: args.batch, mode: args.mode, predicted }),
+    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, mode: args.mode, predicted }),
     // The wait a launch that opened no page names (TB-Page-Lifecycle.md).
     waitTarget: path.relative(process.cwd(), bulbPath) || path.basename(bulbPath),
   })
@@ -211,7 +201,7 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
           if (seq !== compileSeq) return
           try {
             console.log('Recompiling...')
-            const result = await loadAndCompile(bulbPath, true, args.trust, local, args.batch)
+            const result = await loadAndCompile(bulbPath, true, args.trust, local)
             html = result.html
             serverExports = result.serverExports
             bulb = result.bulb
@@ -242,17 +232,14 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       })
     }
 
-    // Watch each existing assets/ dir in the chain — an asset save reloads the browser, no
-    // recompile (TB-Assets.md). Only dirs that exist at launch; created later needs a relaunch.
-    // Registered straight onto onCleanup (it's a loop; the named-var pattern above is for singles).
-    for (const d of assetsDirs) {
-      if (await fs.stat(d).then(s => s.isDirectory()).catch(() => false)) {
-        onCleanup(watchPath({
-          target: d,
-          events: 'all',
-          onChange: () => reloadPages('Assets changed.'),
-        }))
-      }
+    // Watch the assets/ dir if it exists at launch — an asset save reloads the browser, no
+    // recompile (TB-Assets.md). Created later needs a relaunch.
+    if (await fs.stat(assetsDir).then(s => s.isDirectory()).catch(() => false)) {
+      onCleanup(watchPath({
+        target: assetsDir,
+        events: 'all',
+        onChange: () => reloadPages('Assets changed.'),
+      }))
     }
   }
 
