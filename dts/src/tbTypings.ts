@@ -203,6 +203,8 @@ const fs = `
     write(path: string, content: string | Uint8Array): Promise<boolean>;
     /** List a folder's immediate children (default: the bulb's folder): name, whether it is a folder, and mtime (epoch ms). Unsorted; throws if the folder does not exist. */
     list(path?: string): Promise<Array<{ name: string; dir: boolean; mtime: number }>>;
+    /** Remove a file, or a folder and everything in it. Throws if the path does not exist; the bulb's folder itself cannot be removed. */
+    remove(path: string): Promise<boolean>;
   };`
 
 const dir = `

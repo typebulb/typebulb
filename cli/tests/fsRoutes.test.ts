@@ -215,6 +215,28 @@ describe('data-folder resolution (fsBase)', () => {
     const resp = await dlist('nope')
     expect(resp.status).toBe(400)
   })
+
+  const dremove = (p: string) =>
+    fetch(durl('/__fs/remove'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
+
+  it('removes a file, and a folder with its contents', async () => {
+    const foo = path.join(project, 'typebulbs', 'foo')
+    fs.mkdirSync(path.join(foo, 'runs', 'a'), { recursive: true })
+    fs.writeFileSync(path.join(foo, 'runs', 'a', 'x.json'), '{}', 'utf8')
+    fs.writeFileSync(path.join(foo, 'stale.txt'), 'x', 'utf8')
+    expect((await dremove('stale.txt')).ok).toBe(true)
+    expect(fs.existsSync(path.join(foo, 'stale.txt'))).toBe(false)
+    expect((await dremove('runs')).ok).toBe(true)
+    expect(fs.existsSync(path.join(foo, 'runs'))).toBe(false)
+  })
+
+  it('400s a missing path on remove, and refuses the bulb\'s folder itself and ../', async () => {
+    expect((await dremove('nope')).status).toBe(400)
+    expect((await dremove('.')).status).toBe(400)
+    expect(fs.existsSync(path.join(project, 'typebulbs', 'foo'))).toBe(true)
+    expect((await dremove('../other')).status).toBe(400)
+    expect(fs.existsSync(path.join(project, 'typebulbs', 'other', 'sibling.txt'))).toBe(true)
+  })
 })
 
 // TB-FS.md: the bulb's folder is the sibling dir named for the filename stem.
@@ -256,5 +278,14 @@ describe('server-side tb.fs (shared core)', () => {
 
   it('denies leaving the bulb\'s folder — same fence as the /__fs routes', async () => {
     await expect(tb().fs.read('../sibling.txt')).rejects.toThrow(/traversal/)
+  })
+
+  it('remove drops a file or a folder tree; the bulb\'s folder itself is refused', async () => {
+    expect(await tb().fs.remove('blob.bin')).toBe(true)
+    expect(fs.existsSync(path.join(bulbDir, 'blob.bin'))).toBe(false)
+    expect(await tb().fs.remove('transcripts')).toBe(true)
+    expect(fs.existsSync(path.join(bulbDir, 'transcripts'))).toBe(false)
+    await expect(tb().fs.remove('.')).rejects.toThrow(/folder itself/)
+    await expect(tb().fs.remove('transcripts')).rejects.toThrow()
   })
 })

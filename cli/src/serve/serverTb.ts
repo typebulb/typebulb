@@ -20,7 +20,7 @@ import { consumeStreamResult, streamAiChunks, normalizeUpstreamError } from 'typ
 import { MODE } from 'typebulb/format'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { getFilteredModels, aiAccess } from './modelCatalog.js'
-import { readFsBytes, writeFsFile, listFsDir, type FsEntry } from './tbFs.js'
+import { readFsBytes, writeFsFile, listFsDir, removeFsPath, type FsEntry } from './tbFs.js'
 
 interface TbAiOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -77,6 +77,10 @@ export function installServerTb(dir: string): void {
       return true
     },
     list: async (p = '.'): Promise<FsEntry[]> => listFsDir(p, dir),
+    remove: async (p: string): Promise<boolean> => {
+      await removeFsPath(p, dir)
+      return true
+    },
   }
   ;(globalThis as { tb?: unknown }).tb = Object.freeze({
     // The uniformity exception (see header): the server's console IS the bulb's log channel.

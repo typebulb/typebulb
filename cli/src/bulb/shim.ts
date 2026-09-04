@@ -147,6 +147,18 @@ export const typebulbShim = `
       });
       await failIfNotOk(resp, 'list', path);
       return resp.json();
+    },
+    // Remove a file, or a folder and its contents. Throws on a missing path; the bulb's folder
+    // itself is refused.
+    remove: async (path) => {
+      if (isFramed) throw inlineErr('tb.fs');
+      const resp = await fetch('/__fs/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      await failIfNotOk(resp, 'remove', path);
+      return true;
     }
   };
 

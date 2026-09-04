@@ -20,7 +20,7 @@ import { getFilteredModels, aiAccess } from './modelCatalog.js'
 import { resolveLocalProvider, sendTbAi } from './localProvider.js'
 import { streamNdjson, toStreamError } from './ndjsonStream.js'
 import { resolveServerFn, isAsyncGenerator } from './builtins.js'
-import { resolvePath, readFsBytes, writeFsFile, listFsDir } from './tbFs.js'
+import { resolvePath, readFsBytes, writeFsFile, listFsDir, removeFsPath } from './tbFs.js'
 import { isEsmAbsoluteImportPath } from './esmProxyPaths.js'
 import { PageSet, PAGE_LOG, RELOAD_SETTLE_MS, PAGE_ARRIVAL_MS, type PageCloseReason } from './pages.js'
 
@@ -525,6 +525,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     try {
       const { path: reqPath } = await c.req.json<{ path?: string }>()
       return c.json(await listFsDir(reqPath ?? '.', fsRoot))
+    } catch (e) {
+      return c.json({ error: errorMessage(e) }, 400)
+    }
+  })
+
+  // Filesystem API - remove a file, or a folder and its contents (TB-FS.md `tb.fs.remove`). JSON
+  // in; a missing path is a 400 carrying the error, like a missing file on read.
+  app.post('/__fs/remove', async (c) => {
+    try {
+      const { path: reqPath } = await c.req.json<{ path: string }>()
+      await removeFsPath(reqPath, fsRoot)
+      return c.json({ success: true })
     } catch (e) {
       return c.json({ error: errorMessage(e) }, 400)
     }

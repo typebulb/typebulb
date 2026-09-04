@@ -51,3 +51,14 @@ export async function listFsDir(requestedPath: string, root: string): Promise<Fs
     return { name: e.name, dir: e.isDirectory(), mtime }
   }))
 }
+
+/** Remove a file, or a folder and its contents (TB-FS.md `tb.fs.remove`). A missing path throws
+ *  like a missing file on read. The root itself is refused: it is the fence, not a file in it,
+ *  and on the agent mirror's server it is the project. */
+export async function removeFsPath(requestedPath: string, root: string): Promise<void> {
+  const resolved = resolvePath(requestedPath, root)
+  if (path.normalize(resolved) === path.normalize(root)) {
+    throw new Error("Cannot remove the bulb's folder itself: remove its contents instead")
+  }
+  await fs.rm(resolved, { recursive: true })
+}

@@ -21,7 +21,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 - **Env files** — `.env` / `.env.local` load from cwd, `.env.local` overriding `.env` (an exported shell var wins over both). `--mode <name>` adds `.env.<name>` to switch environments (local/staging/prod); a startup line reports which keys loaded from where.
 - **Server mode** — `--server` runs only the `**server.ts**` section in Node, skipping the web server. Bulbs with only `**server.ts**` (no `**code.tsx**`) use this mode automatically.
 - **Type-check without running** — `typebulb check <file>` runs `tsc --noEmit` against the bulb: non-zero exit with diagnostics on errors, a one-line all-clear on stderr on success.
-- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), `tb.fs.write()` (text or bytes), and `tb.fs.list()` (a folder's immediate children as `{ name, dir, mtime }`); relative paths land in the bulb's own folder, and nothing reaches outside it (`../` throws). Requires `--trust`.
+- **Filesystem access** — `tb.fs.read()` (UTF-8 text), `tb.fs.readBytes()` (raw `Uint8Array`), `tb.fs.write()` (text or bytes), `tb.fs.list()` (a folder's immediate children as `{ name, dir, mtime }`), and `tb.fs.remove()` (a file, or a folder and its contents); relative paths land in the bulb's own folder, and nothing reaches outside it (`../` throws). Requires `--trust`.
 - **Hot reload** — Recompiles on save and refreshes the browser (on by default; disable with `--no-watch`)
 - **Package resolution** — Client dependencies are automatically resolved by generating import maps (same resolver as typebulb.com). Server dependencies are automatically installed via npm.
 - **Replace dependency** — `--replace <name>=<path>` replaces a declared dependency with a local *built* package folder (browser-ready ESM, no external bare imports) instead of a CDN, for testing an unpublished build. Supplies both runtime bytes and types; applies to `run` and `check`. Under `--watch` the folder is watched and the browser reloads on rebuild (`--no-watch` freezes it). Dev-only; nothing is written to the bulb.
@@ -202,7 +202,7 @@ everywhere.
 | `tb.aiAccess()` | What backs `tb.ai` — `'own' \| 'courtesy' \| 'none'` | |
 | `tb.log(...)` | Print to the CLI's stdout (read back with `typebulb logs`); falls back to the browser console when no CLI serves the page | |
 | `tb.onMessage(cb)` | Receive a value pushed in from the terminal by `typebulb send`; a non-`undefined` return becomes the reply `send --wait` prints — inert when inline (no sender) | |
-| `tb.fs.read/readBytes/write/list` | Read, write, and list local files | yes |
+| `tb.fs.read/readBytes/write/list/remove` | Read, write, list, and remove local files | yes |
 | `tb.dir` | The bulb's folder (absolute path), where relative `tb.fs` paths land | |
 | `tb.server.<name>(...)` | Call a function exported from the `server.ts` block | yes |
 | `tb.ai({ messages, … })` | General-purpose AI call (chat, agents) | yes |
