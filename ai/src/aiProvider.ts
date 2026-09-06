@@ -48,7 +48,7 @@ export abstract class AIProvider {
     return this.path
   }
 
-  abstract buildHeaders(apiKey: string, origin?: string): Record<string, string>
+  abstract buildHeaders(apiKey: string): Record<string, string>
 
   abstract buildPayload(
     messages: ChatMessageDto[],

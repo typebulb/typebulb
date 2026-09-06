@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { type AddressInfo } from 'net'
 import { getFilteredModels, catalogFetchError } from '../../../src/servers.js'
 import { errorMessage, projectCwd } from '../../core/server/context.js'
+import { OPENROUTER_ATTRIBUTION } from 'typebulb/ai'
 
 // ---- agent switcher: which model backs each `claude` launch (TB-Agent-Switcher.md) ----
 //
@@ -135,13 +136,15 @@ function noteUsage(text: string) {
 }
 
 // Forward headers built from scratch: keep CC's anthropic-version + anthropic-beta (the route may use or
-// ignore them), drop hop-by-hop / host / content-length (refetch sets length), and REPLACE auth with the
-// real OpenRouter key. CC's own token (the placeholder) is discarded here.
+// ignore them), drop hop-by-hop / host / content-length (refetch sets length), REPLACE auth with the real
+// OpenRouter key (CC's placeholder token is discarded here), and add OpenRouter's app attribution: this
+// proxy, not CC, is the client on the wire.
 function upstreamHeaders(req: IncomingMessage, key: string): Record<string, string> {
   const h: Record<string, string> = {
     'content-type': 'application/json',
     authorization: `Bearer ${key}`,
     'anthropic-version': (req.headers['anthropic-version'] as string) || '2023-06-01',
+    ...OPENROUTER_ATTRIBUTION,
   }
   const beta = req.headers['anthropic-beta']
   if (typeof beta === 'string') h['anthropic-beta'] = beta

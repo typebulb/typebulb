@@ -23,6 +23,13 @@ export type OpenRouterRequestPayload = {
   plugins?: OpenRouterWebPlugin[]
 }
 
+/** OpenRouter app attribution: the referer URL keys the app page, a title alone creates nothing. Sent on
+ *  every call, BYOK included (that is the pair's purpose); the wire proxy (switcher.ts) sends the same pair. */
+export const OPENROUTER_ATTRIBUTION = {
+  'HTTP-Referer': 'https://typebulb.com',
+  'X-OpenRouter-Title': 'Typebulb'
+} as const
+
 export class OpenRouterProvider extends ChatCompletionsProvider {
   protected readonly providerName = 'OpenRouter'
   // First-party convention (like anthropic/openai/gemini): the base is the bare origin and the
@@ -50,22 +57,14 @@ export class OpenRouterProvider extends ChatCompletionsProvider {
 
   // ── Request building ─────────────────────────────────────────────
 
-  buildHeaders(apiKey: string, origin?: string): Record<string, string> {
-    const headers: Record<string, string> = {
+  buildHeaders(apiKey: string): Record<string, string> {
+    return {
       'Authorization': `Bearer ${apiKey}`,
       'x-api-key': apiKey,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-Title': 'Typebulb'
+      ...OPENROUTER_ATTRIBUTION
     }
-
-    if (origin) {
-      headers['HTTP-Referer'] = origin
-      headers['Referer'] = origin
-      headers['Origin'] = origin
-    }
-
-    return headers
   }
 
   buildPayload(

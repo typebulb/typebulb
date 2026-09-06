@@ -46,7 +46,6 @@ export interface SendAIRequestOpts {
    *  wrote a chat-completions `max_tokens` and so silently failed to bind on the OpenAI Responses
    *  API and Gemini — the two whose payloads name it differently. */
   maxOutputTokens?: number
-  origin?: string
   signal?: AbortSignal
 }
 
@@ -73,7 +72,7 @@ export async function sendAIRequest(
   const path = spec.getPath(provider.model, opts.stream)
   const url = joinUrl(provider.baseUrl, path)
 
-  const headers = spec.buildHeaders(provider.apiKey, opts.origin)
+  const headers = spec.buildHeaders(provider.apiKey)
   const payload = spec.buildPayload(
     opts.messages,
     provider.model,

@@ -374,6 +374,8 @@ export class BulbsPill extends ComboboxPill<BulbHit> {
       console.error(`[mirror] ${verb} failed`, err)
     } finally {
       this.syncBusy.delete(key)
+      // Paint the result now: the listing refresh can outlast the entire 1.2s success tick.
+      this.update()
     }
     // Pull changes local files; push changes the remote listing's world (e.g. a create).
     await (verb === 'pull' ? this.refreshFiles() : this.refreshMine())

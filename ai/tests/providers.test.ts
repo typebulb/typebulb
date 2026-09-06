@@ -5,7 +5,7 @@ import { streamAiChunks } from '../src/sseParser.js'
 
 /**
  * Guards the providers' production wire behavior (web chat, inference, tb.ai, CLI): URL
- * construction, and the Gemini effort-dial translation.
+ * construction, OpenRouter's attribution headers, and the Gemini effort-dial translation.
  *
  * The non-negotiable from the URL-cleanup work order: switching off the `new URL(absolutePath,
  * base)` clobber to a prefix-preserving `joinUrl` must NOT change any provider's URL for its
@@ -70,6 +70,14 @@ describe('default-base URLs are byte-identical to the production endpoints', () 
     // base here yields the same URL these endpoints answered on before the cleanup.
     expect(urlFor('ollama', 'http://localhost:11434/v1')).toBe('http://localhost:11434/v1/chat/completions')
     expect(urlFor('openai-compat', 'http://localhost:1234/v1')).toBe('http://localhost:1234/v1/chat/completions')
+  })
+})
+
+describe('openrouter app attribution', () => {
+  it('sends the referer + title pair on every call, no per-request origin', () => {
+    const h = getProvider('openrouter').buildHeaders('k')
+    expect(h['HTTP-Referer']).toBe('https://typebulb.com')
+    expect(h['X-OpenRouter-Title']).toBe('Typebulb')
   })
 })
 
