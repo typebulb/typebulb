@@ -4,6 +4,9 @@
 // streamed in full.
 export const MAX_BLOCK_CHARS = 50_000
 
+// "463 lines", "2 files" — the count vocabulary of every digest, shared by the adapters.
+export const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
+
 export function capText(s: string): string {
   return s.length > MAX_BLOCK_CHARS
     ? s.slice(0, MAX_BLOCK_CHARS) + `\n…[${s.length - MAX_BLOCK_CHARS} more characters truncated]`

@@ -1,7 +1,7 @@
 import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { capText, dataUriImage, firstLineDigest } from '../../core/server/text.js'
+import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import type { Event, TokenCounts } from '../../core/events.js'
@@ -135,7 +135,6 @@ function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
 }
 
-const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
 const fmtSize = (n: unknown): string =>
   typeof n !== 'number' ? ''
     : n < 1024 ? `${n}B`

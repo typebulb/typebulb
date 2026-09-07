@@ -7,10 +7,13 @@ import { CodexAdapter } from '../agents/codex/server/adapter.js'
 import type { Event, TokenCounts } from '../agents/core/events.js'
 
 /**
- * The Codex adapter against REAL pinned rollouts (tests/fixtures/codex/ — codex-cli 0.146.0,
- * install-verified 2026-08-01; TB-Agent-Codex.md Invariant 7): Codex's next format revision breaks
+ * The Codex adapter against REAL pinned rollouts (tests/fixtures/codex/ — codex-cli 0.146.0 and
+ * 0.153.4, install-verified 2026-08-01 / 2026-09-07; TB-Agent-Codex.md Invariant 7): Codex's next format revision breaks
  * here, loudly, instead of silently blanking the mirror. Unlike the CC/Pi suites (inline shapes),
  * these parse complete on-disk files, because the format is upstream's contract, not ours.
+ * Pinning a new version: a throwaway `codex exec --sandbox danger-full-access --skip-git-repo-check
+ * -C C:\tmp\<dir> "<prompt>"` (full access — Codex's sandbox can't nest inside an agent shell's), then
+ * copy its rollout from ~/.codex/sessions/YYYY/MM/DD/.
  */
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/codex/', import.meta.url))
@@ -18,7 +21,10 @@ const ROLLOUTS = {
   scratchpad: 'rollout-2026-08-01T17-17-42-019fbd79-2998-76e2-9d46-4e149a12853e.jsonl',  // cwd: a Temp scratchpad; 2 execs
   tmp: 'rollout-2026-08-01T17-19-03-019fbd7a-670e-7570-b56d-1bd513346d37.jsonl',         // cwd: C:\tmp; 1 exec
   typebulb: 'rollout-2026-08-01T17-27-27-019fbd82-18ed-7c12-98c6-d7daad4c8014.jsonl',    // cwd: C:\Code\typebulb; no tools
+  patches: 'rollout-2026-09-07T22-01-49-01a07d08-94c4-76c0-801c-9d17650efe92.jsonl',     // cwd: C:\tmp\codex-fixture; 0.153.4 — 2 apply_patch + 1 exec_command
 }
+type Tool = { id: string; name: string; input: Record<string, unknown> }
+const toolsOf = (events: Event[]) => events.filter(e => e.type === 'assistant' && e.tools.length).flatMap(e => (e as { tools: Tool[] }).tools)
 
 // Mimic the engine's drain: parseEntry each line, stamp via idOf (the drain is idOf's only caller).
 function drain(adapter: CodexAdapter, file: string) {
@@ -86,14 +92,59 @@ describe('CodexAdapter rendering (dedup + cleaning)', () => {
 
   it('links each exec tool call to its output by call_id and surfaces the shell_command args', () => {
     const { events } = render(new CodexAdapter(), ROLLOUTS.scratchpad)
-    const calls = events.filter(e => e.type === 'assistant' && e.tools.length).flatMap(e => (e as { tools: { id: string; name: string; input: Record<string, unknown> }[] }).tools)
-    const results = events.filter(e => e.type === 'tool_result') as { id: string; content: string; digest?: string }[]
+    const calls = toolsOf(events)
+    const results = events.filter(e => e.type === 'tool_result') as { id: string; content: string; isError: boolean; digest?: string }[]
     expect(calls.length).toBe(2)
     expect(results.length).toBe(2)
     expect(calls[0].name).toBe('exec')
     expect(String(calls[0].input.command)).toContain('Get-ChildItem env:')   // parsed out of the JS wrapper
     expect(results.map(r => r.id)).toEqual(calls.map(c => c.id))
-    expect(results[0].digest).toMatch(/^Script failed/)   // first line of the sandboxed run's output
+    expect(results[0].digest).toMatch(/^execution error: /)   // the body under the sandbox's Script failed / Wall time / Output: wrapper
+    expect(results.map(r => r.isError)).toEqual([true, true])    // that verdict line is the error flag (both execs failed: nested sandbox)
+  })
+
+  it('unwraps the exec script (0.153.4): apply_patch → a unified diff + path, a whole-file exec_command → read, results unwrapped', () => {
+    const { events } = render(new CodexAdapter(), ROLLOUTS.patches)
+    const calls = toolsOf(events)
+    expect(calls.map(c => c.name)).toEqual(['apply_patch', 'apply_patch', 'read'])
+    // Add File carries no @@ in Codex's grammar — the synthetic hunk header is what trips the client's diff sniff.
+    expect(calls[0].input).toEqual({ path: 'C:/tmp/codex-fixture/notes.txt', patch: '--- /dev/null\n+++ b/C:/tmp/codex-fixture/notes.txt\n@@\n+hello' })
+    expect(calls[1].input).toEqual({ path: 'C:/tmp/codex-fixture/notes.txt', patch: '--- a/C:/tmp/codex-fixture/notes.txt\n+++ b/C:/tmp/codex-fixture/notes.txt\n@@\n-hello\n+hello world' })
+    // `{cmd:"Get-Content -LiteralPath notes.txt",max_output_tokens:100}` — a JS object literal, not JSON; one whole-file read → CC's Read row.
+    expect(calls[2].input).toEqual({ path: 'notes.txt' })
+    // Results unwrapped from the sandbox's `Script completed / Wall time / Output:` — a landed patch digests as its
+    // ± count (the card shows nothing more), the read as its line count with the envelope's `output` as content.
+    const results = events.filter(e => e.type === 'tool_result') as { content: string; isError: boolean; digest?: string }[]
+    expect(results.map(r => r.digest)).toEqual(['+1 −0', '+1 −1', '1 line'])
+    expect(results[2].content).toBe('hello world\r\n')
+    expect(results.map(r => r.isError)).toEqual([false, false, false])
+  })
+
+  it('resolves 0.146’s `const patch = "…"` spelling, numbers a multi-call script, and keeps the raw script as the last resort', () => {
+    const a = new CodexAdapter()
+    const exec = (input: string) => (a.apply(a.parseEntry(JSON.stringify({ timestamp: 'T', type: 'response_item',
+      payload: { type: 'custom_tool_call', name: 'exec', call_id: 'c', input } }))!, 0).events[0] as { tools: Tool[] }).tools[0]
+    expect(exec('const patch = "*** Begin Patch\\n*** Delete File: a.txt\\n*** End Patch"; text(await tools.apply_patch(patch));'))
+      .toMatchObject({ name: 'apply_patch', input: { path: 'a.txt', patch: '--- a/a.txt\n+++ /dev/null\n@@' } })
+    expect(exec('const r = await Promise.all([tools.exec_command({ cmd: "ls", workdir: "/w", }), tools.exec_command({cmd:\'pwd\'})]); text(r);'))
+      .toMatchObject({ name: 'exec', input: { command: 'ls', 'command (2)': 'pwd' } })
+    expect(exec('text(1)').input).toEqual({ script: 'text(1)' })   // no tools.* call at all
+  })
+
+  it('reads: every statement a whole-file read → one read row over its paths; results unwrap the sandbox envelope', () => {
+    const a = new CodexAdapter()
+    const line = (payload: object) => a.parseEntry(JSON.stringify({ timestamp: 'T', type: 'response_item', payload }))!
+    const exec = (input: string) => (a.apply(line({ type: 'custom_tool_call', name: 'exec', call_id: 'c', input }), 0).events[0] as { tools: Tool[] }).tools[0]
+    const out = (output: string) => a.apply(line({ type: 'custom_tool_call_output', call_id: 'c', output }), 0).events[0] as { content: string; isError: boolean; digest?: string }
+    const wrap = (verdict: string, body: string) => `Script ${verdict}\nWall time 0.1 seconds\nOutput:\n${body}`
+    expect(exec(`text(await tools.exec_command({cmd:"Get-Content -Raw -Encoding utf8 'docs/a b.md'; nl -ba b.ts | sed -n '1,40p'", workdir:"/w"}))`))
+      .toEqual({ id: 'c', name: 'read', input: { path: 'docs/a b.md', 'path (2)': 'b.ts' } })
+    expect(out(wrap('completed', '\n{"chunk_id":"x","exit_code":0,"output":"one\\ntwo\\n"}'))).toMatchObject({ content: 'one\ntwo\n', digest: '2 lines', isError: false })
+    // A pipe into a search, a second path, or a non-read statement keeps the exec row (plumbing args dropped).
+    expect(exec('text(await tools.exec_command({cmd:"Get-Content a.md | Select-String foo", yield_time_ms: 10000}))').input).toEqual({ command: 'Get-Content a.md | Select-String foo' })
+    expect(out(wrap('completed', '{"chunk_id":"x","exit_code":1,"output":"boom\\n"}'))).toMatchObject({ content: 'boom\n', digest: 'boom', isError: true })
+    expect(out(wrap('failed', '\nScript error:\nno such file'))).toMatchObject({ content: 'no such file', digest: 'no such file', isError: true })
+    expect(out('Script running with cell ID 4\nWall time 11.0 seconds\nOutput:\n')).toMatchObject({ content: '', digest: 'running (cell 4)', isError: false })
   })
 
   it('takes usage from last_token_usage (cached overlap subtracted) and model from turn_context', () => {
