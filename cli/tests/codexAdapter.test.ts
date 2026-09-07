@@ -165,10 +165,11 @@ describe('CodexAdapter status + picker + search', () => {
     expect(a.chainWorking(entries.slice(0, 1))).toBe(false)   // header only — no turn yet
   })
 
-  it('readPreview is the kickoff user_message', () => {
+  it('readPreview is the kickoff prompt — the user_message event (≤0.146) or the UserMessage item (≥0.153)', () => {
     const a = new CodexAdapter()
     expect(a.readPreview(join(FIXTURES, ROLLOUTS.typebulb))).toBe('testing: 1+1=?')
     expect(a.readPreview(join(FIXTURES, ROLLOUTS.scratchpad))).toMatch(/^Run this exact PowerShell command/)
+    expect(a.readPreview(join(FIXTURES, ROLLOUTS.patches))).toMatch(/^Using the apply_patch tool only: create notes\.txt/)
   })
 
   it('searchText indexes conversation only — never base_instructions, envelopes, or event twins', () => {

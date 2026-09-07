@@ -45,6 +45,8 @@ interface CodexPayload {
   output?: string | CodexBlock[]
   // event_msg user_message / agent_message (render-twins — title source only)
   message?: string
+  // event_msg item_completed (≥0.153 — the twins, as items; UserMessage is the title source)
+  item?: { type?: string; content?: CodexBlock[] }
   // event_msg token_count
   info?: {
     last_token_usage?: {
@@ -579,18 +581,22 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // Codex ships no pid/liveness store — unknowable from disk; the engine falls back to mtime.
   sessionAlive(): boolean | undefined { return undefined }
 
-  // Picker title: the first event_msg user_message — what Codex's own index derives. The envelope
-  // blocks never get a user_message twin, so the first one IS the real kickoff prompt. Head-capped:
-  // session_meta alone is ~18KB and the first turn's injected messages follow it.
+  // Picker title: the kickoff prompt — what Codex's own index stores as the thread title. ≤0.146
+  // wrote it as an event_msg user_message (envelope blocks never get a twin, so the first IS the
+  // prompt); ≥0.153 as an item_completed UserMessage item, envelope-filtered in case one rides
+  // the same shape. Head-capped: session_meta alone is ~18KB and the first turn's injected
+  // messages follow it.
   readPreview(file: string): string {
     for (const line of (readHead(file, 256 * 1024)?.text ?? '').split('\n')) {
-      if (!line.includes('"user_message"')) continue
+      if (!line.includes('"user_message"') && !line.includes('"UserMessage"')) continue
       try {
         const e = JSON.parse(line) as CodexEntry
-        if (e?.type === 'event_msg' && e.payload?.type === 'user_message' && typeof e.payload.message === 'string') {
-          const text = e.payload.message.replace(/\s+/g, ' ').trim()
-          if (text) return text.slice(0, 200)
-        }
+        if (e?.type !== 'event_msg') continue
+        const p = e.payload
+        const text = p?.type === 'user_message' ? p.message
+          : p?.type === 'item_completed' && p.item?.type === 'UserMessage' ? blocksText(p.item.content, true) : undefined
+        const t = (text ?? '').replace(/\s+/g, ' ').trim()
+        if (t) return t.slice(0, 200)
       } catch { /* a truncated trailing line — skip */ }
     }
     return ''
