@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, copyFileSync, writeFileSync, readdirSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, copyFileSync, writeFileSync, readdirSync, utimesSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
@@ -189,7 +189,8 @@ describe('CodexAdapter status + picker + search', () => {
 describe('CodexAdapter discovery (scan-and-filter)', () => {
   // A fake ~/.codex/sessions: date-partitioned, all three fixtures in one day dir, plus the noise
   // the scan must tolerate — a not-yet-flushed empty rollout, a compressed (non-.jsonl) one, and a
-  // `.jsonl` whose first line is complete junk (a corrupt/compressed-in-place file).
+  // `.jsonl` whose first line is complete junk (a corrupt/compressed-in-place file), and a thread
+  // Codex spawned for itself, which shares the cwd of a session the user really had.
   function fakeRoot(): string {
     const root = mkdtempSync(join(tmpdir(), 'tb-codex-'))
     const day = join(root, '2026', '08', '01')
@@ -198,8 +199,18 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     writeFileSync(join(day, 'rollout-2026-08-01T18-00-00-empty.jsonl'), '')
     writeFileSync(join(day, 'rollout-2026-07-01T09-00-00-old.jsonl.zst'), 'compressed')
     writeFileSync(join(day, 'rollout-2026-08-01T18-01-00-junk.jsonl'), 'not json at all\nnor this\n')
+    writeFileSync(join(day, 'rollout-2026-08-01T18-02-00-guardian.jsonl'), JSON.stringify({
+      timestamp: '2026-08-01T18:02:00.000Z', type: 'session_meta',
+      payload: { id: 'g', cwd: 'C:\\Code\\typebulb', parent_thread_id: 'p',
+        thread_source: 'guardian_review', source: { subagent: { other: 'guardian' } } },
+    }) + '\n')
     return root
   }
+
+  // copyFileSync stamps each copy with a CURRENT mtime, which would mask every recency assertion
+  // below (the fix takes the newer of mtime and transcript). Freezing it is also the real shape: a
+  // rollout Codex still holds open keeps a stale mtime while its transcript races ahead.
+  const freeze = (file: string) => { const t = new Date('2020-01-01T00:00:00Z'); utimesSync(file, t, t); return t }
 
   it('filters by session_meta cwd, keyed by file stem', () => {
     const a = new CodexAdapter(fakeRoot())
@@ -222,6 +233,79 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     const a = new CodexAdapter(join(tmpdir(), 'tb-codex-does-not-exist'))
     expect(a.sessionsDir('C:\\x')).toBe(a.sessionsDir('C:\\y'))
     expect(a.listSessionFiles('C:\\x')).toEqual([])
+  })
+
+  // Every real Codex session spawns shadow rollouts (a guardian_review thread per reviewed action,
+  // same cwd) and, being short-lived, they CLOSE — so their mtime is accurate and fresh, and they
+  // sorted into the picker above the very session they were reviewing. A Codex sidechain is a whole
+  // file, so it is dropped here rather than by isSidechain (TB-Agent-Codex.md Invariant 4).
+  it('drops threads Codex spawned for itself', () => {
+    const a = new CodexAdapter(fakeRoot())
+    expect(a.listSessionFiles('C:\\Code\\typebulb').map(s => s.sessionId))
+      .toEqual([ROLLOUTS.typebulb.slice(0, -'.jsonl'.length)])
+  })
+
+  // Codex holds a rollout open for the whole session and Windows defers a held file's mtime — a live
+  // session's measured 53 minutes behind its own last write, which is what made the picker read stale
+  // minutes, sink the live session, and never re-lime it. Recency is the transcript's own last stamp.
+  it('takes recency from the transcript when the file mtime is frozen behind it', () => {
+    const root = fakeRoot()
+    const file = join(root, '2026', '08', '01', ROLLOUTS.typebulb)
+    const frozen = freeze(file)
+    const lines = readFileSync(file, 'utf8').trimEnd().split('\n')
+    const lastWrite = Date.parse(JSON.parse(lines[lines.length - 1]).timestamp)
+    const [hit] = new CodexAdapter(root).listSessionFiles('C:\\Code\\typebulb')
+    expect(hit.mtime).toBe(lastWrite)
+    expect(hit.mtime).toBeGreaterThan(frozen.getTime())
+  })
+
+  // mtime stays the FLOOR, never the discarded operand: it is all we have for a tail we can't parse,
+  // and the fresher signal for a file touched from outside the harness.
+  it('keeps the file mtime as the floor when it runs ahead of the transcript', () => {
+    const root = fakeRoot()
+    const file = join(root, '2026', '08', '01', ROLLOUTS.typebulb)
+    const touched = new Date()
+    utimesSync(file, touched, touched)
+    const [hit] = new CodexAdapter(root).listSessionFiles('C:\\Code\\typebulb')
+    expect(Math.abs(hit.mtime - touched.getTime())).toBeLessThan(10)
+  })
+
+  // The engine's liveness fallback reads that same frozen mtime, so it answered dead on every live
+  // Codex session and the working shimmer never fired. Same signal, right clock.
+  it('answers liveness from the transcript, and only for a session it has listed', () => {
+    const root = fakeRoot()
+    const day = join(root, '2026', '08', '01')
+    const live = join(day, 'rollout-2026-08-01T20-00-00-live.jsonl')
+    writeFileSync(live, [
+      JSON.stringify({ timestamp: '2026-08-01T20:00:00.000Z', type: 'session_meta', payload: { id: 'l', cwd: 'C:\\tmp\\live', source: 'cli' } }),
+      JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'task_started' } }),
+    ].join('\n') + '\n')
+    freeze(live)
+    const a = new CodexAdapter(root)
+    expect(a.sessionAlive('rollout-2026-08-01T20-00-00-live', 'C:\\tmp\\live')).toBeUndefined()   // not listed yet
+    a.listSessionFiles('C:\\tmp\\live')
+    expect(a.sessionAlive('rollout-2026-08-01T20-00-00-live', 'C:\\tmp\\live')).toBe(true)
+    // A session whose last write is a month old is abandoned, not working.
+    const b = new CodexAdapter(root)
+    freeze(join(day, ROLLOUTS.typebulb))
+    b.listSessionFiles('C:\\Code\\typebulb')
+    expect(b.sessionAlive(ROLLOUTS.typebulb.slice(0, -'.jsonl'.length), 'C:\\Code\\typebulb')).toBe(false)
+  })
+
+  // A single entry can dwarf the first tail window — `compacted` snapshots and long tool results run
+  // past 500KB, 16-25 lines a session — and a window landing inside one holds no whole line, which
+  // would drop recency back to the frozen mtime whenever such an entry was the newest.
+  it('finds the last write behind an entry larger than the first tail window', () => {
+    const root = fakeRoot()
+    const file = join(root, '2026', '08', '01', 'rollout-2026-08-01T21-00-00-huge.jsonl')
+    const stamp = '2026-08-02T09:00:00.000Z'
+    writeFileSync(file, [
+      JSON.stringify({ timestamp: '2026-08-01T21:00:00.000Z', type: 'session_meta', payload: { id: 'h', cwd: 'C:\\tmp\\huge', source: 'cli' } }),
+      JSON.stringify({ timestamp: stamp, type: 'compacted', payload: { type: 'compacted', message: 'x'.repeat(600 * 1024) } }),
+    ].join('\n') + '\n')
+    freeze(file)
+    const [hit] = new CodexAdapter(root).listSessionFiles('C:\\tmp\\huge')
+    expect(hit.mtime).toBe(Date.parse(stamp))
   })
 })
 

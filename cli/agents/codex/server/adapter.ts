@@ -1,4 +1,4 @@
-import { statSync, readdirSync, openSync, readSync, closeSync, existsSync } from 'fs'
+import { statSync, fstatSync, readdirSync, openSync, readSync, closeSync, existsSync } from 'fs'
 import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
@@ -31,6 +31,9 @@ interface CodexPayload {
   // session_meta
   id?: string
   cwd?: string
+  // 'cli' / 'vscode' for a conversation the user had; an object carrying `subagent` for a thread
+  // Codex spawned itself (Invariant 4).
+  source?: string | { subagent?: unknown }
   // response_item message
   role?: string                             // 'user' | 'assistant' | 'developer'
   phase?: string                            // assistant: 'commentary' | 'final_answer'
@@ -68,6 +71,10 @@ interface CodexEntry {
   ord?: string
   parent?: string
 }
+
+// What a rollout's session_meta decides about the file: the cwd discovery filters on, and whether
+// Codex spawned it as a child thread rather than a conversation the user had.
+interface CodexMeta { cwd: string; subagent: boolean }
 
 // Injected envelope markers (verified 0.146.0 — TB-Agent-Codex.md § Cleaning). The last two arrive
 // as role `user`, so blocks are filtered by marker, not role. `<user_instructions>` is Codex's
@@ -400,6 +407,10 @@ const normCwd = (p: string) => {
   return process.platform === 'win32' ? abs.toLowerCase() : abs
 }
 
+// How long a mid-turn session may go silent before it reads as abandoned rather than working — sized
+// to Codex's measured within-turn write gaps (Invariant 9), not the engine's 10s.
+const ABANDONED_MS = 120_000
+
 export class CodexAdapter extends AgentAdapter<CodexEntry> {
   readonly displayName = 'Codex Mirror'
 
@@ -409,9 +420,15 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // first entry of a new drain points at an id absent from it, which the walk treats as the root.
   #seq = 0
   #last: string | undefined
-  // session_meta cwd per rollout file — immutable once written, so cached forever on a successful
+  // session_meta facts per rollout file — immutable once written, so cached forever on a successful
   // parse only (a just-created file may not have flushed its first line yet; retried next listing).
-  #cwdCache = new Map<string, string>()
+  #metaCache = new Map<string, CodexMeta>()
+  // Last-activity time per file, keyed by the stat that produced it: a rollout only ever grows, so an
+  // unchanged (size, mtime) pair means an unchanged tail and the cached read stands.
+  #recency = new Map<string, { size: number; mtime: number; ms: number }>()
+  // sessionId → file, refreshed by every listing — how sessionAlive resolves the id the contract
+  // hands it without a rescan (the listing is per-poll-while-unattached by design; this is not).
+  #files = new Map<string, string>()
   // What a result needs from its call (PendingCall), keyed by call_id; consumed by the output it answers.
   #calls = new Map<string, PendingCall>()
 
@@ -439,22 +456,38 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     const want = normCwd(cwd)
     const out: SessionFile[] = []
     for (const file of this.#rolloutFiles()) {
-      let mtime: number
+      let size = 0, mtimeMs = 0
       try {
         const st = statSync(file)
         if (!st.isFile()) continue
-        mtime = st.mtimeMs
+        size = st.size; mtimeMs = st.mtimeMs
       } catch { continue }                  // races / permissions — skip
-      let sessionCwd = this.#cwdCache.get(file)
-      if (sessionCwd === undefined) {
-        sessionCwd = readMetaCwd(file)
-        if (sessionCwd === undefined) continue          // first line not flushed yet — retry next listing
-        this.#cwdCache.set(file, sessionCwd)
+      let meta = this.#metaCache.get(file)
+      if (meta === undefined) {
+        meta = readMeta(file)
+        if (meta === undefined) continue                // first line not flushed yet — retry next listing
+        this.#metaCache.set(file, meta)
       }
-      if (normCwd(sessionCwd) !== want) continue
-      out.push({ sessionId: basename(file, '.jsonl'), file, mtime })
+      if (meta.subagent) continue           // a thread Codex spawned, not one the user had (Invariant 4)
+      if (normCwd(meta.cwd) !== want) continue
+      const sessionId = basename(file, '.jsonl')
+      this.#files.set(sessionId, file)
+      // Recency is read AFTER the filters: on a machine of many projects, only this one's rollouts
+      // pay the tail read, so the scan's cost per foreign rollout is the stat and head it always was.
+      out.push({ sessionId, file, mtime: this.#lastActivity(file, size, mtimeMs) })
     }
     return out
+  }
+
+  // Last activity, NOT the file's mtime: Codex holds a rollout open for the whole session, and Windows
+  // freezes a held file's mtime — 53 minutes stale on a live session, measured (Invariant 9). The
+  // transcript's own trailing timestamp is the write record; mtime stays as the floor.
+  #lastActivity(file: string, size: number, mtimeMs: number): number {
+    const hit = this.#recency.get(file)
+    if (hit && hit.size === size && hit.mtime === mtimeMs) return hit.ms
+    const ms = Math.max(mtimeMs, readTailStamp(file) ?? 0)
+    this.#recency.set(file, { size, mtime: mtimeMs, ms })
+    return ms
   }
 
   // The `.jsonl` files under root/YYYY/MM/DD — three fixed levels, stray entries tolerated.
@@ -491,8 +524,9 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   }
   parentOf(e: CodexEntry) { return e.parent }
   timestampOf(e: CodexEntry) { return e.timestamp }
-  // Multi-agent records are sidechain by design (Invariant 4), but their on-disk shape is still
-  // unverified (⚠ checklist) — until then nothing is excluded, and unknown types render nothing.
+  // A Codex sidechain is a whole FILE, not an entry: a spawned child thread gets its own rollout
+  // (Invariant 4), which discovery drops and which never enters the parent's chain — so there is
+  // nothing here to exclude.
   isSidechain(_e: CodexEntry) { return false }
   // Every entry is chain tip when it lands — the chain is linear and append-only, and the trailing
   // token_count / task_complete of a turn must emit immediately, not wait for the next user turn.
@@ -578,8 +612,18 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     return working
   }
 
-  // Codex ships no pid/liveness store — unknowable from disk; the engine falls back to mtime.
-  sessionAlive(): boolean | undefined { return undefined }
+  // No pid store, but not unknowable from disk — and NOT the engine's mtime fallback, which reads dead
+  // on every live Codex session (#lastActivity). The window is generous because chainWorking already
+  // pins the turn exactly; all this catches is one abandoned mid-flight (Invariant 9). An id no
+  // listing has seen returns undefined, as before.
+  sessionAlive(sessionId: string): boolean | undefined {
+    const file = this.#files.get(sessionId)
+    if (!file) return undefined
+    let last: number
+    try { const st = statSync(file); last = this.#lastActivity(file, st.size, st.mtimeMs) }
+    catch { return undefined }
+    return Date.now() - last < ABANDONED_MS
+  }
 
   // Picker title: the kickoff prompt — what Codex's own index stores as the thread title. ≤0.146
   // wrote it as an event_msg user_message (envelope blocks never get a twin, so the first IS the
@@ -624,17 +668,62 @@ function readHead(file: string, cap: number): { text: string; bytes: number } | 
   } finally { closeSync(fd) }
 }
 
-// The cwd a rollout's first line (session_meta) records. `undefined` means ONLY "not flushed yet" —
-// the caller retries. Every PERMANENT miss returns '' (never matches a cwd) so it caches: otherwise a
-// junk `.jsonl` costs a 64KB read per listing forever, and the listing runs per poll while unattached.
-function readMetaCwd(file: string): string | undefined {
+// Tail-capped UTF-8 read — readHead's mirror, sized and positioned off the same handle it reads, so a
+// growing file can't tear the two apart. `partial` marks a read that began past byte 0, whose first
+// line is therefore a fragment.
+function readTail(file: string, cap: number): { text: string; partial: boolean } | undefined {
+  let fd: number
+  try { fd = openSync(file, 'r') } catch { return undefined }
+  try {
+    const from = Math.max(0, fstatSync(fd).size - cap)
+    const buf = Buffer.alloc(cap)
+    const n = readSync(fd, buf, 0, cap, from)
+    return { text: buf.subarray(0, n).toString('utf8'), partial: from > 0 }
+  } finally { closeSync(fd) }
+}
+
+// Two windows, because a single entry can dwarf the first — a `compacted` snapshot or long tool result
+// runs past 500KB — and a window landing inside one holds no whole line at all (Invariant 9).
+const TAIL_WINDOWS = [64 * 1024, 1024 * 1024]
+
+// The timestamp of a rollout's last COMPLETE line — the one recency signal a held-open rollout keeps
+// current (#lastActivity). `undefined` when no whole line parses even in the larger window; the
+// caller's mtime floor then stands, and the session's next append corrects it.
+function readTailStamp(file: string): number | undefined {
+  for (const cap of TAIL_WINDOWS) {
+    const tail = readTail(file, cap)
+    if (tail === undefined) return undefined
+    const lines = tail.text.split('\n')
+    if (tail.partial) lines.shift()         // a fragment, not a line
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].trim()) continue
+      try {
+        const ms = Date.parse((JSON.parse(lines[i]) as CodexEntry).timestamp ?? '')
+        if (!Number.isNaN(ms)) return ms
+      } catch { /* the trailing line is torn mid-write — the one before it is whole */ }
+    }
+    if (!tail.partial) break                // the whole file was in the window; a wider read can't help
+  }
+  return undefined
+}
+
+// What a rollout's first line (session_meta) records: the cwd discovery filters on, and whether Codex
+// spawned the thread itself. `undefined` means ONLY "not flushed yet" — the caller retries. Every
+// PERMANENT miss returns a cwd that never matches so it caches: otherwise a junk `.jsonl` costs a 64KB
+// read per listing forever, and the listing runs per poll while unattached.
+function readMeta(file: string): CodexMeta | undefined {
   const CAP = 64 * 1024                     // session_meta runs ~18KB (base_instructions) — 3.5x headroom
   const head = readHead(file, CAP)
   if (head === undefined) return undefined
   const nl = head.text.indexOf('\n')
-  if (nl < 0) return head.bytes >= CAP ? '' : undefined   // a FULL read with no newline ⇒ over the cap
+  if (nl < 0) return head.bytes >= CAP ? { cwd: '', subagent: false } : undefined   // FULL read, no newline ⇒ over the cap
   try {
     const e = JSON.parse(head.text.slice(0, nl)) as CodexEntry
-    return e?.type === 'session_meta' && typeof e.payload?.cwd === 'string' ? e.payload.cwd : ''
-  } catch { return '' }                     // the line is complete (a newline followed it) — junk, not a race
+    const p = e?.type === 'session_meta' ? e.payload : undefined
+    if (typeof p?.cwd !== 'string') return { cwd: '', subagent: false }
+    // `source.subagent` is the structural marker, not the churning `thread_source` name (observed
+    // `guardian_review`, `subagent`) — and not `parent_thread_id`, which a fork of a real
+    // conversation also carries and which must stay visible.
+    return { cwd: p.cwd, subagent: typeof p.source === 'object' && !!p.source?.subagent }
+  } catch { return { cwd: '', subagent: false } }   // the line is complete (a newline followed) — junk, not a race
 }
