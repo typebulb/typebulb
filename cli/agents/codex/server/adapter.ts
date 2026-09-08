@@ -76,12 +76,18 @@ interface CodexEntry {
 // Codex spawned it as a child thread rather than a conversation the user had.
 interface CodexMeta { cwd: string; subagent: boolean }
 
-// Injected envelope markers (verified 0.146.0 — TB-Agent-Codex.md § Cleaning). The last two arrive
-// as role `user`, so blocks are filtered by marker, not role. `<user_instructions>` is Codex's
-// AGENTS.md injection wrapper — same class, not yet observed in the fixtures.
+// Injected envelope markers (TB-Agent-Codex.md § Cleaning). Several arrive as role `user`, so blocks
+// are filtered by marker, not role. Every entry is a marker OBSERVED in a real rollout: the guessed
+// `<user_instructions>` that used to sit here never matched anything, which is how 14KB of AGENTS.md
+// reached the transcript verbatim.
 const ENVELOPE_MARKERS = [
   '<permissions instructions>', '<apps_instructions>', '<plugins_instructions>',
-  '<skills_instructions>', '<recommended_plugins>', '<environment_context>', '<user_instructions>',
+  '<skills_instructions>', '<recommended_plugins>', '<environment_context>',
+  '<node_repl_review_evidence>',
+  // The AGENTS.md injection (0.153.4), the one marker that is a heading rather than a tag: a
+  // `# AGENTS.md instructions for <abs path>` line over the file wrapped in `<INSTRUCTIONS>`. Matched
+  // by its fixed prefix, since the path varies — and so the only marker a user could type by hand.
+  '# AGENTS.md instructions for ',
 ]
 function isEnvelope(text: string): boolean {
   const t = text.trimStart()

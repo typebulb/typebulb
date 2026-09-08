@@ -22,6 +22,7 @@ const ROLLOUTS = {
   tmp: 'rollout-2026-08-01T17-19-03-019fbd7a-670e-7570-b56d-1bd513346d37.jsonl',         // cwd: C:\tmp; 1 exec
   typebulb: 'rollout-2026-08-01T17-27-27-019fbd82-18ed-7c12-98c6-d7daad4c8014.jsonl',    // cwd: C:\Code\typebulb; no tools
   patches: 'rollout-2026-09-07T22-01-49-01a07d08-94c4-76c0-801c-9d17650efe92.jsonl',     // cwd: C:\tmp\codex-fixture; 0.153.4 — 2 apply_patch + 1 exec_command
+  agentsmd: 'rollout-2026-09-08T21-58-16-01a0822b-b25c-7b62-bd85-9cff9f369171.jsonl',    // cwd: C:\tmp\codex-agentsmd; 0.153.4 — an AGENTS.md injection, no tools
 }
 type Tool = { id: string; name: string; input: Record<string, unknown> }
 const toolsOf = (events: Event[]) => events.filter(e => e.type === 'assistant' && e.tools.length).flatMap(e => (e as { tools: Tool[] }).tools)
@@ -88,6 +89,20 @@ describe('CodexAdapter rendering (dedup + cleaning)', () => {
     expect(texts.length).toBe(2)
     // Encrypted reasoning (empty summary) renders nothing.
     expect(events.some(e => e.type === 'assistant' && e.thinking)).toBe(false)
+  })
+
+  // The AGENTS.md injection is an envelope like the rest, but its marker is a heading rather than a
+  // tag, so the guessed `<user_instructions>` never matched and it reached the transcript verbatim —
+  // every conversation opening on 14KB of the project's own instructions instead of the prompt.
+  it('drops the AGENTS.md injection — the conversation opens on the real prompt', () => {
+    const { events } = render(new CodexAdapter(), ROLLOUTS.agentsmd)
+    // The first user message is nothing BUT envelopes (recommended_plugins, the AGENTS.md wrapper,
+    // environment_context), so with every block filtered it emits no event at all — no empty bubble.
+    const users = events.filter(e => e.type === 'user') as { text: string }[]
+    expect(users.map(u => u.text)).toEqual(['testing: 2+2=?'])
+    expect(events.some(e => e.type === 'user' && e.text.includes('<INSTRUCTIONS>'))).toBe(false)
+    // …and the filter stops at the envelope: the turn it wrapped still renders.
+    expect(events.filter(e => e.type === 'assistant' && e.text).map(e => (e as { text: string }).text)).toEqual(['4'])
   })
 
   it('links each exec tool call to its output by call_id and surfaces the shell_command args', () => {
@@ -310,7 +325,7 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
 })
 
 describe('codex fixtures stay pinned', () => {
-  it('all three verified rollouts are present', () => {
+  it('every verified rollout is present', () => {
     expect(readdirSync(FIXTURES).filter(f => f.endsWith('.jsonl')).sort()).toEqual(Object.values(ROLLOUTS).sort())
   })
 })
