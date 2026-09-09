@@ -440,10 +440,39 @@ function fitTableEmbeds(root: Element) {
   }
 }
 
-// A relative-path link in assistant markdown is a local file citation (optionally
-// with a #Lnnn line anchor): open it in the editor, not the browser — the bulb is
-// served from the project root, so the browser would GET the path and 404. Links
-// with a scheme (http, mailto, …) fall through to the default new-tab behavior.
+// A path link in assistant markdown is a local file citation: open it in the editor, not the browser
+// — the page is served from the project root, so the browser would GET the path and 404. Links with a
+// scheme (http, mailto, …) fall through to the default new-tab behavior. `undefined` ⇒ not a citation.
+//
+// Two line-anchor spellings, because agents cite files differently and neither is ours to dictate:
+// `#Lnnn` (what Claude Code writes) and the `path:line` every compiler and terminal prints (what
+// Codex writes). Measured on one project's Codex transcripts, 98 of 117 citations were dead before
+// this normalized them.
+export function citationTarget(href: string): { path: string; line?: number } | undefined {
+  if (!href || href.includes('://') || href.startsWith('//') || href.startsWith('#') || /^(mailto|tel):/i.test(href)) return undefined
+  let rest = href
+  let line: number | undefined
+  const hashAt = rest.indexOf('#')
+  if (hashAt >= 0) {
+    const anchor = /^L(\d+)/.exec(rest.slice(hashAt + 1))
+    if (anchor) line = parseInt(anchor[1], 10)
+    rest = rest.slice(0, hashAt)
+  }
+  let path = decodeURIComponent(rest)
+  // `/C:/x` — an absolute drive path still carrying a file URL's leading slash. Left on, the browser
+  // resolves it against the page origin, which is the `http://localhost:<port>/C:/…` a dead citation
+  // shows on hover (and navigates to on ctrl-click).
+  path = path.replace(/^\/(?=[a-zA-Z]:)/, '')
+  // `…/App.tsx:68`, `:68:5` — the terminal spelling of the same anchor. Requiring digits is what keeps
+  // a bare `C:` drive colon out of it; an explicit `#Lnnn` already read wins.
+  const tail = /:(\d+)(?::\d+)?$/.exec(path)
+  if (tail && line === undefined) {
+    line = parseInt(tail[1], 10)
+    path = path.slice(0, tail.index)
+  }
+  return path ? { path, line } : undefined
+}
+
 function onMarkdownClick(e: Event) {
   // Per-fence copy: the source is on the button's own data-src (see copyButton), so no container walk.
   const copyBtn = (e.target as Element | null)?.closest<HTMLButtonElement>('.copy-src')
@@ -457,13 +486,10 @@ function onMarkdownClick(e: Event) {
   }
   const anchor = (e.target as Element | null)?.closest('a')
   if (!anchor) return
-  const href = anchor.getAttribute('href') ?? ''
-  if (!href || href.includes('://') || href.startsWith('//') || href.startsWith('#') || /^(mailto|tel):/i.test(href)) return
+  const target = citationTarget(anchor.getAttribute('href') ?? '')
+  if (!target) return
   e.preventDefault()
-  const hashAt = href.indexOf('#')
-  const path = hashAt >= 0 ? href.slice(0, hashAt) : href
-  const lineMatch = hashAt >= 0 ? /^L(\d+)/.exec(href.slice(hashAt + 1)) : null
-  tb.server.openFile(decodeURIComponent(path), lineMatch ? parseInt(lineMatch[1], 10) : undefined)
+  tb.server.openFile(target.path, target.line)
 }
 
 // The bare markdown→HTML passes, before the DOM post-passes in mountMarkdown. Exposed for unit tests
