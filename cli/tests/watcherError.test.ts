@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'events'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 
 /**
  * A watcher error must never crash the server (TB-Assets.md § Watch): chokidar emits 'error'
@@ -17,7 +20,7 @@ vi.mock('chokidar', () => ({
   default: { watch: () => { const w = new FakeWatcher(); emitters.push(w); return w } },
 }))
 
-const { watchPath } = await import('../src/serve/watcher.js')
+const { watchPath, watchAssets } = await import('../src/serve/watcher.js')
 
 describe('watchPath error resilience', () => {
   it('survives a watcher error and keeps delivering changes', async () => {
@@ -33,5 +36,45 @@ describe('watchPath error resilience', () => {
 
     cleanup()
     expect(w.close).toHaveBeenCalled()
+  })
+})
+
+/**
+ * Watching `assets/` itself pinned the bulb's folder: Windows refuses a rename or move of every
+ * ancestor of a watched directory (TB-Assets.md § Watch), so the folder couldn't be moved while
+ * the bulb ran. Rooting the watch at the folder keeps it movable. Real fs — the pin is the OS's.
+ */
+describe('watchAssets', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-assets-watch-'))
+  const bulbDir = path.join(root, 'birds')
+  const assets = path.join(bulbDir, 'assets')
+  // Linux before Node 20 has no recursive watch and falls back to chokidar, mocked in this file.
+  const recursive = (() => {
+    try { fs.watch(root, { recursive: true }, () => {}).close(); return true } catch { return false }
+  })()
+
+  it('leaves the bulb folder movable while it watches', async () => {
+    fs.mkdirSync(assets, { recursive: true })
+    fs.writeFileSync(path.join(assets, 'robin.png'), 'x')
+    const cleanup = watchAssets(bulbDir, () => {})
+    expect(() => fs.renameSync(bulbDir, `${bulbDir}-moved`)).not.toThrow()
+    fs.renameSync(`${bulbDir}-moved`, bulbDir)
+    cleanup()
+  })
+
+  it.skipIf(!recursive)('reloads on an asset save but not on the bulb folder\'s other files', async () => {
+    fs.mkdirSync(assets, { recursive: true })
+    const onChange = vi.fn()
+    const cleanup = watchAssets(bulbDir, onChange, 10)
+    const settle = () => new Promise(r => setTimeout(r, 400))
+
+    fs.writeFileSync(path.join(bulbDir, 'run.json'), '{}')   // tb.fs output: never a reload
+    await settle()
+    expect(onChange).not.toHaveBeenCalled()
+
+    fs.writeFileSync(path.join(assets, 'robin.png'), 'new bytes')
+    await settle()
+    expect(onChange).toHaveBeenCalled()
+    cleanup()
   })
 })

@@ -8,7 +8,7 @@ import { replaceBulbBlock, CHUNK_SEPARATOR, hostedAssetsBase } from 'typebulb/fo
 import { predictTrust } from '../bulb/predictTrust.js'
 import { startAndRegister } from '../serve/serveSession.js'
 import { resolvePort, lastRunTimes, assignedPortFor } from '../serve/portBlocks.js'
-import { watchPath } from '../serve/watcher.js'
+import { watchPath, watchAssets } from '../serve/watcher.js'
 import { startServerLog, stopServersForBulb, runMarker } from '../serve/serverRegistry.js'
 import { bulbStreamKey } from '../serve/paths.js'
 import { RECONNECT_WINDOW_MS } from '../bulb/pageChrome.js'
@@ -232,14 +232,11 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       })
     }
 
-    // Watch the assets/ dir if it exists at launch — an asset save reloads the browser, no
-    // recompile (TB-Assets.md). Created later needs a relaunch.
-    if (await fs.stat(assetsDir).then(s => s.isDirectory()).catch(() => false)) {
-      onCleanup(watchPath({
-        target: assetsDir,
-        events: 'all',
-        onChange: () => reloadPages('Assets changed.'),
-      }))
+    // Watch the bulb's folder for asset saves — a reload, no recompile (TB-Assets.md § Watch).
+    // Rooted at the folder, not `assets/`, so the folder stays movable while the bulb runs.
+    const bulbDir = bulbDataDir(bulbPath)
+    if (await fs.stat(bulbDir).then(s => s.isDirectory()).catch(() => false)) {
+      onCleanup(watchAssets(bulbDir, () => reloadPages('Assets changed.')))
     }
   }
 
