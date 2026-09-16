@@ -1508,8 +1508,26 @@ a.agent-name:hover { text-decoration: underline; }
    inline bulb and a spread bulb). `100%` in --lane-ml resolves against each user's own containing block
    (prose width) at point of use, so both centre on the column axis — which is the viewport centre,
    since the gutters are symmetric. One home so the geometry can't drift between the two (the bug
-   that let an off-centre nudge survive in one rule after being removed from the other). */
-.md { --lane-w: calc(100vw - 2rem); --lane-ml: calc((100% - var(--lane-w)) / 2); }
+   that let an off-centre nudge survive in one rule after being removed from the other).
+   --chop-inset (the stripe-chop's reach into the gutter) and --chop-bg (the fill that covers the
+   stripe) live here too: all four describe the transcript column, so all four are the container's
+   to declare rather than the artifact's. */
+.md {
+  --lane-w: calc(100vw - 2rem); --lane-ml: calc((100% - var(--lane-w)) / 2);
+  --chop-inset: 1rem; --chop-bg: var(--bg);
+}
+
+/* A padded panel that holds rendered markdown redeclares all four as its own box: a sub-agent
+   hand-back frame (TB-Agent-Children.md), a disclosure, a blockquote. Inside one there is no turn
+   stripe to reach for or to cover, so the reach and the fill go to zero and an embed keeps only its
+   vertical band, while the lane collapses to the panel: a wide table then shares the panel's width
+   through its two ceilings and scrolls in .table-scroll, instead of a band that bleeds over the
+   card's border and paints page colour across its tint. The reset must land on the `.md` element
+   itself, since `.md` declares the defaults on itself and would beat a rule on an ancestor. The
+   next panel is one more selector here. */
+.bubble.user > .md, .md details, .md blockquote {
+  --lane-w: 100%; --lane-ml: 0px; --chop-inset: 0px; --chop-bg: transparent;
+}
 
 /* Full-lane breakout — the mermaid embed (whole element) and a SPREAD bulb's iframe step out of
    the prose column to the transcript width so wide content gets room. Both use --lane-w/--lane-ml
@@ -1541,7 +1559,7 @@ a.agent-name:hover { text-decoration: underline; }
   overflow-x: auto;
   display: flex;
   justify-content: safe center;
-  box-shadow: 0 0 0 1rem var(--bg);
+  box-shadow: 0 0 0 1rem var(--chop-bg);
 }
 /* flex-shrink:0: otherwise the SVG shrinks to the flex container and its viewBox
    scales it down — no overflow, no scrollbar. Natural width is what scrolls. */
@@ -1593,8 +1611,8 @@ a.agent-name:hover { text-decoration: underline; }
    space that already reads as margin, while on the right the lane's own 1rem inset is all there is
    between the table and the bar. Inset both sides equally and the left gap measures a gutter wider
    than the right; inset neither and the table sits flush against the bar, which is the bug. So the
-   band adds back one inset on the right, and the table's cap comes down by the same 1rem or it would
-   overflow the band's content box by exactly that at every width — the permanent scrollbar the
+   band adds back one inset on the right, and the table's cap comes down by that same inset or it
+   would overflow the band's content box by exactly that at every width — the permanent scrollbar the
    zeroed inset was avoiding. */
 .md .table-embed.spread {
   justify-content: safe center;
@@ -1602,9 +1620,9 @@ a.agent-name:hover { text-decoration: underline; }
   margin-left: var(--lane-ml);
   margin-right: auto;
   padding-left: 0;
-  padding-right: 1rem;
+  padding-right: var(--chop-inset);
 }
-.md .table-embed.spread table { max-width: calc(var(--lane-w) - 1rem); }
+.md .table-embed.spread table { max-width: calc(var(--lane-w) - var(--chop-inset)); }
 
 /* ````bulb```` inline bulbs: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
    borderless). No frame of our own — like the mermaid/svg embeds, it sits in the flow rather
@@ -1616,9 +1634,10 @@ a.agent-name:hover { text-decoration: underline; }
    under a live inline bulb (both monospace, muted red). */
 /* The stripe-chop, shared by every opaque in-column visual artifact (the fit bulb and a raw
    `svg` — each opts in by carrying `.embed`). An opaque bg over position:relative + z-index:0
-   paints above .bubble::before; a -1rem left extension reaches the stripe in the gutter without a
-   full breakout (padding-left:1rem keeps the content in the prose column, and the box's right edge
-   stays at prose-right, so a bulb's controls anchored there don't move). The vertical gap is opaque
+   paints above .bubble::before; a --chop-inset left extension reaches the stripe in the gutter
+   without a full breakout (the matching padding-left keeps the content in the prose column, and the
+   box's right edge stays at prose-right, so a bulb's controls anchored there don't move); inside a
+   panel both zero out (the nesting reset above). The vertical gap is opaque
    padding, not margin: it occludes the stripe top and bottom so the cut is flush with the prose (no
    stub in a transparent gap), symmetric above/below to separate the artifact from surrounding text.
    margin top/bottom are zeroed — and the abutting prose margins too (below) — so the gap butts the
@@ -1628,9 +1647,9 @@ a.agent-name:hover { text-decoration: underline; }
   display: flex;
   position: relative;
   z-index: 0;
-  background: var(--bg);
-  margin: 0 0 0 -1rem;
-  padding: 1.1rem 0 1.1rem 1rem;
+  background: var(--chop-bg);
+  margin: 0 0 0 calc(-1 * var(--chop-inset));
+  padding: 1.1rem 0 1.1rem var(--chop-inset);
 }
 /* A bulb stacks its controls/frame/code vertically; in spread mode the inner iframe's own
    breakout covers the stripe too (the wrapper still chops in column). */
