@@ -9,7 +9,7 @@
 // client also consumes (as `ServerEvent`). The adapter's job is to turn one raw JSONL entry into that
 // stream; the engine owns the tree walk, the locks, the poll buffer, and the RPC surface.
 
-import type { ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatus, Event, SessionFile, TokenCounts } from '../events.js'
+import type { ChildTranscript, ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatus, Event, SessionFile, Thread, TokenCounts } from '../events.js'
 
 /**
  * A harness the mirror can drive, through a process the mirror itself spawned and owns
@@ -125,6 +125,25 @@ export abstract class AgentAdapter<E = unknown> {
   abstract sessionsDir(cwd: string): string
   /** The `*.jsonl` session files under `sessionsDir(cwd)`, each with its id + mtime. */
   abstract listSessionFiles(cwd: string): SessionFile[]
+  /**
+   * This session's child transcripts (TB-Agent-Children.md) — the conversations it spawned, each its
+   * own file. Optional capability, like `createDriver`: absent ⇒ the harness has no children and the
+   * agents pill never renders (pi, Codex). MUST NOT overlap `listSessionFiles`: a child is never an
+   * attach candidate (Children Invariant 1), so the two discovery paths stay separate.
+   */
+  listChildren?(cwd: string, sessionId: string): ChildTranscript[]
+
+  /**
+   * The spawn ids this entry SETTLES — the child that call spawned has stopped
+   * (TB-Agent-Children.md). Optional, like `listChildren`; an adapter without children needs none,
+   * and one that omits it leaves every child running while its session is.
+   *
+   * Deliberately not "the entry holds a tool_result", which the engine used to assume. A harness may
+   * answer the spawn call at LAUNCH and report the outcome elsewhere — CC's background agents do
+   * exactly that — so "the parent answered the call" and "the child finished" are two different
+   * facts, and only the adapter knows which of its entries carries the second one.
+   */
+  settlesSpawns?(e: E): string[]
 
   // ── tree schema: the engine walks the parent-linked tree through these, never a literal field ──
   /** Parse one JSONL line into a typed entry, or null to drop it (a JSON error, a header, a line with
@@ -136,8 +155,11 @@ export abstract class AgentAdapter<E = unknown> {
   abstract parentOf(e: E): string | undefined
   /** The entry's ISO timestamp (used to order an orphan branch chronologically). */
   abstract timestampOf(e: E): string | undefined
-  /** A sub-agent / sidechain thread, excluded from the live-chain leaf and from fork surfacing. */
-  abstract isSidechain(e: E): boolean
+  /** Is this entry OFF the thread the view renders — excluded from the live-chain leaf and from fork
+   *  surfacing? `thread` is what the view is showing, so a harness whose child entries carry a flag
+   *  inverts the test inside a child (TB-Agent-Children.md); one with no such concept returns false
+   *  for both. */
+  abstract isSidechain(e: E, thread: Thread): boolean
   /** A conversational turn — the candidate set for the live-chain leaf. */
   abstract isLeafType(e: E): boolean
   /** Error-recovery noise dropped from an orphaned branch (CC `isApiErrorMessage`; Pi: none). */
@@ -164,6 +186,18 @@ export abstract class AgentAdapter<E = unknown> {
   abstract chainWorking(entries: E[]): boolean
   /** Is the session's owning process alive? `undefined` ⇒ unknowable from disk (engine falls back). */
   abstract sessionAlive(sessionId: string, cwd: string): boolean | undefined
+
+  /**
+   * The sessions this harness reports as **mid-turn right now**, for the picker's working dot.
+   * Optional: omit it and rows show no working cue, which is the honest answer for a harness that
+   * cannot say. Batch on purpose — the picker asks about every row at once, so a per-row question
+   * would turn one directory read into hundreds.
+   *
+   * Distinct from `sessionAlive`, and the distinction is the whole point: a process stays alive for
+   * as long as its window is open, so liveness is true of nearly every row and says nothing. This
+   * asks the narrower question the dot actually means.
+   */
+  sessionsWorking?(cwd: string): Set<string> | undefined
 
   // ── picker + search ──
   /** The session's dropdown title/preview (harness-specific precedence). */

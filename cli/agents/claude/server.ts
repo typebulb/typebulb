@@ -20,7 +20,7 @@ export const displayName = adapter.displayName
 // composerPasteRead (read-only, paste-dir-scoped) and summarizeTurn (render-only) ride along
 // composer-less: any mirror renders a paste-mention thumbnail it encounters in a transcript, and
 // Every prose-bearing turn can expose its local Summary tab.
-export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, composerPasteRead, summarizeTurn } = createMirror(adapter)
+export const { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, listChildren, openChild, closeChild, composerPasteRead, summarizeTurn } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'
@@ -28,5 +28,5 @@ export * from './server/switcher.js'
 
 // Test surface (imported by name from './server.js'): the Claude cleaning/schema helpers and the
 // neutral text cap. `openFile` rides the launcher re-export above.
-export { isHiddenTurn, blockToMarkdown, cleanUserText, toolResultDigest } from './server/adapter.js'
+export { isHiddenTurn, blockToMarkdown, cleanUserText, agentMessage, toolResultDigest } from './server/adapter.js'
 export { capText, firstLineDigest } from '../core/server/text.js'

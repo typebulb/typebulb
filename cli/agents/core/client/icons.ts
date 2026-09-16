@@ -19,7 +19,10 @@ export const icons = {
 // Custom glyphs with no Material equivalent — allowed, deliberately (an icon earns a custom svg
 // when Material has nothing right; same contract as a downloaded one: a single <svg>, currentColor,
 // full-bleed 16-viewBox). caret: the disclosure triangle every collapsible rotates via CSS.
-// fork: the abandoned-branch ⑂ (U+2442 renders tiny from fallback fonts; Material has no git-fork).
+// abandoned: the ⊘ on a dropped branch's stub. It marks the abandonment, not the branching: the
+// branch is what put it there, but the stub is readable history, so a destructive mark (a bomb, a
+// bin) would claim the one thing that isn't true of it. Replaced a ⑂, whose geometry was the
+// agents pill's mirror image at 14px (TB-Agent-Children.md).
 // diff: the git-diff pill's ± — two-color by design (plus in --diff-add, minus in --err, the same
 // vars as the diff bands it opens; injected svg resolves CSS vars), which no single-color Material
 // glyph can be. The currentColor exemption: its own stroke colors ARE the point.
@@ -34,7 +37,7 @@ const custom = {
   // the viewing diff pill's close × — Material's close is a heavier fill glyph; this stays in the
   // check/push stroke register.
   close: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
-  fork: '<svg viewBox="0 0 16 16" fill="none"><path d="M4 2 V8 H12 V2 M8 8 V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="square"/></svg>',
+  abandoned: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="currentColor" stroke-width="1.8"/><path d="M4.3 11.7 L11.7 4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   // viewBox cropped to the ink (the stacked +/− is tall and narrow): a full 16-box in a square icon
   // shell reads as phantom side padding in the pill.
   diff: '<svg viewBox="4 2 8 12" fill="none"><path d="M5.25 6 H10.75 M8 3.25 V8.75" stroke="var(--diff-add)" stroke-width="1.8" stroke-linecap="round"/><path d="M5.25 12.5 H10.75" stroke="var(--err)" stroke-width="1.8" stroke-linecap="round"/></svg>',

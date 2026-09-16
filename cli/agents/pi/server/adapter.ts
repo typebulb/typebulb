@@ -135,7 +135,7 @@ export class PiAdapter extends AgentAdapter<PiEntry> {
   idOf(raw: PiEntry) { return raw.id }
   parentOf(raw: PiEntry) { return raw.parentId ?? undefined }   // null (a root) → undefined
   timestampOf(raw: PiEntry) { return raw.timestamp }
-  isSidechain(_raw: PiEntry) { return false }                   // pi has no sidechain concept in the transcript
+  isSidechain(_raw: PiEntry) { return false }                   // pi has no sidechain concept, and no children
   isLeafType(raw: PiEntry) { return isConversational(raw) }
   isRecoveryNoise(_raw: PiEntry) { return false }               // no api-error sibling concept observed
 

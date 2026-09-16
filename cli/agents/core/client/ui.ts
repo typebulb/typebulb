@@ -1,4 +1,5 @@
 import { Component, div, span, button, inputText, type VElement } from 'domeleon'
+import { icon } from './icons.js'
 
 /** Whether a scroll container rests within `px` of its bottom — the sticky-autoscroll test. */
 export const stuckToBottom = (el: Element, px: number) =>
@@ -45,11 +46,16 @@ export function searchFilter(opts: {
       // Keydown (not keyup) so arrows can preventDefault and repeat; the host decides what each does.
       attrs: { class: 'bulb-filter', placeholder: opts.placeholder, ariaLabel: opts.placeholder, onKeyDown: opts.onKeyDown },
     }),
-    opts.hasValue
-      ? button({ class: 'bulb-filter-clear', type: 'button', 'data-tip': 'Clear filter', ariaLabel: 'Clear filter',
-          onClick: (e: MouseEvent) => { e.stopPropagation(); opts.onClear() } }, '×')
+    // Both inset controls flow in one right-anchored cluster, so neither carries an offset that
+    // hardcodes the other's width.
+    opts.hasValue || opts.trailing
+      ? div({ class: 'bulb-filter-inset' },
+          opts.hasValue
+            ? button({ class: 'bulb-filter-clear', type: 'button', 'data-tip': 'Clear filter', ariaLabel: 'Clear filter',
+                onClick: (e: MouseEvent) => { e.stopPropagation(); opts.onClear() } }, '×')
+            : null,
+          opts.trailing ?? null)
       : null,
-    opts.trailing ?? null,
   )
 }
 
@@ -74,6 +80,12 @@ export const hitsBadge = (n: number | undefined) =>
 
 export const snippetLine = (snippet: string | undefined, q: string) =>
   snippet ? div({ class: 'picker-snippet' }, highlight(snippet, q)) : null
+
+// The × a pill wears while it holds the transcript's slot (the diff doc, an open child) — the one
+// way back, so both swap-pills carry the same key hint and the same accessible name.
+export const closeChip = (onClose: () => void) =>
+  span({ class: 'pill-close', 'data-tip': 'Back to the conversation (Esc)', ariaLabel: 'Back to the conversation',
+    onClick: (e: MouseEvent) => { e.stopPropagation(); onClose() } }, icon('close'))
 
 // Outside-click closer. Deferred via setTimeout so the opening click doesn't
 // immediately fire it; `armed` covers disarm racing ahead of the addEventListener.

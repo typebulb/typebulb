@@ -43,6 +43,8 @@ export abstract class StatusPill extends Component {
 // A StatusPill whose popover is a filter box over a keyboard-navigable list (the session picker and
 // the bulb launcher). The filter has two modes behind one input: the default matches the rows' own
 // labels; an inset toggle flips to full-text search over a server-side corpus (R is one search hit).
+// A menu with no corpus to search (the diff pill's changed files, the agents pill's children) simply
+// doesn't implement `search`, and the mode toggle, its gate and its tooltip all drop out with it.
 // Everything corpus-agnostic lives here — filter text, highlight cursor, key handling, the search
 // mode's gate / debounce / stale-result guard, and the shared popover chrome (filterBox, emptyState)
 // — so the two menus can't drift. Subclasses supply the rows (results join into rows() however fits
@@ -69,10 +71,11 @@ export abstract class ComboboxPill<R> extends StatusPill {
   // CSS selector for the rows' scroll container (pinToBottom / scrollIntoView need the real node).
   protected abstract listSelector: string
   protected abstract onActivate(index: number): void
-  // The server search for one query, newest-first.
-  protected abstract search(query: string): Promise<R[]>
-  // What the default mode filters on, for the toggle's tooltip ("Back to <noun> filter").
-  protected abstract filterNoun: string
+  // The server search for one query, newest-first. Absent ⇒ this menu has no full-text mode.
+  protected search?(query: string): Promise<R[]>
+  // What the default mode filters on, for the toggle's tooltip ("Back to <noun> filter"). Only read
+  // when `search` exists, so a searchless menu leaves it alone.
+  protected filterNoun = ''
   // The rows the popover currently lists (filtered, or search-joined); subclasses narrow the type.
   abstract rows(): object[]
 
@@ -182,7 +185,7 @@ export abstract class ComboboxPill<R> extends StatusPill {
   // selectivity, where one Latin char matches everything.
   get searchActive() {
     const q = this.filter.trim()
-    return this.fullText && (q.length >= 2 || /[^\x00-\x7f]/.test(q))
+    return !!this.search && this.fullText && (q.length >= 2 || /[^\x00-\x7f]/.test(q))
   }
 
   // delay 0 = search now (the mode toggle); the default debounces keystrokes.
@@ -196,7 +199,7 @@ export abstract class ComboboxPill<R> extends StatusPill {
   protected async runSearch() {
     const seq = ++this.#searchSeq
     try {
-      const results = await this.search(this.filter.trim())
+      const results = await this.search!(this.filter.trim())   // only reached through searchActive
       if (seq !== this.#searchSeq || !this.open) return   // a newer query superseded this one
       this.results = results.reverse()                    // server sends newest-first; display is newest-at-bottom
       this.searching = false
@@ -229,7 +232,7 @@ export abstract class ComboboxPill<R> extends StatusPill {
       hasValue: !!this.filter,
       onKeyDown: (e: KeyboardEvent) => this.onFilterKey(e),
       onClear: () => this.clearFilter(),
-      trailing: this.modeToggle(),
+      trailing: this.search ? this.modeToggle() : undefined,
     })
   }
 

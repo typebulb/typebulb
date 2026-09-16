@@ -34,8 +34,8 @@ function oneLine(s: string): string {
 // The one disclosure triangle every collapsible renders (a custom icons.ts glyph — SVG, not a font
 // glyph: glyphs centre unpredictably); open is the same shape rotated by CSS.
 const caret = (open: boolean) => icon('caret', ['caret-tri', open ? 'open' : ''])
-// The abandoned-branch fork mark — icons.ts's custom ⑂.
-const forkIcon = () => icon('fork', 'fork-icon')
+// The abandoned-branch mark — icons.ts's custom ⊘ (the stub is still a fork; its mark says dropped).
+const forkIcon = () => icon('abandoned', 'fork-icon')
 
 // A unified diff riding in a string input (patcher's `diff`, a pasted git patch). Content-sniffed —
 // an @@ hunk header plus a +/- line — so any tool qualifies, no tool-name coupling; prose can't
@@ -229,13 +229,15 @@ export class MessageList extends Component {
 
   applyUser(e: Extract<ServerEvent, { type: 'user' }>) {
     const prev = this.messages[this.messages.length - 1]
-    if (prev && prev.role === 'user') {                       // an assistant message between resets the run
+    // An agent's hand-back is its own framed turn, so it neither folds into an adjacent send nor
+    // takes one into itself (TB-Agent-Children.md).
+    if (prev && prev.role === 'user' && !e.agent && !prev.agent) {   // an assistant message between resets the run
       this.#mergeUserText(prev, e.text)
       if (prev.copy) prev.copy.setText(prev.text)
       else if (prev.text) prev.copy = this.#makeCopy(prev.text)
       return
     }
-    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [] })
+    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [], agent: e.agent })
   }
 
   applyAssistant(e: Extract<ServerEvent, { type: 'assistant' }>) {
@@ -680,13 +682,31 @@ export class MessageList extends Component {
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
-    return div({ class: ['bubble', msg.role, toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
+    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
       turnView ? turnView.view(live) : null,
+      msg.agent ? this.#agentHead(msg.agent.from) : null,
       raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       raw ? msg.tools.map(t => this.tool(t)) : null,
       this.#controls(copy),
+    )
+  }
+
+  // The hand-back's frame: the agents pill's glyph, and — when the id resolves to a child of this
+  // session — its kind and description, clicking through to that transcript (TB-Agent-Children.md).
+  // An id that resolves to nothing still frames: the turn is the agent's either way, and saying so
+  // is the point. The same list and the same gesture the `Agent` tool row uses, keyed by id not spawn.
+  #agentHead(from: string) {
+    const child = this.parent.children.find(c => c.id === from)
+    return div({ class: 'agent-head' },
+      span({ class: 'glyph-img' }, '🤖'),
+      span({ class: 'agent-kind' }, child?.kind ?? 'agent'),
+      child
+        ? a({ class: 'agent-name', title: `Open this ${child.kind} agent's transcript`,
+              onClick: (e: MouseEvent) => { e.preventDefault(); this.parent.openChild(child.id) } },
+            child.label || child.kind)
+        : span({ class: 'agent-name' }, from.slice(0, 8)),
     )
   }
 
@@ -743,7 +763,12 @@ export class MessageList extends Component {
           : this.#renderInline(seg))
     }
     if (!msg.text) return null
-    return this.#mdDiv(`md-${msg.id}`, msg.role === 'user' ? userMarkdown(msg) : renderMarkdown(msg.text))
+    // A hand-back sits in a user bubble but is authored markup, not keystrokes, so it renders through
+    // the assistant pipeline: the allowlist parser exists because misrendering what a person TYPED is
+    // worse than not rendering it, and that reason doesn't reach a report the model wrote in markdown
+    // (TB-Agent-Children.md). Headings, lists and tables in a sub-agent's report are meant as such.
+    const user = msg.role === 'user' && !msg.agent
+    return this.#mdDiv(`md-${msg.id}`, user ? userMarkdown(msg) : renderMarkdown(msg.text))
   }
 
   // A live or lone inline bulb renders its app. A superseded one folds to a "<Name> — Version N" stub whose
@@ -770,8 +795,16 @@ export class MessageList extends Component {
     const open = this.openTools.has(t.id)
     const filePath = filePathOf(t.input)
     const todos = todosOf(t)
+    // The child transcript this call spawned, if any (TB-Agent-Children.md) — the way into a
+    // sub-agent from the turn that started it, which is where you are when you want it.
+    const child = this.parent.children.find(c => c.spawnId === t.id)
     // File paths display project-relative (full path in the title + the click); the rest one-lined.
     const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input))
+    // One link treatment, two destinations: a file opens in the editor, an Agent row opens its
+    // child's conversation. Both are the summary itself, so no row grows an extra control.
+    const follow = child ? () => this.parent.openChild(child.id)
+      : filePath ? () => { tb.server.openFile(filePath) }
+      : undefined
     // The head is inert prose (only the file-path link reacts); the digest row below is the toggle.
     return div({ class: ['tool', t.isError ? 'err' : ''] },
       div({ class: 'tool-head' },
@@ -780,13 +813,13 @@ export class MessageList extends Component {
         div({ class: 'tool-label' },
           span({ class: 'tool-name', ...(t.name.startsWith('mcp__') ? { title: t.name } : {}) }, toolDisplayName(t.name)),
           sum
-            ? (filePath
+            ? (follow
                 ? a({
                     class: 'tool-sum link',
-                    title: filePath,
+                    title: child ? `Open this ${child.kind} agent's transcript` : filePath,
                     onClick: (e: MouseEvent) => {
                       e.preventDefault()
-                      tb.server.openFile(filePath)
+                      follow()
                     },
                   }, sum)
                 : span({ class: 'tool-sum' }, sum))

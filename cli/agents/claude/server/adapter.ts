@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
-import type { Event, TokenCounts } from '../../core/events.js'
+import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
 
 // The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
 // schema-specific about CC's on-disk transcript — the `uuid`/`parentUuid` tree, the `isSidechain`/
@@ -27,6 +27,9 @@ interface JsonlEntry {
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage }
   usage?: TokenUsage
   attachment?: { type?: string; prompt?: unknown; commandMode?: string }
+  // A `queue-operation` line's payload — the text CC queued. It is where a task-notification is
+  // recorded FIRST, at the moment the agent stops (settlesSpawns).
+  content?: string
   // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
   // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
   toolUseResult?: unknown
@@ -60,7 +63,98 @@ function sanitizePath(p: string): string {
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
 const projectDir = (cwd: string) => join(PROJECTS_DIR, sanitizePath(cwd))
 
+// CC writes each sub-agent to its own transcript beside the session that spawned it:
+// `<projectDir>/<sessionId>/subagents/agent-<agentId>.jsonl` plus an `.meta.json` label
+// (TB-Agent-Children.md). The folder is flat at every depth — a depth-2 child sits beside its own
+// parent — so the tree comes from `parentAgentId`, never from the layout.
+const CHILD_DIR = 'subagents'
+
+// Only the meta fields we read; CC writes a few more (requestShape, requestNonInteractive).
+interface ChildMeta {
+  agentType?: string
+  description?: string
+  toolUseId?: string
+  spawnDepth?: number
+  parentAgentId?: string
+  model?: string
+  stoppedByUser?: boolean
+}
+
+function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
+  const dir = join(projectDir(cwd), sessionId, CHILD_DIR)
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return [] }        // no children, or no session dir yet
+  const out: ChildTranscript[] = []
+  for (const name of names) {
+    if (!name.endsWith('.jsonl')) continue
+    const file = join(dir, name)
+    let mtime: number
+    try { mtime = statSync(file).mtimeMs } catch { continue }  // races / permissions — skip
+    const stem = name.slice(0, -'.jsonl'.length)
+    let meta: ChildMeta = {}
+    try { meta = JSON.parse(readFileSync(join(dir, `${stem}.meta.json`), 'utf8')) as ChildMeta } catch {}
+    // The id is the bare agentId, so a child's `parentAgentId` names its parent's id directly.
+    out.push({
+      id: stem.startsWith('agent-') ? stem.slice('agent-'.length) : stem,
+      file, mtime,
+      label: meta.description ?? '',
+      kind: meta.agentType ?? 'agent',
+      model: meta.model,
+      spawnId: meta.toolUseId,
+      parentId: meta.parentAgentId,
+      depth: meta.spawnDepth ?? 1,
+      stopped: !!meta.stoppedByUser,
+    })
+  }
+  return out
+}
+
 // A base64 image block → an inline markdown image, so it renders instead of dumping its raw base64.
+
+// CC's structured result for an Agent call it launched in the BACKGROUND: `{ isAsync: true, status:
+// 'async_launched', agentId, … }`, with result text "Async agent launched successfully". The call is
+// answered at launch and the agent runs on, so this result must never settle its spawn — that bug
+// showed every background child as finished from the moment it started (TB-Agent-Children.md).
+function isAsyncLaunch(r: unknown): boolean {
+  if (!r || typeof r !== 'object') return false
+  const o = r as { isAsync?: unknown; status?: unknown }
+  return o.status === 'async_launched' || o.isAsync === true
+}
+
+// Where a `<task-notification>` can ride. THREE shapes occur: CC delivers it as an ordinary user
+// turn whose content is a plain string, as a queued-command attachment when it had to queue it
+// mid-turn, and it records the enqueue itself as a `queue-operation` line. Reading only the
+// attachment left agents stuck green for hours.
+//
+// The queue-operation is the EARLIEST of the three, written when the agent stops rather than when
+// the notification is delivered, and it is the only one that arrives when the parent is idle with
+// nobody to deliver to. Measured: delivery normally follows the enqueue within 0.1s, but 103 of 3422
+// ids on disk were enqueued and never delivered in that file at all. It carries no `uuid`, so it
+// only reaches here through the settlement scan, never through the chain.
+function notificationText(e: JsonlEntry): string {
+  if (e.type === 'attachment' && e.attachment?.type === 'queued_command') return toText(e.attachment.prompt)
+  if (e.type === 'user' && typeof e.message?.content === 'string') return e.message.content
+  if (e.type === 'queue-operation' && typeof e.content === 'string') return e.content
+  return ''
+}
+
+// The ids a `<task-notification>` settles: its `<tool-use-id>` (the spawn call) AND its `<task-id>`
+// (the agent itself), because two notifications in twenty-one carried only the latter. CC's own note
+// is the contract — it "fires each time this agent stops" — so every status is terminal (observed:
+// completed, failed, killed, stopped) and none needs special-casing.
+//
+// Deliberately NOT bounded by the closing tag: one block in fourteen was written without one, and a
+// bounded match skipped it silently. Scanning unbounded is safe because `<tool-use-id>` appears
+// nowhere else in a transcript (19 of 19 occurrences measured), and the guard below keeps the scan
+// to text that is a notification at all.
+function notifiedIds(text: string): string[] {
+  if (!text.includes('<task-notification>')) return []
+  const out: string[] = []
+  for (const re of [/<tool-use-id>\s*([^<\s]+)/g, /<task-id>\s*([^<\s]+)/g])
+    for (const m of text.matchAll(re)) out.push(m[1])
+  return out
+}
+
 // '' for any non-image block. Exported for the imageBlock test.
 export function blockToMarkdown(b: ContentBlock | undefined): string {
   const src = b?.type === 'image' ? b.source : undefined
@@ -131,6 +225,54 @@ export function cleanUserText(text: string): string {
   if (!t) return ''
   return commandLine(t) ?? (isInternal(t) ? '' : t)
 }
+
+// CC hands a finished sub-agent's report back as a user turn wrapped in an `<agent-message>`
+// envelope: a security preamble addressed to the model, then the report with every line indented.
+// Both are transport, so the turn reduces to the report and carries the agent it came from — the
+// same move as commandLine, where the envelope is noise but the content is the turn. `from` is the
+// child's agentId, which is what lets the frame link to its transcript (TB-Agent-Children.md).
+// Anchored at the block start like INTERNAL_PATTERNS, so prose quoting the tag is never eaten. The
+// carrier that delivers 16 of the 20 hand-backs on disk wraps the envelope in prose on BOTH sides:
+// a lead-in line ("Another Claude session sent a message:") and a trailing security note. Both are
+// addressed to the model, so the body ends at the closing tag and the note is dropped with it. The
+// lead-in can't start with `<`, so it can never swallow a second tag.
+// The CLOSING tag is nonetheless OPTIONAL, for the reason the task-notification scan is unbounded: a
+// report past the 50k text cap arrives truncated, and requiring the tag would drop the frame on
+// exactly the longest reports — so the body runs to the end when there is none. Measured: 20 of 20
+// on-disk hand-backs parse, max 11k.
+// Exported for the userTextNoise test.
+const AGENT_MESSAGE = /^(?:[^\n<][^\n]*\n)?<agent-message from="([^"]+)">\n([\s\S]*?)(?:\n?<\/agent-message>[\s\S]*)?$/
+const HANDBACK_PREAMBLE = /^\[[^\]\n]+\][\s\S]*?The report follows:\n/
+export function agentMessage(text: string): { from: string; body: string } | undefined {
+  const m = AGENT_MESSAGE.exec(text.trim())
+  if (!m) return undefined
+  return { from: m[1], body: dedent(m[2].replace(HANDBACK_PREAMBLE, '')) }
+}
+
+// The report arrives uniformly indented (CC's own anti-forgery frame), which markdown would read as
+// a code block. Strip the shallowest indent any line carries, never more — the report's own nesting
+// is relative to that.
+function dedent(text: string): string {
+  const widths = text.split('\n').filter(l => l.trim()).map(l => l.length - l.trimStart().length)
+  const n = widths.length ? Math.min(...widths) : 0
+  return n ? text.split('\n').map(l => l.slice(n)).join('\n') : text
+}
+
+// One user-turn event from an already-cleaned text block, framed when it is an agent's hand-back.
+function userEvent(text: string): Event {
+  const m = agentMessage(text)
+  return m ? { type: 'user', text: m.body, agent: { from: m.from } } : { type: 'user', text }
+}
+
+// CC flags a hand-back `isMeta`, because the harness injected it rather than the user typing it. But
+// unlike the skill bodies and resume nudges that flag exists to hide, this injection CARRIES the
+// content the reader came for, so it is the one isMeta turn that still renders — the same exception
+// the queued_command attachment already earns (TB-Agent-Children.md). The two carriers are disjoint
+// (no agent id was ever written as both, 20 of 20), so surfacing this one can't double-render.
+function isHandback(e: JsonlEntry): boolean {
+  const c = e.message?.content
+  return typeof c === 'string' && !!agentMessage(c)
+}
 function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
 }
@@ -185,11 +327,12 @@ export function toolResultDigest(r: unknown, content: string): string {
   return firstLineDigest(content)
 }
 
-// A turn the mirror never shows: a sub-agent sidechain, or one of CC's isMeta injections (a launched
-// skill's full body, command caveats, /loop resume nudges). Display-only: the entry stays in the chain.
-// Exported for the hiddenTurn test.
-export function isHiddenTurn(entry: { isSidechain?: boolean; isMeta?: boolean }): boolean {
-  return !!entry.isSidechain || !!entry.isMeta
+// A turn the mirror never shows: one of CC's isMeta injections (a launched skill's full body, command
+// caveats, /loop resume nudges). Display-only: the entry stays in the chain. Which THREAD an entry
+// belongs to is not a display question and isn't asked here — a transcript file never mixes threads,
+// so `isSidechain` answers it against the view (TB-Agent-Children.md). Exported for the hiddenTurn test.
+export function isHiddenTurn(entry: { isMeta?: boolean }): boolean {
+  return !!entry.isMeta
 }
 
 // The session's display title for the dropdown / tab. Mirrors CC's own precedence: a user rename
@@ -264,6 +407,30 @@ function sessionAlive(sessionId: string): boolean {
   return false
 }
 
+// The sessions CC reports as mid-turn: a record whose pid is alive AND whose `status` reads busy.
+// One directory read for the whole picker, so no per-row cost and no cache to go stale.
+//
+// `status` is CC's own turn state, written on transition rather than heartbeated. Measured against
+// `chainWorking` across ten live sessions on 2026-09-16: `idle` agreed 8 of 8, `busy` agreed once and
+// disagreed once on a session whose status was 62 minutes old — so a stale-busy dot is the failure
+// mode to watch, and the reason this is gated on busy rather than on liveness, which was tried first
+// and showed green on seven idle sessions (TB-Agent-Mirror-Ready.md).
+function workingSessionIds(): Set<string> {
+  const ids = new Set<string>()
+  let names: string[]
+  try { names = readdirSync(SESSIONS_DIR) } catch { return ids }
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue
+    try {
+      const rec = JSON.parse(readFileSync(join(SESSIONS_DIR, n), 'utf8'))
+      if (!rec?.sessionId || rec.status !== 'busy') continue
+      process.kill(rec.pid, 0)               // throws if the pid is gone
+      ids.add(rec.sessionId)
+    } catch { /* unreadable record or dead pid — skip it */ }
+  }
+  return ids
+}
+
 export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   readonly displayName = 'Claude Mirror'
 
@@ -276,6 +443,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   sessionsDir(cwd: string) { return projectDir(cwd) }
   listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(cwd)) }
+  listChildren(cwd: string, sessionId: string) { return listChildren(cwd, sessionId) }
 
   parseEntry(line: string): JsonlEntry | null {
     try { return JSON.parse(line) as JsonlEntry } catch { return null }
@@ -283,20 +451,22 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   idOf(raw: JsonlEntry) { return raw.uuid }
   parentOf(raw: JsonlEntry) { return raw.parentUuid }
   timestampOf(raw: JsonlEntry) { return raw.timestamp }
-  isSidechain(raw: JsonlEntry) { return !!raw.isSidechain }
+  // Every entry in a child transcript carries isSidechain, so the flag means "off this view's
+  // thread" only against the thread being rendered (TB-Agent-Children.md).
+  isSidechain(raw: JsonlEntry, thread: Thread) { return !!raw.isSidechain !== (thread === 'child') }
   // The live-chain leaf is a non-sidechain user/assistant entry. An isMeta entry stays leaf-eligible
   // (it keeps its place in the chain); the display filter (isHiddenTurn) drops it in apply().
   isLeafType(raw: JsonlEntry) { return raw.type === 'user' || raw.type === 'assistant' }
   isRecoveryNoise(raw: JsonlEntry) { return !!raw.isApiErrorMessage }
 
   apply(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
-    if (isHiddenTurn(entry)) return { events: [] }   // sub-agent threads + CC's isMeta injections
+    if (isHiddenTurn(entry) && !isHandback(entry)) return { events: [] }   // CC's isMeta injections
     const events: Event[] = []
     if (entry.type === 'user') {
       const content = entry.message?.content
       if (typeof content === 'string') {
         const text = cleanUserText(content)
-        if (text) events.push({ type: 'user', text })
+        if (text) events.push(userEvent(text))
       } else if (Array.isArray(content)) {
         for (const b of content) {
           if (b?.type === 'tool_result') {
@@ -304,7 +474,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
             events.push({ type: 'tool_result', id: b.tool_use_id ?? '', content, isError: !!b.is_error, digest: toolResultDigest(entry.toolUseResult, content) })
           } else {
             const text = userTextBlock(b) || blockToMarkdown(b)
-            if (text) events.push({ type: 'user', text })
+            if (text) events.push(userEvent(text))
           }
         }
       }
@@ -313,7 +483,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
     if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command') {
       // A message the user queued while CC was mid-turn; CC never re-emits it as a user turn.
       const text = cleanUserText(toText(entry.attachment.prompt))
-      if (text) events.push({ type: 'user', text })
+      if (text) events.push(userEvent(text))
       return { events }
     }
     if (entry.type === 'assistant') {
@@ -374,6 +544,25 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   }
 
   sessionAlive(sessionId: string) { return sessionAlive(sessionId) }
+
+  sessionsWorking(_cwd: string) { return workingSessionIds() }
+
+  // What says a child has stopped (TB-Agent-Children.md). Two shapes, because CC has two:
+  // a FOREGROUND Agent call is answered when its agent finishes, so its tool_result settles the
+  // spawn; a BACKGROUND one is answered at launch and reports its outcome later as a
+  // task-notification attachment naming the same tool-use-id. Reading only the first marked every
+  // background child finished the instant it started.
+  settlesSpawns(e: JsonlEntry): string[] {
+    const notified = notifiedIds(notificationText(e))
+    if (notified.length) return notified
+    if (e.type === 'user') {
+      if (isAsyncLaunch(e.toolUseResult)) return []
+      const content = e.message?.content
+      if (!Array.isArray(content)) return []
+      return content.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id ?? '').filter(Boolean)
+    }
+    return []
+  }
 
   readPreview(file: string) { return readPreview(file) }
 

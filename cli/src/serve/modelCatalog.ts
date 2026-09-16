@@ -29,6 +29,9 @@ const CATALOG_URL = 'https://api.typebulb.com/api/models'
 const CATALOG_TTL = 24 * 60 * 60 * 1000 // 24 hours
 const CATALOG_TIMEOUT = 5000 // bound a single fetch so a hung upstream can't stall the menu
 const OLLAMA_TTL = 60 * 1000 // local models change rarely; cache so repeated menu opens don't re-probe
+// Loopback answers in single-digit ms; the bound is for a host that accepts the connection and then
+// never answers, which the refused-connection assumption below would have failed instantly.
+const OLLAMA_TIMEOUT = 1500
 let catalogCache: { models: TbModelDto[]; fetchedAt: number } | undefined
 let ollamaCache: { models: TbModelDto[]; fetchedAt: number } | undefined
 // The last catalog-fetch failure, or null after any success — lets a caller tell an empty list from
@@ -80,13 +83,14 @@ async function getCatalogModels(): Promise<TbModelDto[]> {
  *  short TTL so the frequently-hit model list (e.g. a switcher menu reopening, which doesn't even
  *  use Ollama) doesn't re-probe every call. Returns `[]` if Ollama isn't running or the host is
  *  unreachable — never throws, never blocks discovery. The default host is probed even without
- *  OLLAMA_HOST so local setups just work; a connection-refused on loopback is fast. */
+ *  OLLAMA_HOST so local setups just work; a connection-refused on loopback is fast, and a host that
+ *  accepts without answering is capped by OLLAMA_TIMEOUT rather than stalling every caller. */
 async function getOllamaModels(): Promise<TbModelDto[]> {
   if (ollamaCache && Date.now() - ollamaCache.fetchedAt <= OLLAMA_TTL) return ollamaCache.models
   const host = normalizeOllamaHost(process.env.OLLAMA_HOST ?? 'http://localhost:11434')
   let models: TbModelDto[] = []
   try {
-    const resp = await fetch(new URL('/api/tags', host).toString())
+    const resp = await fetch(new URL('/api/tags', host).toString(), { signal: AbortSignal.timeout(OLLAMA_TIMEOUT) })
     if (resp.ok) {
       const data = await resp.json() as { models?: Array<{ name?: string }> }
       models = (data.models ?? [])

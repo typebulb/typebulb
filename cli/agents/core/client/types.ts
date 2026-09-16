@@ -4,8 +4,8 @@ import type { TurnView } from './turnView.js'
 import type { InlineBulb } from './inlineBulb.js'
 // The poll() event union + token shape are the server↔client wire contract — one canonical definition
 // in core/events.ts (no more "keep in sync" copy). `ServerEvent` is the client's name for `Event`.
-import type { ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, Event as ServerEvent, TokenCounts } from '../events.js'
-export type { ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, ServerEvent, TokenCounts }
+import type { ChildRow, ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, Event as ServerEvent, SessionRow, TokenCounts } from '../events.js'
+export type { ChildRow, ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, ServerEvent, SessionRow, TokenCounts }
 
 // An agent-specific status-bar pill injected into the neutral Root (e.g. Claude's model switcher).
 // Root renders `view()` in its status bar — which wires the pill's `ctx.parent` to Root (IRoot), the
@@ -110,6 +110,11 @@ export interface IRoot {
   messageList: IMessageList
   closePopups(except?: unknown): void
   updateTitle(): void
+  // The attached session's child transcripts (TB-Agent-Children.md), and the swap into one. The
+  // agents pill owns both; the message list reads the list so an `Agent` tool row can offer a way
+  // into the child it spawned. Empty on every harness without children.
+  children: ChildRow[]
+  openChild(id: string): void
   // Re-fetch the session list and re-render; the session pill/tab title read from that fetched data,
   // so a metadata change (e.g. a /name recipe) needs this to show without reopening the picker.
   refreshSessions(): void
@@ -127,7 +132,9 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // `turnView` owns that turn's local Raw | Reply | Summary state and on-demand summary.
 // `fork` is set only on a `role: 'fork'` pseudo-message — a collapsed stub for an abandoned branch
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] } }
+// `agent` marks a user turn the harness delivered for a sub-agent (TB-Agent-Children.md): the text is
+// that agent's report, so it frames rather than folding into a neighbouring send.
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string } }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 // `lastRunAt` = the port block's launch time for this bulb (0 when never run) — the use half of

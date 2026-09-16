@@ -181,13 +181,13 @@ body {
    session list). Wrap = positioning context; the popover anchors bottom/right and
    grows up-and-left — the chips sit in the right-aligned cluster, so left:0 would
    run them off the viewport's right edge. */
-.token-wrap, .sid-wrap, .servers-wrap, .model-wrap, .gitdiff-wrap { position: relative; display: inline-block; }
+.token-wrap, .sid-wrap, .servers-wrap, .model-wrap, .gitdiff-wrap, .children-wrap { position: relative; display: inline-block; }
 /* Each pill renders its wrap unconditionally, emitting an empty div when it has
    nothing to show (no tokens / no session / nothing running). An empty wrap is
    still a flex child, so .statusbar-actions' gap lands on both its sides —
    doubling the visible gap between its neighbours. Collapse the empties so the
    cluster spaces evenly regardless of which pills are present. */
-.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty, .gitdiff-wrap:empty { display: none; }
+.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty, .gitdiff-wrap:empty, .children-wrap:empty { display: none; }
 .picker, .servers-pop {
   --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
                               mismatched cap reads as a glitch; .picker grows to it, .servers-pop
@@ -644,9 +644,11 @@ body.tips-off [data-tip]::after { display: none; }
 .picker-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* Keyboard cursor (arrow keys / hover) — same borderless tint as the launcher's .server-row.active. */
 .picker-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-/* The attached session — a leading accent dot in its own gutter slot, reserved (transparent) on
-   every row so titles align whether or not it's shown, and filled only on the attached row so it
-   reads as "you are here" even when the cursor has moved off. */
+/* One dot in a reserved gutter slot, transparent on every row so titles align whether or not it
+   shows. Green = the harness reports this session mid-turn (the live-app axis, the launcher's
+   running-:port green); accent = "you are here", and it wins, because the row you are reading is
+   self-evidently working and a second mark at 7px would say nothing new. Deliberately NOT process
+   liveness, which is true of every window left open — see TB-Agent-Mirror-Ready.md. */
 .picker-dot {
   flex: none;
   align-self: center;
@@ -655,6 +657,8 @@ body.tips-off [data-tip]::after { display: none; }
   border-radius: 50%;
   background: transparent;
 }
+.picker-dot.working { background: var(--fold-marker); }
+/* Higher specificity than .working on purpose: attachment outranks the turn state. */
 .picker-row.current .picker-dot { background: var(--accent); }
 .picker-preview {
   flex: 1; min-width: 0;
@@ -670,6 +674,12 @@ body.tips-off [data-tip]::after { display: none; }
    (--fold-marker) when the session changed since the mirror opened and hasn't been viewed. */
 .picker-time.unseen { color: var(--fold-marker); }
 .picker-hits { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+/* A full-text hit inside a session's child transcript (TB-Agent-Children.md): indented under its
+   parent's row and muted, at the SAME size — the row's distinguishing content is the agent's
+   description, so shrinking it is the last thing that should happen to it. */
+.picker-row.child { padding-left: 1.9rem; }
+.picker-row.child .picker-preview { color: var(--muted); }
+.picker-child-kind { flex: none; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); opacity: .8; }
 /* Full-text result context: first matching turn, indented past the dot gutter into the title column. */
 .picker-snippet {
   color: var(--muted);
@@ -947,21 +957,20 @@ a.server-port:hover { text-decoration: underline; }
 }
 .bulb-filter::placeholder { color: var(--muted); }
 .bulb-filter:focus { outline: none; border-color: var(--accent); }
+/* The inset controls (clear ×, then the mode toggle) flow in one cluster flush to the input's
+   top/right/bottom, inside its 1px border — so neither carries an offset for the other's width. */
+.bulb-filter-inset { position: absolute; right: 1px; top: 1px; bottom: 1px; display: flex; align-items: stretch; }
 /* Clear (×) — only rendered when the filter is non-empty; wipes it and refocuses the box. */
 .bulb-filter-clear {
-  position: absolute; right: .3rem; top: 50%; transform: translateY(-50%);
   appearance: none; border: none; background: transparent; cursor: pointer;
   color: var(--muted); font-size: 1.05rem; line-height: 1; padding: 0 .3rem; border-radius: 4px;
 }
 .bulb-filter-clear:hover { color: var(--accent); }
-/* Filter-mode toggle (full-text search) — inset at the input's right edge; the clear × shifts
-   inward beside it. Both comboboxes render it (SearchComboboxPill's modeToggle). */
+/* Filter-mode toggle (full-text search) — the cluster's right end. Both comboboxes render it
+   (ComboboxPill's modeToggle). */
 .bulb-filter-control.has-trailing .bulb-filter { padding-right: 3.8rem; }
-.bulb-filter-control.has-trailing .bulb-filter-clear { right: 2.5rem; }
 .bulb-filter-mode {
-  /* Stretches flush to the input's top/right/bottom, inside its 1px border; the right corners
-     match the input's 6px radius so the latched fill reads as part of the box. */
-  position: absolute; right: 1px; top: 1px; bottom: 1px;
+  /* The right corners match the input's 6px radius so the latched fill reads as part of the box. */
   appearance: none; border: none; background: transparent; cursor: pointer;
   font-size: .8rem; line-height: 1; padding: 0 .45rem;
   border-radius: 0 5px 5px 0;
@@ -1164,10 +1173,13 @@ a.server-port:hover { text-decoration: underline; }
 .gitdiff-pill .icon { width: 8px; height: 12px; }
 .gitdiff-count { font-size: var(--pill-font); font-variant-numeric: tabular-nums; }
 .gitdiff-pop { width: min(480px, calc(100vw - 2rem)); }
-.gitdiff-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: scroll; padding-right: 4px; }
-.gitdiff-row { display: flex; align-items: center; gap: .55rem; flex: none; min-height: var(--menu-row-h); padding: .05rem .45rem; border-radius: 6px; font-size: .85rem; cursor: pointer; }
-.gitdiff-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.gitdiff-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+/* The single-line menu-row geometry both swap-pills use (the session picker's rows are a column —
+   they grow for a search snippet — so they keep their own). Merged selectors, the convention the
+   .*-wrap rules above already follow: a third pill adds its name here rather than a fourth copy. */
+.gitdiff-list, .children-list { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-height: 0; overflow-y: scroll; padding-right: 4px; }
+.gitdiff-row, .children-row { display: flex; align-items: center; gap: .55rem; flex: none; min-height: var(--menu-row-h); padding: .05rem .45rem; border-radius: 6px; font-size: .85rem; cursor: pointer; }
+.gitdiff-row:hover, .children-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.gitdiff-row.active, .children-row.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .gitdiff-row.viewing .gitdiff-path { color: var(--accent); }
 /* One status letter, VS Code's palette: modified/renamed amber, added/untracked green, deleted red. */
 .gitdiff-status { flex: none; width: 1rem; text-align: center; font: 600 .74rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); }
@@ -1189,13 +1201,53 @@ a.server-port:hover { text-decoration: underline; }
 .gitdiff-pill.viewing :is(.gitdiff-status, .gitdiff-doc-path, .gitdiff-counts span) { text-box: trim-both cap alphabetic; }
 .gitdiff-doc-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: var(--pill-font); color: var(--accent); }
 .gitdiff-doc-path:hover { text-decoration: underline; }
-.gitdiff-close { flex: none; display: inline-flex; padding: 0 .15rem; color: var(--muted); }
-.gitdiff-close .icon { width: 10px; height: 10px; }
-.gitdiff-close:hover { color: var(--accent); }
+/* The × on a pill holding the transcript's slot (ui.ts closeChip) — one rule, both swap-pills. */
+.pill-close { flex: none; display: inline-flex; padding: 0 .15rem; color: var(--muted); }
+.pill-close .icon { width: 10px; height: 10px; }
+.pill-close:hover { color: var(--accent); }
 /* Doc open ⇒ transcript-scoped pills hide: model switcher and session picker act on a conversation
    that is not on screen (the token pill stays — its shimmer says the live diff may still grow).
    Display only, never unmount — the model pill's superSelect must keep its mount. */
-.statusbar-actions.doc-open :is(.model-wrap, .sid-wrap) { display: none; }
+.statusbar-actions.doc-open :is(.model-wrap, .sid-wrap, .children-wrap) { display: none; }
+
+/* ── the agents pill (TB-Agent-Children.md): this session's child transcripts. The git-diff pill's
+   shape throughout — presence is the signal (a session that spawned nothing has no pill), picking a
+   row swaps the transcript for that child's conversation, and the pill then wears its identity so
+   the child view carries no chrome of its own. ── */
+/* Only the VIEWING form is a glyph pill (it needs the fixed square's width freed); the chip is an
+   ordinary word pill, `🤖${n}🤖`, so it takes .pill's centering recipe untouched. */
+.pill.glyph.children-pill { width: auto; padding: 0 .45rem; gap: .3rem; }
+/* The chip is a word pill, so it sits outside `.pill.glyph` twice over: its emoji keep their colour
+   at rest (they read as the agents themselves, not as chrome), and they take none of the glyph
+   padding. `.pill`'s .7rem is measured for letters; an emoji's advance already carries its own side
+   bearings, so that padding lands outside whitespace the glyph brought with it and reads as a gap.
+   The margin then goes on each glyph's INNER side only: the padding already owns the outer gap, so a
+   symmetric one doubles up exactly where it shows. Chip only, since the viewing form is a flex row
+   with a gap of its own. */
+.children-pill { padding: 0 .3rem; }
+.children-pill:not(.glyph) .glyph-img:first-child { margin-right: .12rem; }
+.children-pill:not(.glyph) .glyph-img:last-child { margin-left: .12rem; }
+.children-pop { width: min(520px, calc(100vw - 2rem)); }
+.children-row.viewing .children-label { color: var(--accent); }
+/* One dot carries the state: still working (the fold-marker green), finished (dim), killed by the
+   user (warn). Green because running is the LIVE-APP axis, the same one the launcher's running
+   :port and play glyph sit on; the blue accent is the source/name axis and would read as "selected"
+   here, which the row already says by other means. */
+.children-dot { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: .4; }
+.children-dot.running { background: var(--fold-marker); opacity: 1; }
+.children-dot.stopped { background: var(--warn); opacity: .85; }
+/* The agent's type, capped so the common long one (general-purpose) can't crowd out the
+   description — which is the only thing telling eleven siblings apart. Muted by colour, not size. */
+.children-kind { flex: none; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.children-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.children-model { flex: none; color: var(--muted); opacity: .8; }
+.children-time { flex: none; color: var(--muted); font-size: .72rem; min-width: 2.6rem; text-align: right; }
+/* The viewing form: the open child's identity in place of the icon+count, with the × that returns.
+   Same seating rule as the diff pill's — .pill.glyph opts out of the text-box trim, so each TEXT
+   flex item takes it back or the words sit low against the icon. */
+.pill.glyph.children-pill.viewing { max-width: min(18rem, 35vw); gap: .45rem; padding: 0 .35rem 0 .5rem; }
+.children-pill.viewing .children-doc-label { text-box: trim-both cap alphabetic; }
+.children-doc-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--pill-font); color: var(--accent); }
 
 /* The diff doc — takes the transcript's slot in .chat (same flex geometry as .messages). Full-bleed
    like a code surface (no --content-max column: diff lines want the width); the body is the scroll
@@ -1303,6 +1355,27 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
   border-radius: 12px;
   padding: .7rem .9rem;
 }
+/* A user bubble is a panel, so its hover copy pill clears the border instead of sitting on it.
+   .5rem matches the controls' own `bottom`, so the pill stands equally clear on both axes.
+   Inherited by the agent variant below, and by any later bubble that grows a surface. */
+.bubble.user { --pill-inset: .5rem; }
+/* A sub-agent's hand-back (TB-Agent-Children.md): a user turn the harness delivered on an agent's
+   behalf, never one the user typed, so it wears its own outline instead of the plain send's. The
+   accent is the source/name axis (the same one the agents pill's open-child label sits on); green
+   belongs to the live axis and would read as "still running", which a report never is. */
+.bubble.user.agent {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+/* The frame's header: the agents pill's glyph, the agent's type, then its description, which is the
+   link into its transcript. Muted by colour and NOT by size — the description is the one thing that
+   tells eleven siblings apart, so it stays at the body's size (the picker's child-row rule). */
+.agent-head { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .55rem; }
+.agent-head .glyph-img { flex: none; align-self: center; }
+.agent-kind { flex: none; color: var(--muted); }
+.agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.agent-name { color: var(--accent); cursor: pointer; }
+a.agent-name:hover { text-decoration: underline; }
 /* Consecutive tool-only bubbles sit tight via negative margin (flex `gap`
    can't be overridden per sibling pair). The adjacent-sibling selector leaves
    the first tools-only bubble's gap intact, preserving the turn boundary. */
@@ -1480,17 +1553,20 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .md .svg-embed { justify-content: center; }
 .md .svg-embed svg { max-width: 100%; height: auto; }
 
-/* Markdown tables: chop in-column (the `.embed` rule below) and `safe center` — a table that fits its
-   box centres, and one that overflows falls back to left so it scrolls from its first column rather than
-   clipping. Centring holds in both modes: a small in-column table sits centred in the prose column, a
-   spread one centred in the lane. The scroll lives on the inner `.table-scroll`, not the `.embed`
+/* Markdown tables: chop in-column (the `.embed` rule below). An IN-COLUMN table starts where the prose
+   starts — it is part of the paragraph flow, and a narrow one centred in the column reads as shifted
+   right against the left-aligned text above and below it, which is the whole of that bug. Only a
+   SPREAD table centres, and it has earned it: spreading means it is already wider than the column, so
+   centring keeps it symmetric about the column axis exactly as the mermaid lane does. `safe` on both
+   means one that overflows its box falls back to the start and scrolls from its first column rather
+   than clipping. The scroll lives on the inner `.table-scroll`, not the `.embed`
    wrapper, so a horizontal scrollbar rides above the chop's bottom padding instead of flush against the
    next line (a scrollbar sits at its own container's bottom edge). It's the centred flex child, capped at
    the box so it shrinks-to-fit and scrolls only what overflows; `max-width:100%` + the overflow-induced
    0 min-width let it shrink below the table's natural width. `spread` widens the wrapper to the lane (the
    mermaid geometry) for a table fitTableEmbeds found too wide for the column. The opaque `.embed`
    padding/z-index still occludes the turn stripe the spread crosses — no box-shadow needed. */
-.md .table-embed { justify-content: safe center; }
+.md .table-embed { justify-content: safe flex-start; }
 .md .table-embed .table-scroll { overflow-x: auto; max-width: 100%; }
 /* max-content keeps the table at its natural (unwrapped) width so it overflows `.table-scroll` and earns
    a scrollbar, rather than wrapping its cells to fit — the bar is the point, and it now rides inside the
@@ -1511,15 +1587,24 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
      shattering text; a pathological no-space token (a long URL) then scrolls rather than breaking. */
 .md .table-embed table { margin: 0; width: max-content; max-width: var(--lane-w); }
 .md .table-embed th, .md .table-embed td { max-width: 40ch; word-break: normal; }
+/* The spread band's comfort goes on the RIGHT only, which looks asymmetric written down and is what
+   reads as even on screen. `.messages` reserves a scrollbar gutter at BOTH edges (to hold the column
+   on the window axis), but only the right one ever contains a scrollbar: the left gutter is dead
+   space that already reads as margin, while on the right the lane's own 1rem inset is all there is
+   between the table and the bar. Inset both sides equally and the left gap measures a gutter wider
+   than the right; inset neither and the table sits flush against the bar, which is the bug. So the
+   band adds back one inset on the right, and the table's cap comes down by the same 1rem or it would
+   overflow the band's content box by exactly that at every width — the permanent scrollbar the
+   zeroed inset was avoiding. */
 .md .table-embed.spread {
+  justify-content: safe center;
   width: var(--lane-w);
   margin-left: var(--lane-ml);
   margin-right: auto;
-  /* Zero the `.embed` inset: spread makes the border box the lane, so a 1rem left padding would
-     leave the scroller 1rem narrower than the table's own lane cap — a capped table then overflows
-     by exactly that inset at every window width, which is the permanent 16px-of-travel scrollbar. */
   padding-left: 0;
+  padding-right: 1rem;
 }
+.md .table-embed.spread table { max-width: calc(var(--lane-w) - 1rem); }
 
 /* ````bulb```` inline bulbs: a sandboxed nested app. createBulbFrame owns the iframe (auto-height,
    borderless). No frame of our own — like the mermaid/svg embeds, it sits in the flow rather
@@ -1595,7 +1680,12 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .overlay-pill {
   position: absolute;
   bottom: .5rem;
-  right: 0;              /* flush with the content column's right edge (prose / statusbar pills) */
+  /* Flush with the content column's right edge (prose / statusbar pills) when the pill sits on the
+     page's own background. A PANEL sets --pill-inset instead, so the pill clears its edge rather
+     than landing on the border: `right: 0` resolves against the containing block's padding box, so
+     inside a bordered box it means "touching the border". Only this axis needed it — `bottom` has
+     always stood the pill off, which is why the defect read as a right-edge one. */
+  right: var(--pill-inset, 0px);
   font: inherit;
   font-size: var(--pill-font);
   padding: 0 .45rem;
@@ -1614,6 +1704,10 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
    the chop/breakout; the code-block wrapper needs it for the absolute pill. The pill is positioned
    (absolute), so it paints over the static fence content regardless of DOM order. */
 .md .copyable { position: relative; }
+/* A code fence IS a panel (the <pre> carries the border and background, the wrapper is the
+   positioning context), so its copy pill takes the inset. The svg and mermaid embeds are
+   transparent bands on the page background and keep the flush edge. */
+.md .code-block { --pill-inset: .5rem; }
 .md .copyable:hover .copy-src,
 .md .copy-src:focus-visible { opacity: 1; }
 .md .copy-src.done { color: var(--accent); border-color: var(--accent); }
@@ -1974,7 +2068,7 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 .bubble-controls {
   position: absolute;
   bottom: .5rem;
-  right: 0;              /* flush with the content column's right edge (prose / statusbar pills) */
+  right: var(--pill-inset, 0px);
   display: flex;
   gap: .4rem;
 }

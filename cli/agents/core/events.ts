@@ -29,6 +29,54 @@ export interface ComposerStats { cost: number; contextTokens: number | null; con
  *  (CC: the `.jsonl` stem; Pi: the `<ts>_<uuid>` stem); `file` the absolute path; `mtime` for sorting. */
 export interface SessionFile { sessionId: string; file: string; mtime: number }
 
+/** One row of the session picker, from `listSessions` or `searchSessions` — one shape rather than two,
+ *  because the menu joins both into a single list and a row's origin is readable from which optional
+ *  fields it carries. */
+export interface SessionRow {
+  sessionId: string
+  mtime: number
+  preview: string
+  /** A conversation this mirror owns whose file the harness hasn't written yet: listed so a turn left
+   *  running is reachable, but with no transcript to peek, search or name (TB-Agent-Composer.md C7). */
+  pending?: boolean
+  /** Is this session mid-turn RIGHT NOW, per the harness's own report (`adapter.sessionsWorking`)?
+   *  `undefined` ⇒ the harness can't say, and the row shows no working cue rather than a wrong one.
+   *  Deliberately not "the process is alive", which is true of every window left open
+   *  (TB-Agent-Mirror-Ready.md). */
+  working?: boolean
+  /** The full-text decoration, set only on a search result. */
+  hitCount?: number
+  snippet?: string
+  /** Set when the hit is inside a session's CHILD transcript (TB-Agent-Children.md): an indented row
+   *  under its parent's, opened by attaching the parent and then swapping. */
+  child?: { id: string; kind: string; depth: number }
+}
+
+/** Which thread of a transcript a view renders (TB-Agent-Children.md). A child transcript is its own
+ *  file, so the adapter's off-thread test inverts inside one; the engine passes this and reads no
+ *  harness field of its own. */
+export type Thread = 'main' | 'child'
+
+/** One child transcript of a session — a conversation the session spawned and the mirror can swap
+ *  into (TB-Agent-Children.md). Claude's sub-agents are the only realization today; the record is
+ *  neutral, so `core/` says child where the adapter and the UI say agent. */
+export interface ChildTranscript {
+  id: string                 // stable within the session (CC: the agentId)
+  file: string
+  mtime: number
+  label: string              // the caller's one-line description; '' when the harness records none
+  kind: string               // the child's own type (CC: agentType — general-purpose, Explore, …)
+  model?: string             // set only where the caller overrode the session's model
+  spawnId?: string           // the parent tool call that spawned it (CC: toolUseId)
+  parentId?: string          // the child that spawned it, above depth 1
+  depth: number              // 1 = spawned by the session itself
+  stopped: boolean           // the user killed it — the one terminal state only the harness knows
+}
+
+/** A `ChildTranscript` as the client sees it: the engine adds the state it alone can decide, since
+ *  "finished" is the parent holding a tool result for `spawnId` (TB-Agent-Children.md). */
+export interface ChildRow extends ChildTranscript { state: 'running' | 'done' | 'stopped' }
+
 /** One line of ambient driver state (TB-Agent-Composer-Toolkit.md Piece 2): a retry/compaction in
  *  progress, an extension notify, or joined extension setStatus entries. Display-only. */
 export interface ComposerStatus { text: string; kind: 'info' | 'warning' | 'error' }
@@ -82,7 +130,10 @@ export interface ComposerPoll {
  *  union — it never sees a CC or Pi transcript entry; every adapter maps its on-disk schema onto these. */
 export type Event =
   | { type: 'session'; sessionId: string }
-  | { type: 'user'; text: string }
+  // `agent` marks a turn the harness delivered on a sub-agent's behalf rather than one the user
+  // typed: `from` is the child's id (TB-Agent-Children.md), so the mirror frames it and links to
+  // that transcript. Its text is the report alone, the envelope already reduced away by the adapter.
+  | { type: 'user'; text: string; agent?: { from: string } }
   | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean }
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own

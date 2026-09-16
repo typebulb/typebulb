@@ -3,10 +3,11 @@ import { SessionPicker } from './sessionPicker.js'
 import { TokenPill } from './tokenPill.js'
 import { BulbsPill } from './bulbsPill.js'
 import { DiffPill } from './diffPill.js'
+import { ChildrenPill } from './childrenPill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
 import { armTooltipDismiss } from './ui.js'
-import type { ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
+import type { ChildRow, ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
 
 // The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
 // `tb.server.poll` RPC and renders the neutral message list + status bar; everything harness-specific
@@ -21,6 +22,7 @@ export class Root extends Component implements IRoot {
   tokenPill = new TokenPill()
   bulbsPill = new BulbsPill()
   diffPill = new DiffPill()
+  childrenPill = new ChildrenPill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   cost = 0                                  // session spend: summed per-entry harness costs (IRoot.cost)
@@ -69,6 +71,12 @@ export class Root extends Component implements IRoot {
     if (this.#started) return
     this.#started = true
     armTooltipDismiss()     // one global listener set, so every harness's entry gets it
+    // Esc leaves an open child transcript, matching the diff doc's own key — global because the
+    // child view IS the message list, which has no focused surface of its own to hang it on.
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape' || !this.childrenPill.viewing || this.childrenPill.open) return
+      void this.childrenPill.closeChild()
+    })
     this.init()
   }
 
@@ -80,8 +88,14 @@ export class Root extends Component implements IRoot {
     if (this.sessionPicker !== except) this.sessionPicker.close()
     if (this.bulbsPill !== except) this.bulbsPill.close()
     if (this.diffPill !== except) this.diffPill.close()
+    if (this.childrenPill !== except) this.childrenPill.close()
     for (const p of this.pills) if (p !== except) p.close?.()
   }
+
+  // The agents pill owns the child list and the swap; IRoot exposes both so the message list can
+  // offer a way into the child a tool row spawned without importing the pill (TB-Agent-Children.md).
+  get children(): ChildRow[] { return this.childrenPill.children }
+  openChild(id: string) { void this.childrenPill.openChild(id) }
 
   async init() {
     const i = await tb.server.info()
@@ -89,6 +103,8 @@ export class Root extends Component implements IRoot {
     this.ownPid = i.pid ?? 0
     this.#elsewhere = i.elsewhere ?? null
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
+    this.childrenPill.enabled = !!i.children                  // same shape of gate (TB-Agent-Children.md)
+    void this.childrenPill.refresh()
     this.ready = true
     // Take the page's boot overlay off (agents/core/client/index.html). Gated on ready, not on the
     // first poll: `info` is the call that decides whether the mirror works at all, and everything
@@ -127,7 +143,7 @@ export class Root extends Component implements IRoot {
     this.#polling = true
     const tick = async () => {
       try {
-        const { events, cursor, working, latestModel, composer, busy } = await tb.server.poll(this.#cursor)
+        const { events, cursor, working, latestModel, child, composer, busy } = await tb.server.poll(this.#cursor)
         this.#cursor = cursor
         for (const e of events) this.apply(e)
         const workingChanged = working !== this.working
@@ -141,11 +157,14 @@ export class Root extends Component implements IRoot {
         // pill turns red the turn a desynced model lands, not only when the menu is next opened.
         const modelChanged = latestModel !== this.latestModel
         this.latestModel = latestModel ?? null
+        // Which child the server's tail is on — its answer, not ours, so a reload or a swap made in
+        // another mirror page still names the transcript on screen (TB-Agent-Children.md).
+        const childChanged = this.childrenPill.syncFromPoll(child ?? null)
         // The composer slice: the panel owns ALL of its change detection (syncFromPoll), including
         // the draft/stats it publishes onto IRoot for MessageList and the token pill. A growing
         // draft re-renders and keeps the sticky-bottom scroll pinned, exactly like a landed event.
         const composerChanged = this.composer && composer ? this.composer.syncFromPoll(composer) : false
-        if (events.length || workingChanged || modelChanged || composerChanged || busyChanged) this.update()
+        if (events.length || workingChanged || modelChanged || childChanged || composerChanged || busyChanged) this.update()
         if (events.length || composerChanged) this.messageList.scrollSoon()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
@@ -166,6 +185,10 @@ export class Root extends Component implements IRoot {
         this.cost = 0
         break
       case 'session':
+        // The agents pill is scoped to the attached session (TB-Agent-Children.md), so a switch
+        // clears its rows here. Keyed on the id changing, not on the event: a child swap re-emits
+        // this under the same id, and that list is the one already on screen.
+        if (e.sessionId !== this.sessionId) this.childrenPill.reset()
         this.sessionId = e.sessionId
         // A conversation can be named before the picker has a row for it (the composer's own
         // sessions are listed from their first send, ahead of the agent writing the file), so pull
@@ -222,7 +245,11 @@ export class Root extends Component implements IRoot {
   // and first so a doc toggle moves the least) shifts nothing, and the model switcher's glyph-vs-name
   // toggle only shifts the injected pill, leaving token/session/bulbs anchored to the right edge.
   // Then the agent info (token count — which carries the working shimmer while the agent is mid-turn
-  // — and session picker), then the bulbs pill set apart on the right — it's about this project's bulbs.
+  // — the agents pill, and the session picker), then the bulbs pill set apart on the right — it's about
+  // this project's bulbs. The agents pill sits WITH the session picker rather than out at the left with
+  // the other width-changer: it lists the attached session's children, so it belongs beside the thing
+  // naming that session. It pays for the spot by keeping its viewing form narrow (no kind chip — every
+  // row of the menu behind it carries that), so opening a child barely pushes its left-hand neighbours.
   // While a diff doc is open, transcript-scoped pills (model switcher, session picker) hide via
   // `doc-open` — CSS display, never unmounting, so the model pill's superSelect keeps its mount
   // across doc open/close. Token pill stays: its working shimmer is the cue that the live diff may
@@ -233,6 +260,7 @@ export class Root extends Component implements IRoot {
         this.diffPill.view(),
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
+        this.childrenPill.view(),
         this.sessionPicker.view(),
         this.bulbsPill.view(),
       ),

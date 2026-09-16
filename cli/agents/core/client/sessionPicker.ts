@@ -3,16 +3,13 @@ import { ComboboxPill } from './statusPill.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { relTime, truncate } from './util.js'
 import { mdPlain } from './markdown.js'
-
-// `pending` marks a conversation this mirror owns whose file the agent hasn't written yet — listed
-// so a turn left running is still reachable, but it has no transcript to peek, search or name.
-type SessionRow = { sessionId: string; mtime: number; preview: string; pending?: boolean; hitCount?: number; snippet?: string }
+import type { SessionRow } from './types.js'
 
 // Sessions chip + dropdown. Owns the session list; reaches up to Root for sessionId/cwd and
 // updateTitle/stickToBottomNextRender. Opens on the attached session so the highlight starts where
 // you are; the `.active` row is the keyboard cursor.
 export class SessionPicker extends ComboboxPill<SessionRow> {
-  sessions: { sessionId: string; mtime: number; preview: string; pending?: boolean }[] = []
+  sessions: SessionRow[] = []
   protected keepOpenSelector = '.sid-wrap'
   protected filterId = 'session-filter'
   protected listSelector = '#session-list'
@@ -30,7 +27,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
 
   protected search(query: string) { return tb.server.searchSessions(query) as Promise<SessionRow[]> }
 
-  protected onActivate(i: number) { const s = this.rows()[i]; if (s) this.pick(s.sessionId) }
+  protected onActivate(i: number) { const s = this.rows()[i]; if (s) void this.pick(s) }
 
   // The (possibly filtered) sessions the dropdown shows — matches preview text, case-insensitive.
   // `sessions` is already display-ordered (loadSessions), so no per-render work beyond the filter.
@@ -47,7 +44,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   // one beside the anchored filter input (refreshList clamps the -1 of an empty list).
   currentIndex(): number {
     const list = this.rows()
-    const i = list.findIndex(s => s.sessionId === this.parent.sessionId)
+    const i = list.findIndex(s => !s.child && s.sessionId === this.parent.sessionId)
     return i < 0 ? list.length - 1 : i
   }
 
@@ -105,13 +102,15 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     this.armClose()
   }
 
-  async pick(sessionId: string) {
-    const s = this.rows().find(x => x.sessionId === sessionId)
-    if (s) this.#seen.set(sessionId, s.mtime)   // attach marks read; peek never does
+  async pick(s: SessionRow) {
+    if (!s.child) this.#seen.set(s.sessionId, s.mtime)   // attach marks read; peek never does
     this.close()
     // Land at the bottom of the new session, not the old scroll position.
     this.parent.messageList.stickToBottomNextRender()
-    await tb.server.attach(sessionId)
+    await tb.server.attach(s.sessionId)
+    // A child hit opens its parent FIRST: "finished" is a fact the parent's own drain supplies, so a
+    // child is only ever reached through the session that owns it (TB-Agent-Children.md).
+    if (s.child) this.parent.openChild(s.child.id)
   }
 
   view() : VElement {
@@ -148,25 +147,31 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   }
 
   pickerRow(s: SessionRow, i: number) {
-    const current = s.sessionId === this.parent.sessionId
+    const current = !s.child && s.sessionId === this.parent.sessionId
     // A driven turn streaming in this conversation (poll's busy set) — the working shimmer badges
     // background work without flipping there; render-only, rows still come from listSessions.
-    const busy = this.parent.busy.includes(s.sessionId)
+    // Session-scoped cues (busy, the unread lime, the hover peek) stay off a child row: they all key
+    // by sessionId, which a session's children share, so each would say the parent's thing.
+    const busy = !s.child && this.parent.busy.includes(s.sessionId)
     return div({
       // `.active` is the keyboard cursor; `.current` marks the attached session so it stays
       // identifiable when the cursor moves off it.
-      class: ['picker-row', i === this.highlighted ? 'active' : '', current ? 'current' : ''],
+      class: ['picker-row', i === this.highlighted ? 'active' : '', current ? 'current' : '', s.child ? 'child' : ''],
       onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } },
-      onClick: () => this.pick(s.sessionId),
+      onClick: () => void this.pick(s),
     },
       div({ class: 'picker-row-main' },
-        span({ class: 'picker-dot' }),
+        // Green = the harness says this session is mid-turn; the attached row overrides it in CSS.
+        span({ class: ['picker-dot', s.working ? 'working' : ''] }),
+        s.child ? span({ class: 'picker-child-kind' }, s.child.kind) : null,
         span({ class: ['picker-preview', busy ? 'shimmer-text shimmer-slow' : ''] }, s.preview || '(no preview)'),
         hitsBadge(s.hitCount),
         span({
-          class: ['picker-time', this.#lime(s) ? 'unseen' : ''],
-          onMouseEnter: () => this.#peekEnter(s),
-          onMouseLeave: () => this.#peekLeave(s),
+          class: ['picker-time', !s.child && this.#lime(s) ? 'unseen' : ''],
+          ...(s.child ? {} : {
+            onMouseEnter: () => this.#peekEnter(s),
+            onMouseLeave: () => this.#peekLeave(s),
+          }),
         }, relTime(s.mtime)),
       ),
       snippetLine(s.snippet, this.filter.trim()),

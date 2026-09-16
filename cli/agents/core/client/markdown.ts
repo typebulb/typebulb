@@ -434,9 +434,15 @@ function fitTableEmbeds(root: Element) {
     const table = wrap.querySelector('table')
     if (!table) continue
     wrap.classList.remove('spread')
-    // +1 tolerance for sub-pixel rounding; clientWidth is the column (content box), scrollWidth the
-    // table's natural extent even while clipped. Unlaid-out (collapsed) tables read 0 and stay in-column.
-    if (table.scrollWidth > wrap.clientWidth + 1) wrap.classList.add('spread')
+    // The column is the wrapper's CONTENT box, which `clientWidth` is not: it includes padding, and
+    // the chop's left inset is a whole 1rem of it. Compared against `clientWidth` the threshold ran
+    // an inset too generous, so a table up to 16px past the column stayed in place and had its right
+    // edge clipped instead of spreading — the width at which spreading matters most.
+    // +1 tolerance for sub-pixel rounding; scrollWidth is the table's natural extent even while
+    // clipped. Unlaid-out (collapsed) tables read 0 and stay in-column.
+    const pad = getComputedStyle(wrap)
+    const column = wrap.clientWidth - (parseFloat(pad.paddingLeft) || 0) - (parseFloat(pad.paddingRight) || 0)
+    if (table.scrollWidth > column + 1) wrap.classList.add('spread')
   }
 }
 

@@ -1,7 +1,7 @@
 import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { icon } from './icons.js'
-import { searchFilter } from './ui.js'
+import { closeChip } from './ui.js'
 import { OverviewRuler, type RulerMark } from './overviewRuler.js'
 import { highlightToLines } from './markdown.js'
 
@@ -97,8 +97,7 @@ export class DiffPill extends ComboboxPill<never> {
   protected keepOpenSelector = '.gitdiff-wrap'
   protected filterId = 'gitdiff-filter'
   protected listSelector = '.gitdiff-list'
-  protected filterNoun = 'file'
-  protected search(): Promise<never[]> { return Promise.resolve<never[]>([]) }   // no full-text mode over a file list
+  // No `search`: a 🔬 makes no sense over a file list, so the base class leaves the toggle off.
 
   protected onActivate(i: number) {
     const f = this.rows()[i]
@@ -210,8 +209,7 @@ export class DiffPill extends ComboboxPill<never> {
       span({ class: 'gitdiff-doc-path', title: `Open ${v.path}`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); tb.server.openFile(`${this.root}/${v.path}`) } }, v.path),
       span({ class: 'gitdiff-counts' }, span({ class: 'count-add' }, `+${add}`), span({ class: 'count-del' }, `−${del}`)),
-      span({ class: 'gitdiff-close', 'data-tip': 'Back to the conversation (Esc)', ariaLabel: 'Back to the conversation',
-        onClick: (e: MouseEvent) => { e.stopPropagation(); this.closeDoc() } }, icon('close')),
+      closeChip(() => this.closeDoc()),
     )
   }
 
@@ -222,22 +220,8 @@ export class DiffPill extends ComboboxPill<never> {
         ? this.emptyState('No changes in the working tree.')
         : div({ class: 'gitdiff-list', onScroll: () => this.onListScroll() },
             rows.map((f, i) => this.row(f, i))),
-      this.filterRow(),
+      this.filterBox(this.files.length, 'file'),
     )
-  }
-
-  // The combobox filter row minus the full-text toggle (a 🔬 makes no sense over a file list).
-  filterRow() {
-    const n = this.files.length
-    return searchFilter({
-      target: this,
-      prop: () => this.filter,
-      id: this.filterId,
-      placeholder: n ? `Filter ${n} file${n === 1 ? '' : 's'}…` : 'Filter files…',
-      hasValue: !!this.filter,
-      onKeyDown: (e: KeyboardEvent) => this.onFilterKey(e),
-      onClear: () => this.clearFilter(),
-    })
   }
 
   row(f: ChangedFile, i: number) {

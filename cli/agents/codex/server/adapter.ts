@@ -533,7 +533,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // A Codex sidechain is a whole FILE, not an entry: a spawned child thread gets its own rollout
   // (Invariant 4), which discovery drops and which never enters the parent's chain — so there is
   // nothing here to exclude.
-  isSidechain(_e: CodexEntry) { return false }
+  isSidechain(_e: CodexEntry) { return false }                  // no sidechain concept, and no children
   // Every entry is chain tip when it lands — the chain is linear and append-only, and the trailing
   // token_count / task_complete of a turn must emit immediately, not wait for the next user turn.
   isLeafType(_e: CodexEntry) { return true }
