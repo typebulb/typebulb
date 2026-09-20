@@ -525,10 +525,10 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // session. It shares #rolloutFiles and #metaCache with listSessionFiles, so a session that spawned
   // nothing pays a map lookup per rollout and no new read.
   //
-  // The chain WALK rather than a `session_id` match, though every spawn on disk sets `session_id` to
-  // the session: all of them are depth 1, where the session and the immediate parent are the same
-  // thread, so the shortcut is untested exactly where it would differ (§ Unverified). The walk is
-  // right either way.
+  // The chain WALK rather than a `session_id` match, which at depth 2 does name the ROOT session and
+  // so would decide membership correctly on its own (verified live). The walk earns its place by
+  // also yielding `parentId`, which is what nests the row under the agent that spawned it rather
+  // than under whichever sibling happens to precede it.
   listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     const want = normCwd(cwd)
     type Found = { file: string; mtime: number; running: boolean | undefined; spawn: CodexSpawn; model?: string }

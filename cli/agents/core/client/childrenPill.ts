@@ -9,6 +9,38 @@ import type { ChildRow } from './types.js'
 // while it works, and the pill then wears its identity with an × to return (the git-diff pill's
 // shape). Presence is the signal: a session that spawned nothing shows no pill at all. Claude and
 // Codex have children; elsewhere the capability flag is false and none of this renders.
+// Order by ANCESTRY, not by recency alone: each agent is followed immediately by the agents it
+// spawned, and siblings keep the list's newest-last order among themselves. Indentation is the only
+// thing on a row that says who spawned it, so a nested row separated from its parent by an unrelated
+// agent reads as that agent's child — which is how it was first reported, a depth-2 agent sitting
+// under a sibling it had nothing to do with. mtime alone cannot express this: a child is almost
+// always newer than its parent, so the two orderings fight (TB-Agent-Children.md says the same of
+// the session picker, and keeps children out of it for exactly that reason).
+export function byAncestry(list: ChildRow[]): ChildRow[] {
+  const present = new Set(list.map(c => c.id))
+  const byParent = new Map<string, ChildRow[]>()
+  for (const c of list) {
+    // A row whose parent is not in this list is a top-level row: its parent's transcript is gone, or
+    // it is a depth-1 agent, whose parent is the session itself.
+    const key = c.parentId && present.has(c.parentId) ? c.parentId : ''
+    const bucket = byParent.get(key)
+    if (bucket) bucket.push(c); else byParent.set(key, [c])
+  }
+  const out: ChildRow[] = []
+  const seen = new Set<string>()
+  const walk = (key: string) => {
+    for (const c of byParent.get(key) ?? []) {
+      if (seen.has(c.id)) continue                    // a malformed parent cycle
+      seen.add(c.id)
+      out.push(c)
+      walk(c.id)
+    }
+  }
+  walk('')
+  for (const c of list) if (!seen.has(c.id)) out.push(c)   // a cycle's members still belong in the list
+  return out
+}
+
 export class ChildrenPill extends ComboboxPill<ChildRow> {
   children: ChildRow[] = []
   enabled = false                 // info().children — the adapter capability gate; no list, no polling
@@ -43,7 +75,8 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   async refresh() {
     if (!this.enabled) return
     try {
-      const next = (await tb.server.listChildren() as ChildRow[]).reverse()   // newest-at-bottom, the list's order
+      // newest-at-bottom among siblings, then nested under the agent that spawned them
+      const next = byAncestry((await tb.server.listChildren() as ChildRow[]).reverse())
       const changed = next.length !== this.children.length ||
         next.some((c, i) => { const o = this.children[i]; return c.id !== o?.id || c.state !== o.state || c.mtime !== o.mtime })
       this.children = next
@@ -168,8 +201,8 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   row(c: ChildRow, i: number) {
     return div({
         class: ['children-row', i === this.highlighted ? 'active' : '', this.viewing?.id === c.id ? 'viewing' : ''],
-        // A child that spawned its own children indents under them; depth 2 is as deep as this
-        // realistically goes, so it's one measure, not a tree.
+        // Indent by depth, against a list ordered so the row above a nested one IS its parent
+        // (byAncestry). Depth 2 is as deep as this realistically goes, so it's one measure.
         style: c.depth > 1 ? { paddingLeft: `${(c.depth - 1) * 16 + 10}px` } : undefined,
         onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } },
         onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id) },
