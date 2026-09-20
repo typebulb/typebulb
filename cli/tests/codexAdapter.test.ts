@@ -171,6 +171,72 @@ describe('CodexAdapter rendering (dedup + cleaning)', () => {
   })
 })
 
+// A spawned agent's rollout is a FORK: it opens with a copy of its parent's entire conversation and
+// only then its own brief and work — 70 of 228 entries on the live file that exposed this. Rendered
+// whole, a child view reads as the parent's session, which is what it looked like in the field
+// (TB-Agent-Children-Codex.md).
+describe('CodexAdapter child threads (the fork seam)', () => {
+  const KID = '/root/kid'
+  const meta = (id: string, spawn?: unknown) => ({
+    timestamp: '2026-09-21T02:29:06.370Z', type: 'session_meta',
+    payload: { id, cwd: 'C:\\x', thread_source: spawn ? 'subagent' : 'user', source: spawn ? { subagent: { thread_spawn: spawn } } : 'cli' },
+  })
+  const msg = (role: string, text: string) => ({
+    timestamp: '2026-09-21T02:29:06.371Z', type: 'response_item',
+    payload: { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] },
+  })
+  const agentMsg = (author: string, recipient: string, text: string) => ({
+    timestamp: '2026-09-21T02:29:07.992Z', type: 'response_item',
+    payload: { type: 'agent_message', author, recipient, content: [{ type: 'input_text', text }] },
+  })
+
+  // The shape on disk, in order: the child's own meta, a copy of the parent's, the inherited
+  // conversation, the brief, then the child's work.
+  const CHILD = [
+    meta('kid', { parent_thread_id: 'par', depth: 1, agent_path: KID }),
+    meta('par'),
+    msg('user', 'the parent asked this'),
+    agentMsg('/root/sibling', '/root', 'Message Type: FINAL_ANSWER\nPayload:\na sibling reported this'),
+    agentMsg('/root', KID, 'Message Type: NEW_TASK\nPayload:'),
+    msg('assistant', 'the child answered this'),
+  ]
+
+  function drainLines(objs: unknown[]) {
+    const a = new CodexAdapter()
+    const entries = objs.map(o => { const e = a.parseEntry(JSON.stringify(o))!; a.idOf(e); return e })
+    const rendered = (thread: 'main' | 'child') => entries
+      .filter(e => !a.isSidechain(e, thread))
+      .flatMap(e => a.apply(e, 0).events)
+      .map(ev => (ev as { text?: string }).text ?? '')
+      .join(' ')
+    return { a, entries, rendered }
+  }
+
+  it('treats everything before the brief as the parent\u2019s thread, not the child\u2019s', () => {
+    const { a, entries, rendered } = drainLines(CHILD)
+    expect(entries.map(e => a.isSidechain(e, 'child'))).toEqual([true, true, true, true, false, false])
+    expect(rendered('child')).toContain('the child answered this')
+    expect(rendered('child')).not.toContain('the parent asked this')
+  })
+
+  // The inherited conversation carries whatever the parent saw, including OTHER agents' hand-backs,
+  // so the seam is the first message addressed to THIS agent and not merely the first agent_message.
+  it('does not end the inherited region on a sibling\u2019s hand-back', () => {
+    const { a, entries } = drainLines(CHILD)
+    expect(a.isSidechain(entries[3], 'child')).toBe(true)        // sibling → /root, still inherited
+    expect(a.isSidechain(entries[4], 'child')).toBe(false)       // /root → /root/kid, the brief
+  })
+
+  // The second session_meta is the parent's copy, one entry after the child's own. Read as the start
+  // of a fresh drain it would clear the flag immediately after setting it, and nothing would be
+  // inherited. An ordinary session, whose meta is the only one, must stay wholly on its own thread.
+  it('keeps a session\u2019s own file whole on both threads', () => {
+    const { a, entries, rendered } = drainLines([meta('par'), msg('user', 'a plain session')])
+    expect(entries.some(e => a.isSidechain(e, 'child') || a.isSidechain(e, 'main'))).toBe(false)
+    expect(rendered('main')).toContain('a plain session')
+  })
+})
+
 describe('CodexAdapter status + picker + search', () => {
   it('chainWorking follows task_started/task_complete boundaries', () => {
     const a = new CodexAdapter()

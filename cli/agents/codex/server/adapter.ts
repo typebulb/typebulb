@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
-import type { ChildTranscript, Event, SessionFile, TokenCounts } from '../../core/events.js'
+import type { ChildTranscript, Event, SessionFile, Thread, TokenCounts } from '../../core/events.js'
 
 // The Codex CLI realization of the AgentAdapter contract (TB-Agent-Codex.md, TB-Agent-Harness.md) —
 // read-only: no switcher, no driver. Grounded in real rollout files from codex-cli 0.146.0 and
@@ -38,6 +38,9 @@ interface CodexPayload {
   source?: string | { subagent?: { thread_spawn?: ThreadSpawn } }
   // response_item message
   role?: string                             // 'user' | 'assistant' | 'developer'
+  // inter-agent message: the agent paths it travelled between ('/root', '/root/catalog_migration')
+  author?: string
+  recipient?: string
   phase?: string                            // assistant: 'commentary' | 'final_answer'
   content?: CodexBlock[]
   // response_item reasoning — summary only; encrypted_content is unreadable by design
@@ -72,6 +75,9 @@ interface CodexEntry {
   // Synthesized by idOf() on the engine's drain path (Invariant 2) — absent until stamped.
   ord?: string
   parent?: string
+  // Is this entry the PARENT's conversation, inherited by the fork that made a child thread rather
+  // than written by the child? Stamped alongside ord, and read by isSidechain.
+  inherited?: boolean
 }
 
 // A spawned agent's own `thread_spawn` record, as its session_meta writes it.
@@ -443,6 +449,14 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // first entry of a new drain points at an id absent from it, which the walk treats as the root.
   #seq = 0
   #last: string | undefined
+  // Where the drain sits relative to a child's FORK SEAM (TB-Agent-Children-Codex.md). A Codex
+  // sub-agent's rollout opens with a copy of its parent's whole conversation — 70 of 228 entries,
+  // 31%, on the live file that exposed this — and only then its own brief and work. Tracked HERE,
+  // beside the ordinal and for the same reason: the drain is idOf's only caller, while apply() also
+  // serves the search path, which re-parses other files concurrently and would shred a positional flag.
+  #inherited = false
+  #selfPath: string | undefined
+  #metaRun = 0
   // session_meta facts per rollout file — immutable once written, so cached forever on a successful
   // parse only (a just-created file may not have flushed its first line yet; retried next listing).
   #metaCache = new Map<string, CodexMeta>()
@@ -645,18 +659,42 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // once per entry object; later calls (chain walk, fork indexing) read the memoized value.
   idOf(e: CodexEntry): string | undefined {
     if (e.ord === undefined) {
+      this.#trackFork(e)
       e.ord = String(this.#seq++)
       e.parent = this.#last
       this.#last = e.ord
     }
     return e.ord
   }
+
+  // The file's OWN session_meta is the FIRST of its run: a child's copy of its parent's follows
+  // immediately, and reading that one as the start of a fresh drain would clear the flag one entry
+  // after setting it. The inherited region then runs to the brief — the first agent_message
+  // addressed to this agent, which is its own first event. The inherited conversation can carry a
+  // SIBLING's hand-back, so the test is the recipient, never merely "an agent_message".
+  #trackFork(e: CodexEntry) {
+    const p = e.payload
+    if (e.type === 'session_meta') {
+      if (++this.#metaRun === 1) {
+        const spawn = typeof p?.source === 'object' ? p.source?.subagent?.thread_spawn : undefined
+        this.#selfPath = spawn?.agent_path
+        this.#inherited = !!spawn
+      }
+    } else {
+      this.#metaRun = 0
+      if (this.#inherited && p?.type === 'agent_message' && p.recipient === this.#selfPath) this.#inherited = false
+    }
+    e.inherited = this.#inherited
+  }
   parentOf(e: CodexEntry) { return e.parent }
   timestampOf(e: CodexEntry) { return e.timestamp }
-  // A Codex sidechain is a whole FILE, not an entry: a spawned child thread gets its own rollout
-  // (Invariant 4), which discovery drops and which never enters the parent's chain — so there is
-  // nothing here to exclude.
-  isSidechain(_e: CodexEntry) { return false }                  // no sidechain concept, and no children
+  // A spawned child thread gets its own rollout (Invariant 4), which discovery drops and which never
+  // enters the parent's chain — so in the parent's own file there is nothing to exclude. But that
+  // rollout is a FORK, so unlike CC's it DOES mix threads: everything before the brief is the
+  // parent's conversation, copied in at the spawn. That is exactly what this asks, "is this entry
+  // off the thread the view renders", so it is off-thread in the child view and the transcript opens
+  // on the child's own work (TB-Agent-Children-Codex.md).
+  isSidechain(e: CodexEntry, thread: Thread) { return thread === 'child' && !!e.inherited }
   // Every entry is chain tip when it lands — the chain is linear and append-only, and the trailing
   // token_count / task_complete of a turn must emit immediately, not wait for the next user turn.
   isLeafType(_e: CodexEntry) { return true }

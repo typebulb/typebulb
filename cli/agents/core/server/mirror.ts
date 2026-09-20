@@ -563,6 +563,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // orphan — the assistant's model + usage (so a dead branch never moves the watchdog / token chip).
   // Guarded: this runs inside the watchFile callback, so a malformed entry must not crash the process.
   function emitLive(entry: E) {
+    // An entry OFF the rendered thread is not rendered. TB-Agent-Children.md assumed a transcript
+    // file never mixes threads, which is true of CC and false of Codex: a sub-agent's rollout is a
+    // FORK that opens with a copy of the parent's entire conversation before the child's own brief
+    // and work (TB-Agent-Children-Codex.md). The adapter says which side of the seam an entry sits
+    // on; where children are wholly their own file, isSidechain is constant false here and nothing
+    // changes. The leaf scan already excludes off-thread entries, so this only catches the ones the
+    // chain walks THROUGH on its way to the root.
+    if (adapter.isSidechain(entry, state.thread)) return
     try {
       const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
       for (const e of events) state.buffer.push(e)
