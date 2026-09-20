@@ -7,8 +7,8 @@ import type { ChildRow } from './types.js'
 // Status-bar agents pill (TB-Agent-Children.md): the attached session's child transcripts — the
 // sub-agents it spawned. Picking one swaps the transcript for that child's own conversation, live
 // while it works, and the pill then wears its identity with an × to return (the git-diff pill's
-// shape). Presence is the signal: a session that spawned nothing shows no pill at all. Claude is the
-// only harness with children today; everywhere else the capability flag is false and none of this renders.
+// shape). Presence is the signal: a session that spawned nothing shows no pill at all. Claude and
+// Codex have children; elsewhere the capability flag is false and none of this renders.
 export class ChildrenPill extends ComboboxPill<ChildRow> {
   children: ChildRow[] = []
   enabled = false                 // info().children — the adapter capability gate; no list, no polling

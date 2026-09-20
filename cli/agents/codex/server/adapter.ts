@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
-import type { Event, SessionFile, TokenCounts } from '../../core/events.js'
+import type { ChildTranscript, Event, SessionFile, TokenCounts } from '../../core/events.js'
 
 // The Codex CLI realization of the AgentAdapter contract (TB-Agent-Codex.md, TB-Agent-Harness.md) —
 // read-only: no switcher, no driver. Grounded in real rollout files from codex-cli 0.146.0 and
@@ -31,9 +31,11 @@ interface CodexPayload {
   // session_meta
   id?: string
   cwd?: string
+  parent_thread_id?: string
   // 'cli' / 'vscode' for a conversation the user had; an object carrying `subagent` for a thread
-  // Codex spawned itself (Invariant 4).
-  source?: string | { subagent?: unknown }
+  // Codex spawned itself (Invariant 4). Two species wear `subagent`, and only `thread_spawn` is an
+  // agent someone asked for (TB-Agent-Children-Codex.md).
+  source?: string | { subagent?: { thread_spawn?: ThreadSpawn } }
   // response_item message
   role?: string                             // 'user' | 'assistant' | 'developer'
   phase?: string                            // assistant: 'commentary' | 'final_answer'
@@ -72,9 +74,24 @@ interface CodexEntry {
   parent?: string
 }
 
-// What a rollout's session_meta decides about the file: the cwd discovery filters on, and whether
-// Codex spawned it as a child thread rather than a conversation the user had.
-interface CodexMeta { cwd: string; subagent: boolean }
+// A spawned agent's own `thread_spawn` record, as its session_meta writes it.
+interface ThreadSpawn {
+  parent_thread_id?: string
+  depth?: number
+  agent_path?: string                       // '/root/experiment_review' — the task name is its basename
+  agent_role?: string | null                // a custom role; null on every spawn observed
+}
+
+// What a rollout's session_meta decides about the file: the cwd discovery filters on, whether Codex
+// spawned it as a child thread rather than a conversation the user had, and — for a spawned AGENT
+// rather than a guardian — the identity the agents pill is built from.
+// `id` is the thread's OWN id, which is NOT the adapter's sessionId (that is the file stem): a
+// child names its parent by thread id, so the two have to be translated between.
+interface CodexMeta { cwd: string; subagent: boolean; id?: string; spawn?: CodexSpawn; model?: string }
+
+// The identity of one spawned agent (TB-Agent-Children-Codex.md): its own thread id, the thread that
+// spawned it (a session at depth 1, another agent below), and its label.
+interface CodexSpawn { id: string; parent: string; path: string; role?: string; depth: number }
 
 // Injected envelope markers (TB-Agent-Codex.md § Cleaning). Several arrive as role `user`, so blocks
 // are filtered by marker, not role. Every entry is a marker OBSERVED in a real rollout: the guessed
@@ -429,9 +446,12 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // session_meta facts per rollout file — immutable once written, so cached forever on a successful
   // parse only (a just-created file may not have flushed its first line yet; retried next listing).
   #metaCache = new Map<string, CodexMeta>()
-  // Last-activity time per file, keyed by the stat that produced it: a rollout only ever grows, so an
-  // unchanged (size, mtime) pair means an unchanged tail and the cached read stands.
-  #recency = new Map<string, { size: number; mtime: number; ms: number }>()
+  // What one tail read says about a file, keyed by the stat that produced it: a rollout only ever
+  // grows, so an unchanged (size, mtime) pair means an unchanged tail and the cached read stands —
+  // and a held-open rollout's frozen mtime is harmless here, because its size moves regardless.
+  // Recency and mid-turn are cached TOGETHER because they come from the same bytes: read apart, every
+  // listing paid twice for one window (TB-Agent-Children-Codex.md).
+  #tail = new Map<string, { size: number; mtime: number; ms?: number; running?: boolean }>()
   // sessionId → file, refreshed by every listing — how sessionAlive resolves the id the contract
   // hands it without a rescan (the listing is per-poll-while-unattached by design; this is not).
   #files = new Map<string, string>()
@@ -485,15 +505,118 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     return out
   }
 
+  // This session's spawned agents (TB-Agent-Children-Codex.md). Codex writes each one as an ordinary
+  // rollout in the same date tree, so discovery is the session scan with its filter inverted: keep
+  // this cwd's `thread_spawn` threads, then keep those whose parent chain reaches the attached
+  // session. It shares #rolloutFiles and #metaCache with listSessionFiles, so a session that spawned
+  // nothing pays a map lookup per rollout and no new read.
+  //
+  // The chain WALK rather than a `session_id` match, though every spawn on disk sets `session_id` to
+  // the session: all of them are depth 1, where the session and the immediate parent are the same
+  // thread, so the shortcut is untested exactly where it would differ (§ Unverified). The walk is
+  // right either way.
+  listChildren(cwd: string, sessionId: string): ChildTranscript[] {
+    const want = normCwd(cwd)
+    type Found = { file: string; mtime: number; running: boolean | undefined; spawn: CodexSpawn; model?: string }
+    const found = new Map<string, Found>()
+    // The attached session's own THREAD id and model, picked up in this same pass: `sessionId` is a
+    // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
+    // nothing. Read here rather than through #files, which only a listing refreshes.
+    let sessionThread: string | undefined
+    let sessionModel: string | undefined
+    for (const file of this.#rolloutFiles()) {
+      let size = 0, mtimeMs = 0
+      try {
+        const st = statSync(file)
+        if (!st.isFile()) continue
+        size = st.size; mtimeMs = st.mtimeMs
+      } catch { continue }                  // races / permissions — skip
+      let meta = this.#metaCache.get(file)
+      if (meta === undefined) {
+        meta = readMeta(file)
+        if (meta === undefined) continue                // first line not flushed yet — retry next listing
+        this.#metaCache.set(file, meta)
+      }
+      if (basename(file, '.jsonl') === sessionId) { sessionThread = meta.id; sessionModel = meta.model }
+      // `spawn` is the narrow marker: a guardian_review thread carries `subagent` too, nests under
+      // children as readily as sessions, and is nothing a user spawned (Children-Codex Invariant 1).
+      if (!meta.spawn || normCwd(meta.cwd) !== want) continue
+      found.set(meta.spawn.id, {
+        file, mtime: this.#lastActivity(file, size, mtimeMs), running: this.#childRunning(file, size, mtimeMs),
+        spawn: meta.spawn, model: meta.model,
+      })
+    }
+    if (!sessionThread) return []           // no such session in this tree — nothing can belong to it
+    const mine = (s: CodexSpawn, seen = new Set<string>()): boolean => {
+      if (s.parent === sessionThread) return true
+      if (seen.has(s.id)) return false                  // a malformed parent cycle
+      seen.add(s.id)
+      const up = found.get(s.parent)
+      return up ? mine(up.spawn, seen) : false
+    }
+    const out: ChildTranscript[] = []
+    for (const { file, mtime, running, spawn, model } of found.values()) {
+      if (!mine(spawn)) continue
+      out.push({
+        id: spawn.id, file, mtime,
+        label: spawn.path.split('/').filter(Boolean).pop() ?? spawn.path,
+        kind: spawn.role || 'agent',
+        // Only an override: the child's own turn_context against the session's.
+        model: model && model !== sessionModel ? model : undefined,
+        parentId: found.has(spawn.parent) ? spawn.parent : undefined,
+        depth: spawn.depth,
+        // Codex's nearest signal is the `interrupted` activity kind, and it is NOT terminal — an
+        // interrupt is followed by a followup_task and a later completion. The neutral field means
+        // the user killed it for good, so an interrupted agent reads as not-running instead.
+        stopped: false,
+        running,
+      })
+    }
+    return out
+  }
+
+  // Is this thread mid-turn? Its own last turn boundary answers, which is why a Codex child needs no
+  // settlement scan: the parent's `completed` record and the child's own `task_complete` land within
+  // milliseconds of each other, and only the child's is readable at any depth. It also re-answers,
+  // where a settled set could not: `followup_task` wakes a finished agent, and one observed child
+  // completed seven times across forty minutes (TB-Agent-Children-Codex.md).
+  #childRunning(file: string, size: number, mtimeMs: number): boolean | undefined {
+    return this.#tailFacts(file, size, mtimeMs).running
+  }
+
+  // The sessions Codex is mid-turn on right now — the picker's working dot, batched as the contract
+  // asks. Same tail read the row's recency already pays for, so the dots cost stats and no new I/O.
+  //
+  // Gated on recency exactly as sessionAlive is, and for the same reason: a session abandoned
+  // mid-turn keeps an unanswered `task_started` forever, and a dot that never goes out is worse than
+  // no dot at all. A session that cannot be read at all is left out rather than guessed at.
+  sessionsWorking(cwd: string): Set<string> | undefined {
+    const out = new Set<string>()
+    const now = Date.now()
+    for (const { sessionId, file, mtime } of this.listSessionFiles(cwd)) {
+      if (now - mtime >= ABANDONED_MS) continue
+      let facts
+      try { const st = statSync(file); facts = this.#tailFacts(file, st.size, st.mtimeMs) }
+      catch { continue }                    // races / permissions — no cue rather than a wrong one
+      if (facts.running) out.add(sessionId)
+    }
+    return out
+  }
+
   // Last activity, NOT the file's mtime: Codex holds a rollout open for the whole session, and Windows
   // freezes a held file's mtime — 53 minutes stale on a live session, measured (Invariant 9). The
   // transcript's own trailing timestamp is the write record; mtime stays as the floor.
   #lastActivity(file: string, size: number, mtimeMs: number): number {
-    const hit = this.#recency.get(file)
-    if (hit && hit.size === size && hit.mtime === mtimeMs) return hit.ms
-    const ms = Math.max(mtimeMs, readTailStamp(file) ?? 0)
-    this.#recency.set(file, { size, mtime: mtimeMs, ms })
-    return ms
+    return Math.max(mtimeMs, this.#tailFacts(file, size, mtimeMs).ms ?? 0)
+  }
+
+  // The cached tail read both of the above draw on.
+  #tailFacts(file: string, size: number, mtimeMs: number): { ms?: number; running?: boolean } {
+    const hit = this.#tail.get(file)
+    if (hit && hit.size === size && hit.mtime === mtimeMs) return hit
+    const facts = { size, mtime: mtimeMs, ...readTailFacts(file) }
+    this.#tail.set(file, facts)
+    return facts
   }
 
   // The `.jsonl` files under root/YYYY/MM/DD — three fixed levels, stray entries tolerated.
@@ -692,25 +815,50 @@ function readTail(file: string, cap: number): { text: string; partial: boolean }
 // runs past 500KB — and a window landing inside one holds no whole line at all (Invariant 9).
 const TAIL_WINDOWS = [64 * 1024, 1024 * 1024]
 
-// The timestamp of a rollout's last COMPLETE line — the one recency signal a held-open rollout keeps
-// current (#lastActivity). `undefined` when no whole line parses even in the larger window; the
-// caller's mtime floor then stands, and the session's next append corrects it.
-function readTailStamp(file: string): number | undefined {
+// Both facts a rollout's tail carries, in ONE read: `ms`, the timestamp of its last COMPLETE line —
+// the one recency signal a held-open rollout keeps current (#lastActivity) — and `running`, whether
+// its last turn boundary is an unanswered `task_started`. They want the same bytes, and the picker
+// asks for both about every row.
+//
+// The WINDOW LADDER serves `ms` alone: a single entry can dwarf the first window (a `compacted`
+// snapshot or long tool result runs past 500KB) and a window landing inside one holds no whole line
+// at all (Invariant 9). `running` needs no ladder, because the two boundaries are not symmetric — a
+// settled thread writes `task_complete` LAST, so it sits at the very tail (8 of 8 measured within
+// 4.2KB), while a working thread's `task_started` recedes as its turn produces output (4 of 4 past
+// 64KB, out to 1.9MB). No window can be sized to catch the second, so a read finding no boundary is
+// a turn still producing rather than an unknown, and a wider read only pays more for the same
+// verdict. Reading a miss as "cannot say" left exactly the long-running threads with no answer.
+//
+// `ms` is undefined when no whole line parses even in the larger window; the caller's mtime floor
+// then stands, and the next append corrects it.
+function readTailFacts(file: string): { ms?: number; running?: boolean } {
+  let running: boolean | undefined
   for (const cap of TAIL_WINDOWS) {
     const tail = readTail(file, cap)
-    if (tail === undefined) return undefined
+    if (tail === undefined) return {}       // unreadable: no recency, and no cue rather than a wrong one
     const lines = tail.text.split('\n')
     if (tail.partial) lines.shift()         // a fragment, not a line
+    let ms: number | undefined
     for (let i = lines.length - 1; i >= 0; i--) {
       if (!lines[i].trim()) continue
-      try {
-        const ms = Date.parse((JSON.parse(lines[i]) as CodexEntry).timestamp ?? '')
-        if (!Number.isNaN(ms)) return ms
-      } catch { /* the trailing line is torn mid-write — the one before it is whole */ }
+      let e: CodexEntry
+      try { e = JSON.parse(lines[i]) as CodexEntry }
+      catch { continue }                    // the trailing line is torn mid-write — the one before it is whole
+      if (ms === undefined) {
+        const t = Date.parse(e.timestamp ?? '')
+        if (!Number.isNaN(t)) ms = t
+      }
+      if (running === undefined && e.type === 'event_msg') {
+        const t = e.payload?.type
+        if (t === 'task_started') running = true
+        else if (t === 'task_complete' || t === 'turn_aborted') running = false
+      }
+      if (ms !== undefined && running !== undefined) break
     }
+    if (ms !== undefined) return { ms, running: running ?? true }
     if (!tail.partial) break                // the whole file was in the window; a wider read can't help
   }
-  return undefined
+  return { running: running ?? true }
 }
 
 // What a rollout's first line (session_meta) records: the cwd discovery filters on, and whether Codex
@@ -730,6 +878,34 @@ function readMeta(file: string): CodexMeta | undefined {
     // `source.subagent` is the structural marker, not the churning `thread_source` name (observed
     // `guardian_review`, `subagent`) — and not `parent_thread_id`, which a fork of a real
     // conversation also carries and which must stay visible.
-    return { cwd: p.cwd, subagent: typeof p.source === 'object' && !!p.source?.subagent }
+    const sub = typeof p.source === 'object' ? p.source?.subagent : undefined
+    return { cwd: p.cwd, subagent: !!sub, id: p.id, spawn: spawnOf(p, sub), model: headModel(head.text, nl) }
   } catch { return { cwd: '', subagent: false } }   // the line is complete (a newline followed) — junk, not a race
 }
+
+// A spawned AGENT's identity, or undefined for every other thread. `thread_spawn` is the test, NOT
+// the wider `source.subagent`: 44 of this machine's 51 spawned threads are guardian_review reviewers
+// nobody asked for, reaching 34 of its 53 sessions, so surfacing those would put an agents pill on
+// two sessions in three and presence is the pill's whole signal (TB-Agent-Children-Codex.md).
+function spawnOf(p: CodexPayload, sub: { thread_spawn?: ThreadSpawn } | undefined): CodexSpawn | undefined {
+  const ts = sub?.thread_spawn
+  if (!ts) return undefined
+  const parent = ts.parent_thread_id ?? p.parent_thread_id
+  if (!p.id || !parent) return undefined              // unidentifiable — better absent than a row that opens nothing
+  return { id: p.id, parent, path: ts.agent_path ?? '', role: ts.agent_role ?? undefined, depth: ts.depth ?? 1 }
+}
+
+// The thread's model, from the first `turn_context` in the window readMeta ALREADY read — free, and
+// the record only reports a model that differs from the session's anyway. A head window that ends
+// before the first turn_context leaves it undefined, and the row shows no model rather than a wrong one.
+function headModel(text: string, from: number): string | undefined {
+  for (const line of text.slice(from + 1).split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const e = JSON.parse(line) as CodexEntry
+      if (e.type === 'turn_context' && typeof e.payload?.model === 'string') return e.payload.model
+    } catch { /* the window cut this line short — nothing past it parses either */ }
+  }
+  return undefined
+}
+

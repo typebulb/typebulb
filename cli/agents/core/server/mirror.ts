@@ -1022,8 +1022,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // Finished is the PARENT having settled the spawn (adapter.settlesSpawns): a child's own tail
   // cannot tell a finished run from one stalled mid-flush. A parent process that is gone with no
   // settlement reads as finished, never as running — the child died with it.
+  // Unless the ADAPTER answers, which it may when its children say so themselves: Codex writes turn
+  // boundaries into the child's own file, and its children re-activate (a `followup_task` wakes one
+  // that already finished), so an accumulated settled set would latch them done on the first
+  // completion — TB-Agent-Children-Codex.md. The liveness gate still applies on that path: whatever
+  // the harness reports, a child of a dead process is finished.
   function childState(c: ChildTranscript, live: boolean, isTerminal: boolean): ChildRow['state'] {
     if (c.stopped) return 'stopped'
+    if (c.running !== undefined) return c.running && live ? 'running' : 'done'
     if (isTerminal) return 'done'
     return live ? 'running' : 'done'
   }

@@ -71,6 +71,12 @@ export interface ChildTranscript {
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself
   stopped: boolean           // the user killed it — the one terminal state only the harness knows
+  /** The harness's OWN answer to whether this child is still working, when it has one: Codex writes
+   *  its turn boundaries into the child's own file, so its tail says outright
+   *  (TB-Agent-Children-Codex.md). `undefined` leaves the question to the engine's settlement scan,
+   *  which is CC's shape — there a child's tail cannot tell a finished run from one stalled
+   *  mid-flush, so only the parent's record of the spawn can answer. */
+  running?: boolean
 }
 
 /** A `ChildTranscript` as the client sees it: the engine adds the state it alone can decide, since

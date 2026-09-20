@@ -128,7 +128,7 @@ export abstract class AgentAdapter<E = unknown> {
   /**
    * This session's child transcripts (TB-Agent-Children.md) — the conversations it spawned, each its
    * own file. Optional capability, like `createDriver`: absent ⇒ the harness has no children and the
-   * agents pill never renders (pi, Codex). MUST NOT overlap `listSessionFiles`: a child is never an
+   * agents pill never renders (pi). MUST NOT overlap `listSessionFiles`: a child is never an
    * attach candidate (Children Invariant 1), so the two discovery paths stay separate.
    */
   listChildren?(cwd: string, sessionId: string): ChildTranscript[]

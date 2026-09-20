@@ -202,6 +202,27 @@ describe('CodexAdapter status + picker + search', () => {
 })
 
 describe('CodexAdapter discovery (scan-and-filter)', () => {
+  // The thread id inside the typebulb fixture's session_meta. NOT its sessionId, which is the file
+  // stem — a child names its parent by thread id, and translating between the two is the whole of
+  // what listChildren has to get right first (TB-Agent-Children-Codex.md).
+  const TYPEBULB_THREAD = '019fbd82-18ed-7c12-98c6-d7daad4c8014'
+
+  // A spawned agent's rollout: its session_meta, then the turn boundaries the running read works
+  // from. `boundaries` in file order, so the last one is what answers.
+  function agentRollout(o: { id: string; parent: string; path: string; depth?: number; role?: string | null; boundaries?: string[]; cwd?: string }) {
+    const lines = [JSON.stringify({
+      timestamp: '2026-08-01T18:10:00.000Z', type: 'session_meta',
+      payload: {
+        session_id: TYPEBULB_THREAD, id: o.id, parent_thread_id: o.parent,
+        cwd: o.cwd ?? 'C:\\Code\\typebulb', thread_source: 'subagent', agent_path: o.path,
+        source: { subagent: { thread_spawn: { parent_thread_id: o.parent, depth: o.depth ?? 1, agent_path: o.path, agent_role: o.role ?? null } } },
+      },
+    })]
+    for (const t of o.boundaries ?? [])
+      lines.push(JSON.stringify({ timestamp: '2026-08-01T18:11:00.000Z', type: 'event_msg', payload: { type: t } }))
+    return lines.join('\n') + '\n'
+  }
+
   // A fake ~/.codex/sessions: date-partitioned, all three fixtures in one day dir, plus the noise
   // the scan must tolerate — a not-yet-flushed empty rollout, a compressed (non-.jsonl) one, and a
   // `.jsonl` whose first line is complete junk (a corrupt/compressed-in-place file), and a thread
@@ -217,6 +238,26 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     writeFileSync(join(day, 'rollout-2026-08-01T18-02-00-guardian.jsonl'), JSON.stringify({
       timestamp: '2026-08-01T18:02:00.000Z', type: 'session_meta',
       payload: { id: 'g', cwd: 'C:\\Code\\typebulb', parent_thread_id: 'p',
+        thread_source: 'guardian_review', source: { subagent: { other: 'guardian' } } },
+    }) + '\n')
+    // Two agents the session spawned, one settled and one mid-turn, plus a depth-2 agent under the
+    // first, an agent belonging to a DIFFERENT project, and a guardian nested under an agent — the
+    // shape that makes `thread_spawn` rather than `subagent` the surfacing test.
+    writeFileSync(join(day, 'rollout-2026-08-01T18-10-00-kid-a.jsonl'), agentRollout({
+      id: 'kid-a', parent: TYPEBULB_THREAD, path: '/root/reference_migration',
+      boundaries: ['task_started', 'task_complete'] }))
+    writeFileSync(join(day, 'rollout-2026-08-01T18-11-00-kid-b.jsonl'), agentRollout({
+      id: 'kid-b', parent: TYPEBULB_THREAD, path: '/root/catalog_migration', role: 'reviewer',
+      boundaries: ['task_started'] }))
+    writeFileSync(join(day, 'rollout-2026-08-01T18-12-00-kid-deep.jsonl'), agentRollout({
+      id: 'kid-deep', parent: 'kid-a', depth: 2, path: '/root/reference_migration/deep_dive',
+      boundaries: ['task_complete'] }))
+    writeFileSync(join(day, 'rollout-2026-08-01T18-13-00-kid-elsewhere.jsonl'), agentRollout({
+      id: 'kid-elsewhere', parent: TYPEBULB_THREAD, path: '/root/other_project', cwd: 'C:\\tmp',
+      boundaries: ['task_started'] }))
+    writeFileSync(join(day, 'rollout-2026-08-01T18-14-00-guardian-of-kid.jsonl'), JSON.stringify({
+      timestamp: '2026-08-01T18:14:00.000Z', type: 'session_meta',
+      payload: { id: 'g2', cwd: 'C:\\Code\\typebulb', parent_thread_id: 'kid-a',
         thread_source: 'guardian_review', source: { subagent: { other: 'guardian' } } },
     }) + '\n')
     return root
@@ -258,6 +299,53 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     const a = new CodexAdapter(fakeRoot())
     expect(a.listSessionFiles('C:\\Code\\typebulb').map(s => s.sessionId))
       .toEqual([ROLLOUTS.typebulb.slice(0, -'.jsonl'.length)])
+  })
+
+  // Children come from listChildren alone and never from the session walk, or a fresh boot could
+  // auto-attach to a sub-agent and take the per-session lock against a transcript that is not a
+  // session (Children Invariant 1). The assertion above already pins the other half.
+  const kidsOf = (a: CodexAdapter) =>
+    a.listChildren('C:\\Code\\typebulb', ROLLOUTS.typebulb.slice(0, -'.jsonl'.length))
+
+  it('surfaces the agents a session spawned, and never the guardians that shadow them', () => {
+    const kids = kidsOf(new CodexAdapter(fakeRoot()))
+    // g2 hangs off kid-a, so a parent-chain walk reaches it; only `thread_spawn` keeps it out.
+    expect(kids.map(k => k.label).sort()).toEqual(['catalog_migration', 'deep_dive', 'reference_migration'])
+    expect(kids.some(k => k.id === 'g' || k.id === 'g2')).toBe(false)
+    // Another project's agent shares the session's thread id but not its cwd.
+    expect(kids.some(k => k.label === 'other_project')).toBe(false)
+  })
+
+  it('reaches a depth-2 agent through its parent chain, naming the agent that spawned it', () => {
+    const deep = kidsOf(new CodexAdapter(fakeRoot())).find(k => k.label === 'deep_dive')
+    expect(deep).toMatchObject({ depth: 2, parentId: 'kid-a' })
+    // Depth 1 sits directly under the session, which is not a child, so it names no parent.
+    const top = kidsOf(new CodexAdapter(fakeRoot())).find(k => k.label === 'reference_migration')
+    expect(top?.parentId).toBeUndefined()
+  })
+
+  // A Codex agent re-activates (`followup_task` wakes a finished one), so state is its own LAST
+  // boundary rather than an accumulated verdict — a settled set would latch it done forever
+  // (TB-Agent-Children-Codex.md Invariant 3).
+  it('reads running from the agent\u2019s own last turn boundary', () => {
+    const kids = kidsOf(new CodexAdapter(fakeRoot()))
+    expect(kids.find(k => k.label === 'reference_migration')?.running).toBe(false)   // …started, then completed
+    expect(kids.find(k => k.label === 'catalog_migration')?.running).toBe(true)      // started, still open
+    expect(kids.find(k => k.label === 'deep_dive')?.running).toBe(false)
+    // Never `stopped`: Codex's nearest signal (`interrupted`) is followed by a followup_task and a
+    // later completion, so it is not the terminal state the neutral field means.
+    expect(kids.every(k => k.stopped === false)).toBe(true)
+  })
+
+  // A settled thread writes its completion LAST, so it always shows in the window; a working one's
+  // task_started recedes behind the turn's output without bound (measured to 1.9MB). So a window
+  // with no boundary is a turn still producing, not an unknown.
+  it('reads a boundary-less window as running, not as unknown', () => {
+    const root = fakeRoot()
+    const day = join(root, '2026', '08', '01')
+    writeFileSync(join(day, 'rollout-2026-08-01T18-15-00-kid-fresh.jsonl'), agentRollout({
+      id: 'kid-fresh', parent: TYPEBULB_THREAD, path: '/root/just_spawned' }))
+    expect(kidsOf(new CodexAdapter(root)).find(k => k.label === 'just_spawned')?.running).toBe(true)
   })
 
   // Codex holds a rollout open for the whole session and Windows defers a held file's mtime — a live
@@ -305,6 +393,26 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     freeze(join(day, ROLLOUTS.typebulb))
     b.listSessionFiles('C:\\Code\\typebulb')
     expect(b.sessionAlive(ROLLOUTS.typebulb.slice(0, -'.jsonl'.length), 'C:\\Code\\typebulb')).toBe(false)
+  })
+
+  // The picker's working dot. Codex has no pid store, so "mid-turn right now" is the same tail
+  // boundary the child rows read, gated on recency: a session abandoned mid-turn keeps an
+  // unanswered task_started forever, and a dot that never goes out is worse than no dot.
+  it('reports the sessions Codex is mid-turn on, and drops the ones that went quiet', () => {
+    const root = fakeRoot()
+    const day = join(root, '2026', '08', '01')
+    const rollout = (name: string, cwd: string, last: string, when: string) =>
+      writeFileSync(join(day, name), [
+        JSON.stringify({ timestamp: '2026-08-01T20:00:00.000Z', type: 'session_meta', payload: { id: name, cwd, source: 'cli' } }),
+        JSON.stringify({ timestamp: when, type: 'event_msg', payload: { type: last } }),
+      ].join('\n') + '\n')
+    const now = new Date().toISOString()
+    rollout('rollout-2026-08-01T20-01-00-busy.jsonl', 'C:\\tmp\\work', 'task_started', now)
+    rollout('rollout-2026-08-01T20-02-00-idle.jsonl', 'C:\\tmp\\work', 'task_complete', now)
+    rollout('rollout-2026-08-01T20-03-00-gone.jsonl', 'C:\\tmp\\work', 'task_started', '2026-08-01T20:03:00.000Z')
+    for (const f of readdirSync(day)) freeze(join(day, f))
+    const working = new CodexAdapter(root).sessionsWorking('C:\\tmp\\work')
+    expect([...working!]).toEqual(['rollout-2026-08-01T20-01-00-busy'])
   })
 
   // A single entry can dwarf the first tail window — `compacted` snapshots and long tool results run
