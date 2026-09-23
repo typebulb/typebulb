@@ -531,7 +531,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // than under whichever sibling happens to precede it.
   listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     const want = normCwd(cwd)
-    type Found = { file: string; mtime: number; running: boolean | undefined; spawn: CodexSpawn; model?: string }
+    type Found = { file: string; mtime: number; started?: number; running: boolean | undefined; spawn: CodexSpawn; model?: string }
     const found = new Map<string, Found>()
     // The attached session's own THREAD id and model, picked up in this same pass: `sessionId` is a
     // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
@@ -539,11 +539,11 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     let sessionThread: string | undefined
     let sessionModel: string | undefined
     for (const file of this.#rolloutFiles()) {
-      let size = 0, mtimeMs = 0
+      let size = 0, mtimeMs = 0, started: number | undefined
       try {
         const st = statSync(file)
         if (!st.isFile()) continue
-        size = st.size; mtimeMs = st.mtimeMs
+        size = st.size; mtimeMs = st.mtimeMs; started = st.birthtimeMs || undefined
       } catch { continue }                  // races / permissions — skip
       let meta = this.#metaCache.get(file)
       if (meta === undefined) {
@@ -556,7 +556,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       // children as readily as sessions, and is nothing a user spawned (Children-Codex Invariant 1).
       if (!meta.spawn || normCwd(meta.cwd) !== want) continue
       found.set(meta.spawn.id, {
-        file, mtime: this.#lastActivity(file, size, mtimeMs), running: this.#childRunning(file, size, mtimeMs),
+        file, mtime: this.#lastActivity(file, size, mtimeMs), started, running: this.#childRunning(file, size, mtimeMs),
         spawn: meta.spawn, model: meta.model,
       })
     }
@@ -569,12 +569,12 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       return up ? mine(up.spawn, seen) : false
     }
     const out: ChildTranscript[] = []
-    for (const { file, mtime, running, spawn, model } of found.values()) {
+    for (const { file, mtime, started, running, spawn, model } of found.values()) {
       if (!mine(spawn)) continue
       out.push({
-        id: spawn.id, file, mtime,
+        id: spawn.id, file, mtime, started,
         label: spawn.path.split('/').filter(Boolean).pop() ?? spawn.path,
-        kind: spawn.role || 'agent',
+        kind: spawn.role || undefined,
         // Only an override: the child's own turn_context against the session's.
         model: model && model !== sessionModel ? model : undefined,
         parentId: found.has(spawn.parent) ? spawn.parent : undefined,

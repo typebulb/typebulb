@@ -9,7 +9,7 @@
 // client also consumes (as `ServerEvent`). The adapter's job is to turn one raw JSONL entry into that
 // stream; the engine owns the tree walk, the locks, the poll buffer, and the RPC surface.
 
-import type { ChildTranscript, ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatus, Event, SessionFile, Thread, TokenCounts } from '../events.js'
+import type { ChildTranscript, ComposerDialogRequest, ComposerQueue, ComposerStats, ComposerStatus, Event, SessionFile, SpawnSignal, Thread, TokenCounts } from '../events.js'
 
 /**
  * A harness the mirror can drive, through a process the mirror itself spawned and owns
@@ -134,16 +134,17 @@ export abstract class AgentAdapter<E = unknown> {
   listChildren?(cwd: string, sessionId: string): ChildTranscript[]
 
   /**
-   * The spawn ids this entry SETTLES — the child that call spawned has stopped
-   * (TB-Agent-Children.md). Optional, like `listChildren`; an adapter without children needs none,
-   * and one that omits it leaves every child running while its session is.
+   * What this entry says about a spawn (TB-Agent-Children.md): the child that call spawned has
+   * STOPPED, or has been woken again. Optional, like `listChildren`; an adapter without children
+   * needs none, and one that omits it leaves every child running while its session is.
    *
    * Deliberately not "the entry holds a tool_result", which the engine used to assume. A harness may
    * answer the spawn call at LAUNCH and report the outcome elsewhere — CC's background agents do
    * exactly that — so "the parent answered the call" and "the child finished" are two different
-   * facts, and only the adapter knows which of its entries carries the second one.
+   * facts, and only the adapter knows which of its entries carries the second one. Nor is a stop
+   * final: CC wakes a finished agent with a SendMessage, and it notifies again when it next stops.
    */
-  settlesSpawns?(e: E): string[]
+  spawnSignals?(e: E): SpawnSignal[]
 
   // ── tree schema: the engine walks the parent-linked tree through these, never a literal field ──
   /** Parse one JSONL line into a typed entry, or null to drop it (a JSON error, a header, a line with

@@ -1,10 +1,10 @@
-import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, existsSync } from 'fs'
+import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, existsSync, type Stats } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
 import { listJsonlFiles } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
-import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
+import type { ChildTranscript, Event, SpawnSignal, Thread, TokenCounts } from '../../core/events.js'
 
 // The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
 // schema-specific about CC's on-disk transcript — the `uuid`/`parentUuid` tree, the `isSidechain`/
@@ -17,6 +17,7 @@ interface JsonlEntry {
   uuid: string
   type: string
   isSidechain?: boolean
+  agentId?: string           // set only on a child transcript's entries: the child's own id
   isMeta?: boolean
   isApiErrorMessage?: boolean
   parentUuid?: string
@@ -27,12 +28,14 @@ interface JsonlEntry {
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage }
   usage?: TokenUsage
   attachment?: { type?: string; prompt?: unknown; commandMode?: string }
-  // A `queue-operation` line's payload — the text CC queued. It is where a task-notification is
-  // recorded FIRST, at the moment the agent stops (settlesSpawns).
+  // A `queue-operation` line's payload — the text CC queued. Its `enqueue` is where a
+  // task-notification is recorded FIRST, at the moment the agent stops (spawnSignals).
   content?: string
+  operation?: string
   // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
   // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
   toolUseResult?: unknown
+  origin?: { kind?: string }
 }
 
 interface ContentBlock {
@@ -88,17 +91,19 @@ function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
   for (const name of names) {
     if (!name.endsWith('.jsonl')) continue
     const file = join(dir, name)
-    let mtime: number
-    try { mtime = statSync(file).mtimeMs } catch { continue }  // races / permissions — skip
+    let st: Stats
+    try { st = statSync(file) } catch { continue }             // races / permissions — skip
     const stem = name.slice(0, -'.jsonl'.length)
     let meta: ChildMeta = {}
     try { meta = JSON.parse(readFileSync(join(dir, `${stem}.meta.json`), 'utf8')) as ChildMeta } catch {}
     // The id is the bare agentId, so a child's `parentAgentId` names its parent's id directly.
     out.push({
       id: stem.startsWith('agent-') ? stem.slice('agent-'.length) : stem,
-      file, mtime,
+      file, mtime: st.mtimeMs,
+      started: st.birthtimeMs || undefined,
+      tokens: childTokens(file, st.size, st.mtimeMs),
       label: meta.description ?? '',
-      kind: meta.agentType ?? 'agent',
+      kind: meta.agentType === DEFAULT_AGENT_TYPE ? undefined : meta.agentType,
       model: meta.model,
       spawnId: meta.toolUseId,
       parentId: meta.parentAgentId,
@@ -107,6 +112,38 @@ function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     })
   }
   return out
+}
+
+// The type every plain Agent call gets, so it says nothing a row should spend width on; Explore,
+// Plan and custom agents name themselves (ChildTranscript.kind).
+const DEFAULT_AGENT_TYPE = 'general-purpose'
+
+// The row's token figure: the child's context window as of its last response — the token chip's
+// sum, off the last assistant row in the file's tail. Cached per file until it grows, so listing an
+// idle child costs its stat and nothing more.
+const CHILD_TAIL = 256 * 1024
+const childTails = new Map<string, { size: number; mtime: number; tokens?: number }>()
+function childTokens(file: string, size: number, mtime: number): number | undefined {
+  const hit = childTails.get(file)
+  if (hit && hit.size === size && hit.mtime === mtime) return hit.tokens
+  let tokens: number | undefined
+  let fd: number | undefined
+  try {
+    fd = openSync(file, 'r')
+    const len = Math.min(CHILD_TAIL, size)
+    const buf = Buffer.alloc(len)
+    const n = readSync(fd, buf, 0, len, size - len)
+    const lines = buf.subarray(0, n).toString('utf8').split('\n')
+    for (let i = lines.length - 1; i >= 0 && tokens === undefined; i--) {
+      if (!lines[i].includes('"usage"')) continue
+      let e: JsonlEntry
+      try { e = JSON.parse(lines[i]) } catch { continue }       // the cut first line, or a partial flush
+      const u = e?.type === 'assistant' ? e.message?.usage : undefined
+      if (u) tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+    }
+  } catch {} finally { if (fd !== undefined) closeSync(fd) }
+  childTails.set(file, { size, mtime, tokens })
+  return tokens
 }
 
 // A base64 image block → an inline markdown image, so it renders instead of dumping its raw base64.
@@ -119,6 +156,14 @@ function isAsyncLaunch(r: unknown): boolean {
   if (!r || typeof r !== 'object') return false
   const o = r as { isAsync?: unknown; status?: unknown }
   return o.status === 'async_launched' || o.isAsync === true
+}
+
+// CC's structured result for a SendMessage that woke a finished background agent: `{ success: true,
+// message: "Resuming agent …", resumedAgentId }`. The agent runs on from there — observed 2026-09-22,
+// green in CC's own agent map for 25 minutes after a grow-only settled set had latched it done.
+function resumedAgentId(r: unknown): string | undefined {
+  const id = r && typeof r === 'object' ? (r as { resumedAgentId?: unknown }).resumedAgentId : undefined
+  return typeof id === 'string' && id ? id : undefined
 }
 
 // Where a `<task-notification>` can ride. THREE shapes occur: CC delivers it as an ordinary user
@@ -134,7 +179,9 @@ function isAsyncLaunch(r: unknown): boolean {
 function notificationText(e: JsonlEntry): string {
   if (e.type === 'attachment' && e.attachment?.type === 'queued_command') return toText(e.attachment.prompt)
   if (e.type === 'user' && typeof e.message?.content === 'string') return e.message.content
-  if (e.type === 'queue-operation' && typeof e.content === 'string') return e.content
+  // Only the enqueue: the `remove` written at delivery re-carries the text under the removal's own
+  // timestamp, which in the field landed 200ms after a resume of the very agent it reports.
+  if (e.type === 'queue-operation' && e.operation === 'enqueue' && typeof e.content === 'string') return e.content
   return ''
 }
 
@@ -547,21 +594,28 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   sessionsWorking(_cwd: string) { return workingSessionIds() }
 
-  // What says a child has stopped (TB-Agent-Children.md). Two shapes, because CC has two:
-  // a FOREGROUND Agent call is answered when its agent finishes, so its tool_result settles the
-  // spawn; a BACKGROUND one is answered at launch and reports its outcome later as a
-  // task-notification attachment naming the same tool-use-id. Reading only the first marked every
-  // background child finished the instant it started.
-  settlesSpawns(e: JsonlEntry): string[] {
-    const notified = notifiedIds(notificationText(e))
+  // What says a child has stopped, or started again (TB-Agent-Children.md). Two stop shapes, because
+  // CC has two: a FOREGROUND Agent call is answered when its agent finishes, so its tool_result
+  // settles the spawn; a BACKGROUND one is answered at launch and reports its outcome later as a
+  // task-notification naming the same tool-use-id. Reading only the first marked every background
+  // child finished the instant it started. One wake is a SendMessage that resumed a finished
+  // background agent, which runs on and notifies again under the same ids when it next stops.
+  // The other wake is in the child's OWN file: a background task of its own finishing after it
+  // stopped is delivered there as a task-notification turn, and the child runs on (observed
+  // 2026-09-24, 26 of 26 such turns on disk came after a stop and before the next one).
+  spawnSignals(e: JsonlEntry): SpawnSignal[] {
+    const at = Date.parse(e.timestamp ?? '') || 0
+    const notified = notifiedIds(notificationText(e)).map(id => ({ id, stopped: true, at }))
+    if (e.agentId && e.origin?.kind === 'task-notification') return [...notified, { id: e.agentId, stopped: false, at }]
     if (notified.length) return notified
-    if (e.type === 'user') {
-      if (isAsyncLaunch(e.toolUseResult)) return []
-      const content = e.message?.content
-      if (!Array.isArray(content)) return []
-      return content.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id ?? '').filter(Boolean)
-    }
-    return []
+    if (e.type !== 'user') return []
+    const resumed = resumedAgentId(e.toolUseResult)
+    if (resumed) return [{ id: resumed, stopped: false, at }]
+    if (isAsyncLaunch(e.toolUseResult)) return []
+    const content = e.message?.content
+    if (!Array.isArray(content)) return []
+    return content.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id ?? '').filter(Boolean)
+      .map(id => ({ id, stopped: true, at }))
   }
 
   readPreview(file: string) { return readPreview(file) }

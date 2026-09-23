@@ -163,7 +163,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
       div({ class: 'picker-row-main' },
         // Green = the harness says this session is mid-turn; the attached row overrides it in CSS.
         span({ class: ['picker-dot', s.working ? 'working' : ''] }),
-        s.child ? span({ class: 'picker-child-kind' }, s.child.kind) : null,
+        s.child?.kind ? span({ class: 'picker-child-kind' }, s.child.kind) : null,
         span({ class: ['picker-preview', busy ? 'shimmer-text shimmer-slow' : ''] }, s.preview || '(no preview)'),
         hitsBadge(s.hitCount),
         span({

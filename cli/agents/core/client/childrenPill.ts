@@ -1,7 +1,7 @@
 import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { busyPill, closeChip } from './ui.js'
-import { relTime } from './util.js'
+import { formatDuration, formatTokens } from './util.js'
 import type { ChildRow } from './types.js'
 
 // Status-bar agents pill (TB-Agent-Children.md): the attached session's child transcripts — the
@@ -67,7 +67,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
 
   rows(): ChildRow[] {
     const q = this.filter.trim().toLowerCase()
-    return q ? this.children.filter(c => `${c.kind} ${c.label}`.toLowerCase().includes(q)) : this.children
+    return q ? this.children.filter(c => [c.kind, c.label].filter(Boolean).join(' ').toLowerCase().includes(q)) : this.children
   }
 
   get running() { return this.children.filter(c => c.state === 'running').length }
@@ -78,7 +78,8 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // newest-at-bottom among siblings, then nested under the agent that spawned them
       const next = byAncestry((await tb.server.listChildren() as ChildRow[]).reverse())
       const changed = next.length !== this.children.length ||
-        next.some((c, i) => { const o = this.children[i]; return c.id !== o?.id || c.state !== o.state || c.mtime !== o.mtime })
+        next.some((c, i) => { const o = this.children[i]; return c.id !== o?.id || c.state !== o.state || c.mtime !== o.mtime || c.tokens !== o.tokens }) ||
+        next.some(c => c.state === 'running')          // a running row's duration ticks with no write
       this.children = next
       this.#resolveViewing()
       if (changed) { this.update(); this.keepBottom() }
@@ -182,8 +183,8 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // it said the same thing twice and cost the pill width its neighbours need.
       span({
         class: ['children-doc-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''],
-        title: `${c.kind} — ${c.label || 'no description'}`,
-      }, c.label || c.kind),
+        title: [c.kind, c.label || 'no description'].filter(Boolean).join(' — '),
+      }, c.label || c.kind || 'agent'),
       closeChip(() => void this.closeChild()),
     )
   }
@@ -208,11 +209,14 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id) },
       },
       span({ class: ['children-dot', c.state] }),
-      span({ class: 'children-kind' }, c.kind),
+      c.kind ? span({ class: 'children-kind' }, c.kind) : null,
       span({ class: ['children-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''] },
         c.label || '(no description)'),
       c.model ? span({ class: 'children-model' }, c.model) : null,
-      span({ class: 'children-time' }, relTime(c.mtime)),
+      // CC's agent map's two figures: how long it has run (to its last write once done), and its
+      // context window. Recency went — the list is already ordered by it.
+      c.started ? span({ class: 'children-time' }, formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started)) : null,
+      c.tokens ? span({ class: 'children-tokens' }, formatTokens(c.tokens)) : null,
     )
   }
 }

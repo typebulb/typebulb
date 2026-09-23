@@ -1241,7 +1241,7 @@ a.server-port:hover { text-decoration: underline; }
 .children-kind { flex: none; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .children-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .children-model { flex: none; color: var(--muted); opacity: .8; }
-.children-time { flex: none; color: var(--muted); font-size: .72rem; min-width: 2.6rem; text-align: right; }
+.children-time, .children-tokens { flex: none; color: var(--muted); font-size: .72rem; min-width: 2.6rem; text-align: right; }
 /* The viewing form: the open child's identity in place of the icon+count, with the × that returns.
    Same seating rule as the diff pill's — .pill.glyph opts out of the text-box trim, so each TEXT
    flex item takes it back or the words sit low against the icon. */

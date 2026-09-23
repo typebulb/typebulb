@@ -26,6 +26,16 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
+// A run's length: seconds under a minute, then whole minutes, then h+m — minute grain so a running
+// row doesn't jitter on the 3s poll.
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
 export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max).trimEnd() + '…' : s
 }

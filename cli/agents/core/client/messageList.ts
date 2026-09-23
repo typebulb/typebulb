@@ -703,9 +703,9 @@ export class MessageList extends Component {
       span({ class: 'glyph-img' }, '🤖'),
       span({ class: 'agent-kind' }, child?.kind ?? 'agent'),
       child
-        ? a({ class: 'agent-name', title: `Open this ${child.kind} agent's transcript`,
+        ? a({ class: 'agent-name', title: `Open this ${child.kind ? `${child.kind} ` : ''}agent's transcript`,
               onClick: (e: MouseEvent) => { e.preventDefault(); this.parent.openChild(child.id) } },
-            child.label || child.kind)
+            child.label || child.kind || 'agent')
         : span({ class: 'agent-name' }, from.slice(0, 8)),
     )
   }
@@ -816,7 +816,7 @@ export class MessageList extends Component {
             ? (follow
                 ? a({
                     class: 'tool-sum link',
-                    title: child ? `Open this ${child.kind} agent's transcript` : filePath,
+                    title: child ? `Open this ${child.kind ? `${child.kind} ` : ''}agent's transcript` : filePath,
                     onClick: (e: MouseEvent) => {
                       e.preventDefault()
                       follow()

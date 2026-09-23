@@ -49,7 +49,7 @@ export interface SessionRow {
   snippet?: string
   /** Set when the hit is inside a session's CHILD transcript (TB-Agent-Children.md): an indented row
    *  under its parent's, opened by attaching the parent and then swapping. */
-  child?: { id: string; kind: string; depth: number }
+  child?: { id: string; kind?: string; depth: number }
 }
 
 /** Which thread of a transcript a view renders (TB-Agent-Children.md). A child transcript is its own
@@ -64,8 +64,12 @@ export interface ChildTranscript {
   id: string                 // stable within the session (CC: the agentId)
   file: string
   mtime: number
+  started?: number           // when it began (ms epoch; CC: the file's birth, which is the spawn)
+  tokens?: number            // its context window as of its last response, where the harness reads one
   label: string              // the caller's one-line description; '' when the harness records none
-  kind: string               // the child's own type (CC: agentType — general-purpose, Explore, …)
+  kind?: string              // the child's own type, only where it says more than "agent": CC omits
+                             // general-purpose, the type every plain Agent call gets, as `model`
+                             // omits the session's own
   model?: string             // set only where the caller overrode the session's model
   spawnId?: string           // the parent tool call that spawned it (CC: toolUseId)
   parentId?: string          // the child that spawned it, above depth 1
@@ -82,6 +86,13 @@ export interface ChildTranscript {
 /** A `ChildTranscript` as the client sees it: the engine adds the state it alone can decide, since
  *  "finished" is the parent holding a tool result for `spawnId` (TB-Agent-Children.md). */
 export interface ChildRow extends ChildTranscript { state: 'running' | 'done' | 'stopped' }
+
+/** What one entry says about a spawn (TB-Agent-Children.md): the child it names has stopped, or has
+ *  been woken again. Read from the parent's transcript and each child's own, since a child can wake
+ *  itself. `at` orders them: a harness may write an old stop after a newer
+ *  wake (CC delivers a queued notification at the turn's end, stamped with its enqueue time), so the
+ *  latest by time wins, never the latest by file position. */
+export interface SpawnSignal { id: string; stopped: boolean; at: number }
 
 /** One line of ambient driver state (TB-Agent-Composer-Toolkit.md Piece 2): a retry/compaction in
  *  progress, an extension notify, or joined extension setStatus entries. Display-only. */
