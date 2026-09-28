@@ -465,7 +465,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // and a held-open rollout's frozen mtime is harmless here, because its size moves regardless.
   // Recency and mid-turn are cached TOGETHER because they come from the same bytes: read apart, every
   // listing paid twice for one window (TB-Agent-Children-Codex.md).
-  #tail = new Map<string, { size: number; mtime: number; ms?: number; running?: boolean }>()
+  #tail = new Map<string, { size: number; mtime: number } & TailFacts>()
   // sessionId → file, refreshed by every listing — how sessionAlive resolves the id the contract
   // hands it without a rescan (the listing is per-poll-while-unattached by design; this is not).
   #files = new Map<string, string>()
@@ -531,7 +531,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // than under whichever sibling happens to precede it.
   listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     const want = normCwd(cwd)
-    type Found = { file: string; mtime: number; started?: number; running: boolean | undefined; spawn: CodexSpawn; model?: string }
+    type Found = { file: string; mtime: number; started?: number; running: boolean | undefined; tokens?: number; spawn: CodexSpawn; model?: string }
     const found = new Map<string, Found>()
     // The attached session's own THREAD id and model, picked up in this same pass: `sessionId` is a
     // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
@@ -557,6 +557,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       if (!meta.spawn || normCwd(meta.cwd) !== want) continue
       found.set(meta.spawn.id, {
         file, mtime: this.#lastActivity(file, size, mtimeMs), started, running: this.#childRunning(file, size, mtimeMs),
+        tokens: this.#tailFacts(file, size, mtimeMs).tokens,
         spawn: meta.spawn, model: meta.model,
       })
     }
@@ -569,10 +570,10 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       return up ? mine(up.spawn, seen) : false
     }
     const out: ChildTranscript[] = []
-    for (const { file, mtime, started, running, spawn, model } of found.values()) {
+    for (const { file, mtime, started, running, tokens, spawn, model } of found.values()) {
       if (!mine(spawn)) continue
       out.push({
-        id: spawn.id, file, mtime, started,
+        id: spawn.id, file, mtime, started, tokens,
         label: spawn.path.split('/').filter(Boolean).pop() ?? spawn.path,
         kind: spawn.role || undefined,
         // Only an override: the child's own turn_context against the session's.
@@ -625,7 +626,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   }
 
   // The cached tail read both of the above draw on.
-  #tailFacts(file: string, size: number, mtimeMs: number): { ms?: number; running?: boolean } {
+  #tailFacts(file: string, size: number, mtimeMs: number): TailFacts {
     const hit = this.#tail.get(file)
     if (hit && hit.size === size && hit.mtime === mtimeMs) return hit
     const facts = { size, mtime: mtimeMs, ...readTailFacts(file) }
@@ -749,15 +750,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       if (p.type === 'token_count') {
         const u = p.info?.last_token_usage
         if (!u) return { events }
-        // Codex's input_tokens INCLUDES cached_input_tokens; the chip sums in+cached+cacheCreate
-        // (CC semantics, where they're disjoint) — so subtract to keep the window total honest.
-        const usage: TokenCounts = {
-          in: Math.max(0, (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0)),
-          out: u.output_tokens ?? 0,
-          cached: u.cached_input_tokens ?? 0,
-          cacheCreate: u.cache_write_input_tokens ?? 0,
-        }
-        return { events, usage }
+        return { events, usage: usageCounts(u) }
       }
       return { events }
     }
@@ -869,8 +862,9 @@ const TAIL_WINDOWS = [64 * 1024, 1024 * 1024]
 //
 // `ms` is undefined when no whole line parses even in the larger window; the caller's mtime floor
 // then stands, and the next append corrects it.
-function readTailFacts(file: string): { ms?: number; running?: boolean } {
+function readTailFacts(file: string): TailFacts {
   let running: boolean | undefined
+  let tokens: number | undefined
   for (const cap of TAIL_WINDOWS) {
     const tail = readTail(file, cap)
     if (tail === undefined) return {}       // unreadable: no recency, and no cue rather than a wrong one
@@ -891,12 +885,31 @@ function readTailFacts(file: string): { ms?: number; running?: boolean } {
         if (t === 'task_started') running = true
         else if (t === 'task_complete' || t === 'turn_aborted') running = false
       }
-      if (ms !== undefined && running !== undefined) break
+      if (tokens === undefined && e.type === 'event_msg' && e.payload?.type === 'token_count' && e.payload.info?.last_token_usage) {
+        const c = usageCounts(e.payload.info.last_token_usage)
+        tokens = c.in + c.out + c.cached + c.cacheCreate
+      }
+      if (ms !== undefined && running !== undefined && tokens !== undefined) break
     }
-    if (ms !== undefined) return { ms, running: running ?? true }
+    if (ms !== undefined) return { ms, running: running ?? true, tokens }
     if (!tail.partial) break                // the whole file was in the window; a wider read can't help
   }
-  return { running: running ?? true }
+  return { running: running ?? true, tokens }
+}
+
+// What the cached tail read yields: recency, mid-turn or not, and the context window as of the last
+// response (the agents pill's token figure, the token chip's sum).
+interface TailFacts { ms?: number; running?: boolean; tokens?: number }
+
+// Codex's input_tokens INCLUDES cached_input_tokens; the chip sums in+cached+cacheCreate (CC
+// semantics, where they're disjoint) — so subtract to keep the window total honest.
+function usageCounts(u: NonNullable<NonNullable<CodexPayload['info']>['last_token_usage']>): TokenCounts {
+  return {
+    in: Math.max(0, (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0)),
+    out: u.output_tokens ?? 0,
+    cached: u.cached_input_tokens ?? 0,
+    cacheCreate: u.cache_write_input_tokens ?? 0,
+  }
 }
 
 // What a rollout's first line (session_meta) records: the cwd discovery filters on, and whether Codex
