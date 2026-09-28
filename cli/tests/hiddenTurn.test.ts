@@ -58,6 +58,13 @@ describe('spawnSignals', () => {
     expect(settles(toolResult('toolu_bg', { isAsync: true, status: 'async_launched' }))).toEqual([])
   })
 
+  // A sub-agent's own transcript carries no toolUseResult, so a nested launch has only its text.
+  it('does NOT settle a nested background launch, which has no structured result', () => {
+    const nested = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_nested',
+      content: [{ type: 'text', text: 'Async agent launched successfully. (internal metadata)\nagentId: a342' }] }] } } as never
+    expect(settles(nested)).toEqual([])
+  })
+
   it('wakes, not settles, the agent a SendMessage resumed — it runs on and notifies again', () => {
     const resume = {
       type: 'user', timestamp: '2026-09-22T12:08:54.378Z',

@@ -152,11 +152,13 @@ function childTokens(file: string, size: number, mtime: number): number | undefi
 // 'async_launched', agentId, … }`, with result text "Async agent launched successfully". The call is
 // answered at launch and the agent runs on, so this result must never settle its spawn — that bug
 // showed every background child as finished from the moment it started (TB-Agent-Children.md).
-function isAsyncLaunch(r: unknown): boolean {
-  if (!r || typeof r !== 'object') return false
-  const o = r as { isAsync?: unknown; status?: unknown }
-  return o.status === 'async_launched' || o.isAsync === true
+// Inside a sub-agent's own transcript CC writes no structured result at all (13 of 13 on disk), so a
+// nested launch is known by its text alone; missing it grayed every depth-2 agent at launch.
+function isAsyncLaunch(r: unknown, b: ContentBlock): boolean {
+  const o = r && typeof r === 'object' ? r as { isAsync?: unknown; status?: unknown } : {}
+  return o.status === 'async_launched' || o.isAsync === true || toText(b.content).startsWith(ASYNC_LAUNCH_TEXT)
 }
+const ASYNC_LAUNCH_TEXT = 'Async agent launched successfully'
 
 // CC's structured result for a SendMessage that woke a finished background agent: `{ success: true,
 // message: "Resuming agent …", resumedAgentId }`. The agent runs on from there — observed 2026-09-22,
@@ -611,10 +613,10 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
     if (e.type !== 'user') return []
     const resumed = resumedAgentId(e.toolUseResult)
     if (resumed) return [{ id: resumed, stopped: false, at }]
-    if (isAsyncLaunch(e.toolUseResult)) return []
     const content = e.message?.content
     if (!Array.isArray(content)) return []
-    return content.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id ?? '').filter(Boolean)
+    return content.filter(b => b?.type === 'tool_result' && !isAsyncLaunch(e.toolUseResult, b))
+      .map(b => b.tool_use_id ?? '').filter(Boolean)
       .map(id => ({ id, stopped: true, at }))
   }
 

@@ -147,21 +147,22 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     )
   }
 
-  // A word pill, the bulbs pill's register (`${running}💡`): the count flanked by the agent glyph,
-  // shimmering through the shared busyPill treatment while any agent is still going — the same cue
-  // the token chip uses for a live turn. The running count itself is the tooltip's job: two numbers
-  // in the bar would say neither.
+  // The bulbs pill's register (`${running}💡`): the RUNNING count flanked by the agent glyph,
+  // shimmering through the shared busyPill treatment, and a lone glyph once nothing is working. The
+  // total only grows and the menu lists it anyway, so it is the tooltip's job.
   chip(n: number) {
     const running = this.running
     return button({
-      class: ['pill', 'children-pill', busyPill(running > 0), this.open ? 'on' : ''],
+      class: ['pill', 'children-pill', running > 0 ? busyPill(true) : 'glyph', this.open ? 'on' : ''],
       'data-tip': running
         ? `${running} of ${n} agent${n === 1 ? '' : 's'} still working — open one`
         : `${n} agent${n === 1 ? '' : 's'} this session spawned — open one`,
       // data-tip is not an accessible name, and a glyph isn't one either.
       ariaLabel: running ? `Agents (${running} of ${n} running)` : `Agents (${n})`,
       onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
-    }, span({ class: 'glyph-img' }, '🤖'), String(n), span({ class: 'glyph-img' }, '🤖'))
+    }, running > 0
+      ? [span({ class: 'glyph-img' }, '🤖'), String(running), span({ class: 'glyph-img' }, '🤖')]
+      : span({ class: 'glyph-img' }, '🤖'))
   }
 
   // The open child's identity rides in the pill, so the child transcript itself carries no chrome
