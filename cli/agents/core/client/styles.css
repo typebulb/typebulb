@@ -1885,6 +1885,14 @@ a.agent-name:hover { text-decoration: underline; }
    by colour on the existing roles; anything unusual is --warn, the mirror's amber. */
 /* The request bubble, then the table under it. */
 .child-tasks > .bubble.user { margin: .5rem auto .9rem; }
+/* The closing facts a delegator acts on, label column then value, just above the view's two actions. */
+.child-tasks-head { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 1.4rem 0 .2rem; }
+.child-tasks-fact { display: contents; }
+.child-tasks-label { color: var(--muted); white-space: nowrap; }
+.child-tasks-value { overflow-wrap: anywhere; }
+.child-tasks-value.tests-red { color: var(--err); }
+.child-tasks-value.tests-green { color: var(--diff-add); }
+.child-tasks-value.warn { color: var(--warn); }
 /* Under the table, centred: where the table stands in time, then the view's two actions. */
 .child-tasks-foot { display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 0 1.75rem; }
 .child-tasks-actions { display: flex; gap: 1.4rem; }
@@ -1905,6 +1913,8 @@ a.agent-name:hover { text-decoration: underline; }
 .cs-status.blocked { color: var(--err); }
 .cs-status.off { color: var(--warn); }
 .cs-off td:first-child { color: var(--warn); }
+/* A finished round folded to one row: the count reads as settled, not as a subtask. */
+.cs-folded td:first-child { color: var(--muted); }
 .cs-note { color: var(--warn); padding-top: .2rem; }
 .cs-cite { color: var(--muted); font-size: .9rem; }
 .cs-cite a { cursor: pointer; color: var(--muted); text-decoration: underline dotted; }

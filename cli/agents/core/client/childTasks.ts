@@ -1,31 +1,39 @@
 import { Component, div, span, a, table, thead, tbody, tr, th, td } from 'domeleon'
 import { renderMarkdown } from './markdown.js'
-import { turnClassFor, formatDuration as mins, basename } from './util.js'
+import { turnClassFor, formatDuration as mins, basename, asStr } from './util.js'
 import { toolSummary, toolDisplayName } from './messageList.js'
 import type { Msg, Tool } from './types.js'
 
-// A child's Tasks view (TB-Agent-Children.md). The parent's request as a bubble, then a
-// table of subtasks with each one's status, what the child did toward it, and the time it took, with
-// anything unusual noted in orange. Every message from the parent is planned once, the brief and each
-// follow-up alike, so work assigned mid-flight joins the table instead of getting lost. The status is
-// one call over the whole compressed log, re-run as the child grows: at most once a minute while open.
+// A child's Tasks view (TB-Agent-Children.md), for the person and the orchestrating agent alike: both
+// are deciding whether to intervene, re-scope or wait. The parent's request as a bubble, a table of
+// subtasks with each one's status, progress and time (a finished round folded to one line), anything
+// unusual noted in orange, then the facts to act on: the child's current finding, its tests, and any
+// decision it faces. Every message from the parent is planned once, so work assigned mid-flight joins
+// the table. The status is one call over the whole compressed log, re-run as the child grows: at most
+// once a minute while open, but at once when the parent sends a message or the reader copies. Until it
+// has judged the parent's latest message, the finding and decision it gave before are not shown.
 
 const REFRESH_MS = 60_000
 const RECENT = 30              // the newest steps keep full detail; "where it is now" lives there
 const LONG_STEP_MS = 3 * 60_000
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const EXPLORE = new Set(['Read', 'Grep', 'Glob'])
+// A command that runs a test suite: the last one's result is the child's red or green.
+const TEST_CMD = /\b(vitest|jest|pytest|mocha|playwright test|go test|cargo test|dotnet test|(?:npm|pnpm|yarn|bun)(?: run)? test)\b/
 
 interface Plan { request: string; subtasks: string[] }
 interface Row { id: number; status: string; did: string; note: string; steps: [number, number?][]; evidence: [number, number?][] }
 interface OffRow { what: string; note: string; steps: [number, number?][] }
-interface Status { rows: Row[]; offBrief: OffRow[] }
+interface Status { now: string; decision: string; rows: Row[]; offBrief: OffRow[] }
+// The last test run: red when it failed, green when its counts say so, unknown when it said nothing.
+// `ms` is how long the call took, call to result: the whole command, startup and all.
+interface TestRun { n: number; state: 'red' | 'green' | 'unknown'; line: string; ms?: number }
 // `parts` are the step's stretches on the child's active timeline; `wall` their total.
 interface Step { n: number; tool: Tool; wall: number; parts: Span[] }
 // One line of the table, computed once and read by both the table and the copy text.
 type Line =
   | { kind: 'group'; request: string; idx: number }
-  | { kind: 'row'; num?: number; title: string; status: string; did: string; note: string; steps: [number, number?][]; cite: [number, number?][]; ms: number; spans: Span[] }
+  | { kind: 'row'; num?: number; title: string; status: string; did: string; note: string; steps: [number, number?][]; cite: [number, number?][]; ms: number; spans: Span[]; folded?: number }
 // A stretch on the child's timeline, in ms of ACTIVE time from its brief: idle waits for a wake are cut.
 interface Span { from: number; to: number }
 type Digest = ReturnType<typeof childDigest>
@@ -35,6 +43,11 @@ type Digest = ReturnType<typeof childDigest>
 // it while the reader looks.
 const PLANS = new Map<string, Plan>()
 const FROZEN = new Map<string, Row>()
+// Every status judged, by its payload, and each child's latest, by its brief: returning to a child
+// shows where it stood at once, and costs nothing unless it has moved since.
+type Judged = { key: string; data: Status; steps: number; followups: number; at: number }
+const STATUSES = new Map<string, Judged>()
+const LATEST = new Map<string, Judged>()
 
 const clip = (s: string, n: number) => { s = s.replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
 const abridge = (s: string, n: number) => s.length <= n ? s : s.slice(0, n / 2) + '\n[…]\n' + s.slice(-n / 2)
@@ -46,9 +59,10 @@ const stepLabel = (t: Tool, n: number) => `${toolDisplayName(t.name)}: ${clip(st
 const statusLabel = (status: string) => status === 'off' ? 'off brief' : status.replace('_', ' ')
 const inRanges = (n: number, ranges: [number, number?][]) => ranges.some(([a, b]) => n >= a && n <= (b ?? a))
 
-/** The child's messages from its parent and its work, digested for the status call. Pure. `now` is
- *  the live edge for a running child, 0 for a finished one (whose timeline ends at its last entry). */
-export function childDigest(msgs: Msg[], now: number) {
+/** The child's messages from its parent and its work, digested for the status call. Pure, and a
+ *  function of the transcript alone: time runs to its last entry, never to the clock, so the same
+ *  transcript always digests to the same payload and a cached status still fits it. */
+export function childDigest(msgs: Msg[]) {
   let brief = ''
   const followups: string[] = []
   const steps: Step[] = []
@@ -74,7 +88,7 @@ export function childDigest(msgs: Msg[], now: number) {
         say.push({ after: steps.length, line: `AGENT SENDS (${toolDisplayName(t.name)}): ${abridge(message, 8000)}` })
     }
   }
-  const tail = now || end
+  const tail = end
   const time = childTimeline(msgs, steps, tail)
   // The last message whole: a final report is the densest line in the log.
   const last = say.at(-1)
@@ -111,7 +125,27 @@ export function childDigest(msgs: Msg[], now: number) {
     lines.push(...sayAt.get(s.n) ?? [])
     i++
   }
-  return { brief, followups, steps, log: lines.join('\n'), facts: countedFacts(steps), span: time.span, idle: time.idle, wakes: time.wakes }
+  return {
+    brief, followups, steps, log: lines.join('\n'), facts: countedFacts(steps),
+    span: time.span, idle: time.idle, wakes: time.wakes, tests: lastTestRun(steps), lastAt: end,
+  }
+}
+
+// The most recent finished test run. Its counts line decides green; a failure exit or a nonzero
+// "failed" decides red; a run whose output was filtered down to nothing says only that it ran.
+function lastTestRun(steps: Step[]): TestRun | undefined {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const t = steps[i]!.tool
+    const cmd = asStr(t.input?.command) ?? asStr(t.input?.cmd)
+    if (!cmd || !TEST_CMD.test(cmd) || t.result === undefined) continue
+    // The runner's own label ("Tests  213 passed") is dropped: the header already says Tests.
+    const counts = (t.result.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter(l => /\b\d+\s+(passed|failed)\b/i.test(l)).at(-1) ?? '')
+      .trim().replace(/^tests?:?\s+/i, '')
+    const state = t.isError || /\b[1-9]\d*\s+failed\b/i.test(counts) ? 'red' : /\bpassed\b/i.test(counts) ? 'green' : 'unknown'
+    const ms = t.at !== undefined && t.doneAt !== undefined ? t.doneAt - t.at : undefined
+    return { n: steps[i]!.n, state, line: clip(counts, 90), ms }
+  }
+  return undefined
 }
 
 // Where the child's time went. A child is often woken again after it finishes (a follow-up, its own
@@ -193,8 +227,12 @@ function countedFacts(steps: Step[]): string {
   return facts.join('\n')
 }
 
-type Job = { kind: 'plan'; text: string } | { kind: 'status'; key: string; payload: unknown; steps: number }
+// `followups` is how many parent follow-ups the status judged: fewer than the transcript holds means
+// the parent has spoken since, and what the status said before may already be answered.
+type StatusJob = { kind: 'status'; key: string; payload: unknown; steps: number; followups: number }
+type Job = { kind: 'plan'; text: string } | StatusJob
 type Source = { msgs: () => Msg[]; working: () => boolean; name: () => string; onChange: () => void; reveal: (toolId: string) => void }
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 export class ChildTasks extends Component {
   open = false
@@ -204,10 +242,12 @@ export class ChildTasks extends Component {
   #pending = new Set<string>()
   #failed = new Map<string, string>()
   #setup = ''
-  #status: { key: string; data: Status; steps: number } | null = null
+  #status: Judged | null = null
   #statusBusy = false
-  #statusAt = 0
-  #cut = ''
+  #statusRun?: Promise<void>
+  #copying = false
+  #sig = ''                      // the transcript as last digested; unchanged, the digest is too
+  #job?: StatusJob               // the status call for that digest, built once
   // The transcript array a swap is replacing: until the child's re-emit clears it, it is still the
   // previous conversation, and planning it would spend on the wrong brief.
   #stale: Msg[] | null = null
@@ -232,31 +272,53 @@ export class ChildTasks extends Component {
    *  re-emit has landed first. Open is the request: nothing runs while the view is closed. */
   sync() {
     if (!this.open || !this.#src) return
-    if (this.#src.msgs() === this.#stale) return
+    const msgs = this.#src.msgs()
+    if (msgs === this.#stale) return
     this.#stale = null
     const working = this.#src.working()
-    const d = childDigest(this.#src.msgs(), working ? Date.now() : 0)
-    // A different child: its status is not this one's.
-    if (d.brief !== this.#d?.brief) { this.#status = null; this.#statusAt = 0 }
-    this.#d = d
-    const cut = `${d.brief.length}:${d.followups.length}:${d.steps.length}:${working}`
-    this.#working = working
-    if (cut !== this.#cut) { this.#cut = cut; this.#src.onChange() }
+    // Digest again only when the transcript moved: a new message, a new call, a result landing.
+    const last = msgs.at(-1)
+    const sig = `${msgs.length}:${last?.text.length ?? 0}:${last?.tools.length ?? 0}:${last?.tools.filter(t => t.result !== undefined).length ?? 0}:${working}`
+    if (sig !== this.#sig || !this.#d) {
+      const d = childDigest(msgs)
+      // A different child: show its own latest status, if this tab has judged it before.
+      if (d.brief !== this.#d?.brief) this.#status = LATEST.get(d.brief) ?? null
+      this.#d = d
+      this.#sig = sig
+      this.#working = working
+      this.#job = undefined
+      this.#src.onChange()
+    }
+    const d = this.#d
     if (this.#setup || !d.brief) return
-    const messages = [d.brief, ...d.followups]
-    for (const text of messages) if (!PLANS.has(text)) this.#run({ kind: 'plan', text })
-    const plans = messages.map(t => PLANS.get(t))
-    if (plans.some(p => !p)) return                 // the table's rows come from every plan
-    const subtasks = plans.flatMap(p => p!.subtasks)
-    const payload = { subtasks, log: d.log, facts: d.facts, finished: !working }
-    const key = JSON.stringify(payload)
-    if (this.#status?.key === key || this.#statusBusy || this.#failed.has(key)) return
-    // A finished child gets its final status at once; a running one at most once a minute.
-    if (this.#status && working && Date.now() - this.#statusAt < REFRESH_MS) return
-    this.#run({ kind: 'status', key, payload, steps: d.steps.length })
+    for (const text of [d.brief, ...d.followups]) if (!PLANS.has(text)) void this.#run({ kind: 'plan', text })
+    const job = this.#job ??= this.#statusJob(d)
+    if (!job) return
+    const known = STATUSES.get(job.key)
+    if (known && known !== this.#status) { this.#status = known; this.#src.onChange() }
+    if (this.#status?.key === job.key || this.#statusBusy || this.#failed.has(job.key)) return
+    // A running child at most once a minute; a finished one, or one the parent has just messaged, at once.
+    const heard = this.#status?.followups === job.followups
+    if (this.#status && working && heard && Date.now() - this.#status.at < REFRESH_MS) return
+    void this.#run(job)
   }
 
-  async #run(job: Job) {
+  // The status call for the transcript as it stands, once every message is planned (the rows come from
+  // every plan). Undefined until then.
+  #statusJob(d: Digest): StatusJob | undefined {
+    const plans = [d.brief, ...d.followups].map(t => PLANS.get(t))
+    if (plans.some(p => !p)) return undefined
+    const payload = { subtasks: plans.flatMap(p => p!.subtasks), log: d.log, facts: d.facts, finished: !this.#working }
+    return { kind: 'status', key: JSON.stringify(payload), payload, steps: d.steps.length, followups: d.followups.length }
+  }
+
+  #run(job: Job): Promise<void> {
+    const run = this.#call(job)
+    if (job.kind === 'status') this.#statusRun = run
+    return run
+  }
+
+  async #call(job: Job) {
     const k = job.kind === 'plan' ? 'plan\n' + job.text : job.key
     if (this.#pending.has(k) || this.#failed.has(k)) return
     this.#pending.add(k)
@@ -268,11 +330,14 @@ export class ChildTasks extends Component {
         const p = r.data as Partial<Plan>
         PLANS.set(job.text, { request: String(p?.request ?? ''), subtasks: Array.isArray(p?.subtasks) ? p.subtasks.map(String) : [] })
       } else if (r?.ok && job.kind === 'status') {
-        if (brief === this.#d?.brief) this.#status = { key: job.key, data: normalize(r.data), steps: job.steps }
+        const judged = { key: job.key, data: normalize(r.data), steps: job.steps, followups: job.followups, at: Date.now() }
+        STATUSES.set(job.key, judged)
+        if (brief) LATEST.set(brief, judged)
+        if (brief === this.#d?.brief) this.#status = judged
       } else if (r?.setup) this.#setup = r.error
       else this.#failed.set(k, r?.error ?? 'could not summarize')
     } catch { this.#failed.set(k, 'could not summarize') }
-    if (job.kind === 'status') { this.#statusBusy = false; this.#statusAt = Date.now() }
+    if (job.kind === 'status') this.#statusBusy = false
     this.#pending.delete(k)
     this.#src?.onChange()
     this.sync()                                      // a plan landing unblocks the status call
@@ -294,21 +359,34 @@ export class ChildTasks extends Component {
       this.#setup ? div({ class: 'note' }, this.#setup) : null,
       this.#bubble(0, briefPlan?.request),
       this.#table(lines, d),
+      this.#head(d),
       div({ class: 'child-tasks-foot' },
         this.#statusLine(d),
         div({ class: 'child-tasks-actions' },
           // Plain text for pasting to the orchestrating agent.
-          a({ onClick: (e: MouseEvent) => { e.preventDefault(); this.#copy(this.#copyText(d, briefPlan, lines)) } },
-            this.#copied ? 'Copied' : 'Copy Tasks'),
+          a({ onClick: (e: MouseEvent) => { e.preventDefault(); void this.#copy() } },
+            this.#copying ? span({ class: 'shimmer-text shimmer-slow' }, 'Refreshing…') : this.#copied ? 'Copied' : 'Copy Tasks'),
           a({ onClick: (e: MouseEvent) => { e.preventDefault(); this.toggle() } }, 'Raw Transcript'))),
     )
   }
 
-  #copy(text: string) {
-    void navigator.clipboard?.writeText(text)
-    this.#copied = true
+  // A copy goes to an agent that will act on it, so it is never older than the transcript: when the
+  // status is behind, it is judged again first (the click is the request), then the copy is taken.
+  async #copy() {
+    if (this.#copying) return
+    this.#copying = true
     this.#src?.onChange()
-    setTimeout(() => { this.#copied = false; this.#src?.onChange() }, 900)
+    await this.#statusRun
+    const job = this.#d && (this.#job ??= this.#statusJob(this.#d))
+    if (job && this.#status?.key !== job.key && !this.#failed.has(job.key)) await this.#run(job)
+    this.#copying = false
+    const d = this.#d
+    if (d) {
+      void navigator.clipboard?.writeText(this.#copyText(d, this.#lines(d)))
+      this.#copied = true
+      setTimeout(() => { this.#copied = false; this.#src?.onChange() }, 900)
+    }
+    this.#src?.onChange()
   }
 
   // A parent message as the transcript draws one: the user bubble, in its turn's colour.
@@ -318,15 +396,18 @@ export class ChildTasks extends Component {
   }
 
   // Every parent message's subtasks in order (a follow-up under its own header), then off-brief work,
-  // then their time: every step gets exactly one owner, so the timeline partitions the whole run.
+  // then their time: every step gets exactly one owner, so the timeline partitions the whole run. A
+  // round whose subtasks are all done folds to one row: its detail already went out in the report.
   #lines(d: Digest): Line[] {
     const messages = [d.brief, ...d.followups]
     const status = this.#status?.data
     const out: Line[] = []
+    const rounds: Extract<Line, { kind: 'row' }>[][] = []
     let id = 0
     messages.forEach((text, mi) => {
       const plan = PLANS.get(text)
       if (mi > 0) out.push({ kind: 'group', request: plan?.request ?? '', idx: mi })
+      const round: Extract<Line, { kind: 'row' }>[] = []
       for (const title of plan?.subtasks ?? []) {
         id++
         const frozenKey = d.brief + '\n' + title
@@ -334,12 +415,23 @@ export class ChildTasks extends Component {
         if (row?.status === 'done' && !FROZEN.has(frozenKey)) FROZEN.set(frozenKey, row)
         row = FROZEN.get(frozenKey) ?? row
         const steps = row?.steps ?? []
-        out.push({ kind: 'row', num: id, title, status: row?.status ?? '', did: row?.did ?? '', note: row?.note ?? '', steps, cite: row?.evidence?.length ? row.evidence : steps, ms: 0, spans: [] })
+        round.push({ kind: 'row', num: id, title, status: row?.status ?? '', did: row?.did ?? '', note: row?.note ?? '', steps, cite: row?.evidence?.length ? row.evidence : steps, ms: 0, spans: [] })
       }
+      rounds.push(round)
+      out.push(...round)
     })
     for (const o of status?.offBrief ?? [])
       out.push({ kind: 'row', title: o.what, status: 'off', did: '', note: o.note, steps: o.steps, cite: o.steps, ms: 0, spans: [] })
     this.#placeTime(out, d)
+    for (const round of rounds) {
+      if (!round.length || round.some(r => r.status !== 'done')) continue
+      const spans = round.flatMap(r => r.spans).sort((x, y) => x.from - y.from)
+      const folded: Extract<Line, { kind: 'row' }> = {
+        kind: 'row', title: `All ${round.length} done`, status: 'done', did: '', note: round.map(r => r.note).filter(Boolean).join(' '),
+        steps: [], cite: [], ms: round.reduce((n, r) => n + r.ms, 0), spans, folded: round.length,
+      }
+      out.splice(out.indexOf(round[0]!), round.length, folded)
+    }
     return out
   }
 
@@ -365,18 +457,57 @@ export class ChildTasks extends Component {
     })
   }
 
-  // Plain text for the orchestrating agent: no step numbers, which mean nothing outside this view.
-  #copyText(d: Digest, plan: Plan | undefined, lines: Line[]): string {
+  // The closing facts, in the order a delegator acts on them. Tests are counted from the transcript;
+  // the finding and the decision are the status call's, and only while that call has judged the
+  // parent's latest message: after it, what it said may already be answered, and a stale "needs a
+  // decision" invites deciding twice. Until then Now names the follow-up being worked on, from its
+  // plan. A slot with nothing to say is left out.
+  #facts(d: Digest): [label: string, value: string, cls?: string][] {
+    const s = this.#status
+    const t = d.tests
+    const current = s && s.followups === d.followups.length
+    const latest = d.followups.length ? PLANS.get(d.followups.at(-1)!)?.request : undefined
+    const now = current ? s.data.now
+      : latest ? `Working on the latest follow-up: ${latest}`
+      : this.#statusBusy || this.#pending.size ? '…' : ''
+    return ([
+      ['Now', now],
+      ['Tests', t ? `${t.state}${t.line ? `, ${t.line}` : ''}${t.ms !== undefined ? `, took ${mins(t.ms)}` : ''} (step ${t.n})` : '', t ? `tests-${t.state}` : undefined],
+      ['Needs a decision', current ? s.data.decision : '', 'warn'],
+    ] as [string, string, string?][]).filter(([, v]) => v)
+  }
+
+  #head(d: Digest) {
+    const facts = this.#facts(d)
+    return facts.length ? div({ class: 'child-tasks-head' }, facts.map(([label, value, cls]) =>
+      div({ class: 'child-tasks-fact' }, span({ class: 'child-tasks-label' }, label), span({ class: ['child-tasks-value', cls ?? ''] }, value)))) : null
+  }
+
+  // The view as plain text for the orchestrating agent, in the view's order, stamped with the time of
+  // the last transcript entry it covers: a finished round on one line, open rows in full, then the
+  // closing facts. No step numbers, which mean nothing outside this view.
+  #copyText(d: Digest, lines: Line[]): string {
     const name = this.#src?.name() || 'sub-agent'
-    const state = this.#working ? `running, as of step ${d.steps.length}` : `finished after ${d.steps.length} steps`
-    const out = [`Status of sub-agent "${name}" (${state}).`, '', `Request: ${plan?.request ?? '(not summarized yet)'}`, '']
+    const state = this.#working ? `running, step ${d.steps.length}` : `finished after ${d.steps.length} steps`
+    const out = [`Sub-agent "${name}": ${state}, ${mins(d.span)} active${d.lastAt ? `, as of ${clock(d.lastAt)}` : ''}.`]
+    let header = `Request: ${PLANS.get(d.brief)?.request ?? '(not summarized yet)'}`
+    const openRound = () => { if (header) out.push('', header); header = '' }
     for (const l of lines) {
-      if (l.kind === 'group') { out.push('', `Follow-up: ${l.request}`); continue }
-      const status = statusLabel(l.status || 'pending')
+      if (l.kind === 'group') { openRound(); header = `Follow-up: ${l.request}`; continue }
+      if (l.folded) {
+        out.push('', header.replace(/^(Request|Follow-up):/, `$1 (all ${l.folded} done):`))
+        header = ''
+        if (l.note) out.push(`  Note: ${l.note}`)
+        continue
+      }
+      openRound()
       const time = l.ms ? ` (${mins(l.ms)})` : ''
-      out.push(`${l.num ? `${l.num}. ` : '- '}${l.title}: ${status}.${l.did ? ` ${l.did}` : ''}${time}`)
-      if (l.note) out.push(`   Note: ${l.note}`)
+      out.push(`- ${l.title}: ${statusLabel(l.status || 'pending')}.${l.did ? ` ${l.did}` : ''}${time}`)
+      if (l.note) out.push(`  Note: ${l.note}`)
     }
+    openRound()
+    out.push('')
+    for (const [label, value] of this.#facts(d)) out.push(`${label}: ${value}`)
     return out.join('\n')
   }
 
@@ -394,7 +525,7 @@ export class ChildTasks extends Component {
 
   #row(l: Extract<Line, { kind: 'row' }>, d: Digest) {
     const { status, did, note, cite, ms, spans } = l
-    return tr({ class: status === 'off' ? 'cs-off' : '' },
+    return tr({ class: [status === 'off' ? 'cs-off' : '', l.folded ? 'cs-folded' : ''] },
       td(l.num ? `${l.num}. ${l.title}` : l.title),
       td(status ? span({ class: ['cs-status', status] }, statusLabel(status)) : span({ class: 'cs-status' }, '…')),
       td(
@@ -457,6 +588,8 @@ function normalize(data: unknown): Status {
     ? x.filter(Array.isArray).map(r => [Number(r[0]), r[1] === undefined ? undefined : Number(r[1])] as [number, number?]).filter(r => r[0] > 0)
     : []
   return {
+    now: String(o.now ?? ''),
+    decision: String(o.decision ?? ''),
     rows: (Array.isArray(o.rows) ? o.rows : []).map(r => ({ id: Number(r.id), status: String(r.status ?? ''), did: String(r.did ?? ''), note: String(r.note ?? ''), steps: ranges(r.steps), evidence: ranges(r.evidence) })),
     offBrief: (Array.isArray(o.offBrief) ? o.offBrief : []).map(r => ({ what: String(r.what ?? ''), note: String(r.note ?? ''), steps: ranges(r.steps) })),
   }

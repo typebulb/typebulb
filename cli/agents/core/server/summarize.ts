@@ -85,7 +85,7 @@ MESSAGE:
 
 export interface ChildStatusInput { subtasks: string[]; log: string; facts: string; finished: boolean }
 
-const STATUS_PROMPT = (s: ChildStatusInput) => `You report on a sub-agent's progress to the person who delegated the work. They will not read the log; they want to know where each subtask stands, and anything unusual.
+const STATUS_PROMPT = (s: ChildStatusInput) => `You report on a sub-agent's progress to whoever delegated the work, often an orchestrating agent. They will not read the log. They are deciding whether to intervene, re-scope or wait, so they want what the sub-agent has found, where each subtask stands, and anything unusual.
 
 SUBTASKS:
 ${s.subtasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}
@@ -93,17 +93,20 @@ ${s.subtasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 The agent has ${s.finished ? 'FINISHED' : 'NOT finished; the log ends where it is now'}.
 
 Return JSON only:
-{"rows": [{"id": 1, "status": "not_started | in_progress | done | blocked", "did": "...", "note": "...", "steps": [[a, b]], "evidence": [[a, b]]}],
+{"now": "...", "decision": "...",
+ "rows": [{"id": 1, "status": "not_started | in_progress | done | blocked", "did": "...", "note": "...", "steps": [[a, b]], "evidence": [[a, b]]}],
  "offBrief": [{"what": "short phrase", "note": "...", "steps": [[a, b]]}]}
 
 Rules:
+- "now": one line, the sub-agent's current finding or working hypothesis at the end of the log: what it has established or suspects, with the decisive specific (the cause, the file, the number). Not what it is looking at. If it has finished, its outcome.
+- "decision": one line when it is stuck, about to decide something the brief did not cover, or has left a question open for the delegator or owner to settle. Its own reports and messages are where it raises these ("an owner decision", "your call", "needs a ruling"): carry any such open question here, even when a row mentions it too. Otherwise "".
 - One row per subtask, same ids. "steps" lists EVERY bracketed step range that worked on it: reading, attempts, failures and fixes, not only the result. Together the rows and offBrief should cover the whole log; ranges never overlap.
 - "evidence" lists the few steps that show where it stands: the result for done, the latest work for in_progress.
 - "done" only when the log shows the result. If the only evidence is the agent's own report, write "reported" in "did".
-- "did" says what was achieved so far, as a manager wants it: outcome and state, not tool mechanics. One plain sentence; a file name only when it is the deliverable. Never say what is missing, unconfirmed, or not shown. A not_started row has "did": "".
+- "did" says what was achieved so far: outcome and state, not tool mechanics. For a done row, one short clause. For an in_progress row, what has been found or confirmed so far, never only what was examined ("Confirmed the per-stroke check drops stretches 3 and 6-10", not "Investigated the dropped stretches"); when nothing is established yet, the hypothesis being tested. A file name only when it is the deliverable. A not_started row has "did": "".
 - Make the work the subject of every sentence ("Counted 14 references", "The build passes"); never refer to the agent itself, as "the agent", "it", or otherwise.
 - Unfinished is not off track: a subtask not started yet is normal while earlier ones run.
-- "note" is for something unusual the delegator would want to know: repeated failures, a problem found outside the task, a risk to the deliverable, unexpected time spent. Use the FACTS, which are counted. Remaining work is never a note, and neither is a failure fixed at once. Usually "".
+- "note" only for something that would change what the delegator does: repeated failures, a problem found outside the task, a risk to the deliverable, unexpected time spent. Use the FACTS, which are counted. Most rows have no note, and a whole table rarely has more than two. Never a note: remaining work, a failure fixed at once, an instruction followed as directed, a remark on style, or anything "did" or "decision" already says.
 - "offBrief": work the brief did not ask for. Empty array if none.
 
 FACTS (counted from the log):

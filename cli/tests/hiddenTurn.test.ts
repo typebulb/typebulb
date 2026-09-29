@@ -70,6 +70,13 @@ describe('chainWorking reads a message delivered to an agent as a wake', () => {
     expect(a.chainWorking([done] as never)).toBe(false)
     expect(a.chainWorking([done, delivered] as never)).toBe(true)
   })
+
+  // Though isMeta, it is the parent's turn, not an injection: it renders, its lead-in dropped.
+  it('renders that message as the parent\'s turn', () => {
+    const delivered = { type: 'user', isMeta: true, message: { content: 'The coordinator sent a message while you were working:\nThe browser slot is yours.' } }
+    expect(a.apply(delivered as never, 0).events).toEqual([{ type: 'user', text: 'The browser slot is yours.' }])
+    expect(a.apply({ type: 'user', isMeta: true, message: { content: 'skill body' } } as never, 0).events).toEqual([])
+  })
 })
 
 // A child is running only while mid-turn in a process that is still alive. Through CC 2.1.272 a

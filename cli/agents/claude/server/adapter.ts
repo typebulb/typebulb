@@ -296,12 +296,23 @@ function userEvent(text: string): Event {
 
 // CC flags a hand-back `isMeta`, because the harness injected it rather than the user typing it. But
 // unlike the skill bodies and resume nudges that flag exists to hide, this injection CARRIES the
-// content the reader came for, so it is the one isMeta turn that still renders — the same exception
-// the queued_command attachment already earns (TB-Agent-Children.md). The two carriers are disjoint
-// (no agent id was ever written as both, 20 of 20), so surfacing this one can't double-render.
+// content the reader came for, so it still renders — the same exception the queued_command
+// attachment already earns (TB-Agent-Children.md). The two carriers are disjoint (no agent id was
+// ever written as both, 20 of 20), so surfacing this one can't double-render.
 function isHandback(e: JsonlEntry): boolean {
   const c = e.message?.content
   return typeof c === 'string' && !!agentMessage(c)
+}
+
+// The same exception for the parent's message to a sub-agent that had stopped: CC delivers it as an
+// isMeta turn behind a lead-in addressed to the model, and hiding it dropped the parent's follow-ups
+// from the child's view (and billed the wait before them to the next step's time). The lead-in is
+// transport, so the turn is the message alone. Disjoint from queued_command, the other carrier of
+// these messages: 0 of 152 on disk were written as both.
+const COORDINATOR_LEAD_IN = 'The coordinator sent a message while you were working:\n'
+function coordinatorMessage(e: JsonlEntry): string | undefined {
+  const c = e.message?.content
+  return typeof c === 'string' && c.startsWith(COORDINATOR_LEAD_IN) ? c.slice(COORDINATOR_LEAD_IN.length).trim() : undefined
 }
 function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
@@ -492,6 +503,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   isRecoveryNoise(raw: JsonlEntry) { return !!raw.isApiErrorMessage }
 
   apply(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
+    const delivered = coordinatorMessage(entry)
+    if (delivered) return { events: [userEvent(delivered)] }
     if (isHiddenTurn(entry) && !isHandback(entry)) return { events: [] }   // CC's isMeta injections
     const events: Event[] = []
     if (entry.type === 'user') {
