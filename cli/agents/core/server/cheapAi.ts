@@ -19,8 +19,8 @@ import { consumeStreamText, type ResolvedAIProvider } from 'typebulb/ai'
 import { resolveLocalProvider, sendTbAi } from '../../../src/servers.js'
 
 const CHEAP_MODELS: [string, string][] = [
-  ['openrouter', 'openai/gpt-5.6-luna'],
-  ['openai', 'gpt-5.6-luna'],
+  ['openrouter', 'openai/gpt-6-luna'],
+  ['openai', 'gpt-6-luna'],
 ]
 
 // The rungs whose provider key is present, in ladder order (resolveLocalProvider returns its

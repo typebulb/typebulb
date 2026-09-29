@@ -123,7 +123,8 @@ export interface IRoot {
 
 // `digest` is the tool_result event's one-line OUT summary ("463 lines", "2 files"), shown as the
 // collapsed row's indented ⎿ line once the result lands.
-export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean; digest?: string }
+// `at` / `doneAt` are the call's and its result's transcript timestamps (the Tasks view's timeline).
+export interface Tool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean; digest?: string; at?: number; doneAt?: number }
 // `segments` is set only when consecutive user sends are merged into one bubble. `body` is set
 // only when an assistant message contains live ````bulb```` inline bulbs: the text split into markdown
 // chunks (string) and InlineBulb components, rendered in order in place of the single markdown div.
@@ -134,7 +135,7 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
 // `agent` marks a user turn the harness delivered for a sub-agent (TB-Agent-Children.md): the text is
 // that agent's report, so it frames rather than folding into a neighbouring send.
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean }
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean; at?: number }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 // `lastRunAt` = the port block's launch time for this bulb (0 when never run) — the use half of

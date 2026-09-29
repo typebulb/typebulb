@@ -2,7 +2,6 @@ import { div, span, button, VElement } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { hitsBadge, snippetLine } from './ui.js'
 import { relTime, truncate } from './util.js'
-import { mdPlain } from './markdown.js'
 import type { SessionRow } from './types.js'
 
 // Sessions chip + dropdown. Owns the session list; reaches up to Root for sessionId/cwd and
@@ -20,10 +19,6 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
   // Ephemeral — dies with the page.
   #seen = new Map<string, number>()
   #baselined = false
-  // Hover-peek: the last-output preview shown while hovering a row's time. #peekKey = `${id}:${mtime}`
-  // (null = none); the text is fetched lazily and cached by that key.
-  #peekKey: string | null = null
-  #peekCache = new Map<string, string>()
 
   protected search(query: string) { return tb.server.searchSessions(query) as Promise<SessionRow[]> }
 
@@ -140,7 +135,6 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
         sessions.length === 0
           ? this.emptyState('No sessions yet — start one in your terminal.')
           : div({ id: 'session-list', class: 'picker-list', onScroll: () => this.onListScroll() }, sessions.map((s, i) => this.pickerRow(s, i))),
-        this.peekCard(),
       ),
       this.filterBox(this.sessions.length, 'session'),
     )
@@ -150,7 +144,7 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     const current = !s.child && s.sessionId === this.parent.sessionId
     // A driven turn streaming in this conversation (poll's busy set) — the working shimmer badges
     // background work without flipping there; render-only, rows still come from listSessions.
-    // Session-scoped cues (busy, the unread lime, the hover peek) stay off a child row: they all key
+    // Session-scoped cues (busy, the unread lime) stay off a child row: they all key
     // by sessionId, which a session's children share, so each would say the parent's thing.
     const busy = !s.child && this.parent.busy.includes(s.sessionId)
     return div({
@@ -166,56 +160,10 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
         s.child?.kind ? span({ class: 'picker-child-kind' }, s.child.kind) : null,
         span({ class: ['picker-preview', busy ? 'shimmer-text shimmer-slow' : ''] }, s.preview || '(no preview)'),
         hitsBadge(s.hitCount),
-        span({
-          class: ['picker-time', !s.child && this.#lime(s) ? 'unseen' : ''],
-          ...(s.child ? {} : {
-            onMouseEnter: () => this.#peekEnter(s),
-            onMouseLeave: () => this.#peekLeave(s),
-          }),
-        }, relTime(s.mtime)),
+        span({ class: ['picker-time', !s.child && this.#lime(s) ? 'unseen' : ''] }, relTime(s.mtime)),
       ),
       snippetLine(s.snippet, this.filter.trim()),
     )
   }
 
-  #peekEnter(s: SessionRow) {
-    this.#peekKey = `${s.sessionId}:${s.mtime}`
-    void this.#peekLoad(s.sessionId, this.#peekKey)
-    this.update()
-  }
-
-  #peekLeave(s: SessionRow) {
-    if (this.#peekKey === `${s.sessionId}:${s.mtime}`) { this.#peekKey = null; this.update() }
-  }
-
-  async #peekLoad(sessionId: string, key: string) {
-    if (this.#peekCache.has(key)) return
-    let text = ''
-    try { text = String((await tb.server.sessionPeek(sessionId))?.text ?? '') } catch {}
-    this.#peekCache.set(key, text)
-    if (this.#peekKey === key) this.update()
-  }
-
-  // The tail preview — a non-interactive card overlaying the top of the popover (out of flow, so it
-  // never reflows the list under the cursor); the list rests at its newest-at-bottom edge, so a card
-  // at the top rarely covers the row being hovered (TB-Agent-Mirror-Ready.md).
-  peekCard(): VElement | null {
-    if (!this.#peekKey) return null
-    const text = this.#peekCache.get(this.#peekKey)
-    if (text === undefined) return div({ class: 'picker-peek muted' }, '…')
-    if (!text) return div({ class: 'picker-peek muted' }, '(no assistant text yet)')
-    // Prose markdown only (mdPlain: html:false, no bulb/mermaid/svg/katex plugins) — a bulb or
-    // diagram in the tail renders as a code block, never a live mount. Keyed so a new hover remounts
-    // and re-renders (onMounted refires only on remount).
-    return div({
-      class: 'picker-peek md',
-      key: `peek:${this.#peekKey}`,
-      onMounted: (el: Element) => { el.innerHTML = mdPlain.render(text) },
-    })
-  }
-
-  protected override onClosed() {
-    super.onClosed()
-    this.#peekKey = null
-  }
 }

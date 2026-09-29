@@ -1,5 +1,6 @@
 import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
+import { ChildTasks } from './childTasks.js'
 import { busyPill, closeChip } from './ui.js'
 import { formatDuration, formatTokens } from './util.js'
 import { childName } from '../events.js'
@@ -48,6 +49,9 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   // The open child. Resolved from poll's `child` rather than held locally: the server owns which file
   // it drains, so a reload finds the pill wearing what is actually on screen.
   viewing: ChildRow | null = null
+  // The open child's Tasks view (public, so domeleon discovers it). A row's tasks link opens the
+  // child straight into it; the row itself opens the transcript.
+  tasks = new ChildTasks()
   #viewingId: string | null = null
   protected keepOpenSelector = '.children-wrap'
   protected filterId = 'children-filter'
@@ -108,13 +112,14 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     this.viewing = this.#viewingId ? this.children.find(c => c.id === this.#viewingId) ?? null : null
   }
 
-  async openChild(id: string) {
+  async openChild(id: string, tasks = false) {
     this.close()
     this.parent.messageList.stickToBottomNextRender()   // land at the child's tail, not the old scroll
     try {
       await tb.server.openChild(id)
       this.#viewingId = id                             // the poll confirms; this is just the same tick
       this.#resolveViewing()
+      this.tasks.show(tasks)
       this.update()
     } catch (err) { console.error('[mirror] openChild failed', err) }
     void this.refresh()
@@ -122,6 +127,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
 
   async closeChild() {
     this.parent.messageList.stickToBottomNextRender()
+    this.tasks.open = false
     try {
       await tb.server.closeChild()
       this.#viewingId = null
@@ -217,6 +223,12 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // context window. Recency went — the list is already ordered by it.
       c.started ? span({ class: 'children-time' }, formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started)) : null,
       c.tokens ? span({ class: 'children-tokens' }, formatTokens(c.tokens)) : null,
+      // Straight into the task view, which is often all a peek wants.
+      span({
+        class: 'children-tasks-link',
+        'data-tip': 'Where this agent stands on each task (a few cheap model calls)',
+        onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id, true) },
+      }, 'tasks'),
     )
   }
 }

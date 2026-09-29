@@ -90,6 +90,9 @@ export class TurnView extends Component {
   /** Back to the effective default — the live tail's row outlives no turn. */
   reset() { this.#override = undefined }
 
+  /** Select Raw, as a click on its tab would — for a caller revealing one step of this turn's trace. */
+  showRaw() { this.#select('raw') }
+
   async #run() {
     // Snapshot the inputs: a durable assistant row can land while the request runs. Its result is
     // still a valid cache entry for the older exact text, but must never replace newer on-screen prose.

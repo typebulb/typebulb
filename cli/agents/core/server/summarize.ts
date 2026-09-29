@@ -50,12 +50,17 @@ export type SummarizeResult =
   | { ok: true; text: string }
   | { ok: false; error: string; setup?: true }
 
+// The two failures every summary call shares: no cheap-model key (which the client turns into setup
+// help rather than an error), and a call that came back empty.
+const NOT_READY = { ok: false, error: 'Summary needs OPENROUTER_API_KEY or OPENAI_API_KEY in this project’s .env.', setup: true } as const
+const CALL_FAILED = { ok: false, error: 'the model call failed or timed out' } as const
+
 export async function summarizeProse(text: string, userPrompt = ''): Promise<SummarizeResult> {
   const source = text.trim()
   if (!source) return { ok: false, error: 'nothing to summarize' }
   // Summary is deliberately advertised even without a cheap-model key. Tell the client before it
   // starts a doomed request so its click can teach the one-step setup instead of showing a failure.
-  if (!cheapAiReady()) return { ok: false, error: 'Summary needs OPENROUTER_API_KEY or OPENAI_API_KEY in this project’s .env.', setup: true }
+  if (!cheapAiReady()) return NOT_READY
   const input = userPrompt.trim()
     ? PROMPT +
       'CONTEXT — the user message this reply answers. It is context only: never summarize it, and never report it as the reply\'s content.\n' +
@@ -63,5 +68,73 @@ export async function summarizeProse(text: string, userPrompt = ''): Promise<Sum
       '\n\nREPLY TO SUMMARIZE:\n' + source.slice(0, MAX_CHARS)
     : PROMPT + source.slice(0, MAX_CHARS)
   const summary = await cheapAi(input, TIMEOUT_MS, 1)
-  return summary ? { ok: true, text: summary } : { ok: false, error: 'the model call failed or timed out' }
+  return summary ? { ok: true, text: summary } : CALL_FAILED
+}
+
+// A child's Tasks view (TB-Agent-Children.md). `plan` turns one message from the parent
+// (the brief, or a later follow-up) into a request line and its subtasks, once per message. `status`
+// judges every subtask against the work log the client digests (numbered tool lines, prose, sends,
+// never raw results) plus facts it counted, and is re-run as the child grows. Both answer JSON.
+const PLAN_PROMPT = `A coordinator sent this message to a sub-agent. Return JSON only:
+{"request": "one or two plain sentences: what it asks for and what must be delivered", "subtasks": ["..."]}
+
+Subtasks: in the message's own order, following its numbering if it has one. Each named deliverable belongs to a subtask. Omit orientation (reading docs or guidance): a subtask produces or decides something. At most 8, each a short imperative under 10 words. If the message assigns no new work (a status question, a notification), return "subtasks": [].
+
+MESSAGE:
+`
+
+export interface ChildStatusInput { subtasks: string[]; log: string; facts: string; finished: boolean }
+
+const STATUS_PROMPT = (s: ChildStatusInput) => `You report on a sub-agent's progress to the person who delegated the work. They will not read the log; they want to know where each subtask stands, and anything unusual.
+
+SUBTASKS:
+${s.subtasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+The agent has ${s.finished ? 'FINISHED' : 'NOT finished; the log ends where it is now'}.
+
+Return JSON only:
+{"rows": [{"id": 1, "status": "not_started | in_progress | done | blocked", "did": "...", "note": "...", "steps": [[a, b]], "evidence": [[a, b]]}],
+ "offBrief": [{"what": "short phrase", "note": "...", "steps": [[a, b]]}]}
+
+Rules:
+- One row per subtask, same ids. "steps" lists EVERY bracketed step range that worked on it: reading, attempts, failures and fixes, not only the result. Together the rows and offBrief should cover the whole log; ranges never overlap.
+- "evidence" lists the few steps that show where it stands: the result for done, the latest work for in_progress.
+- "done" only when the log shows the result. If the only evidence is the agent's own report, write "reported" in "did".
+- "did" says what was achieved so far, as a manager wants it: outcome and state, not tool mechanics. One plain sentence; a file name only when it is the deliverable. Never say what is missing, unconfirmed, or not shown. A not_started row has "did": "".
+- Make the work the subject of every sentence ("Counted 14 references", "The build passes"); never refer to the agent itself, as "the agent", "it", or otherwise.
+- Unfinished is not off track: a subtask not started yet is normal while earlier ones run.
+- "note" is for something unusual the delegator would want to know: repeated failures, a problem found outside the task, a risk to the deliverable, unexpected time spent. Use the FACTS, which are counted. Remaining work is never a note, and neither is a failure fixed at once. Usually "".
+- "offBrief": work the brief did not ask for. Empty array if none.
+
+FACTS (counted from the log):
+${s.facts || 'none'}
+
+LOG (steps numbered in brackets):
+${s.log}`
+
+// The status log may run long on a big child; keep its head (what it set out to do) and its tail
+// (where it is now) rather than cutting the end off. Sized to hold every child measured on disk
+// whole (the largest compressed log, of 502, was 71k chars).
+const MAX_LOG_CHARS = 200_000
+const headTail = (s: string) => s.length <= MAX_LOG_CHARS ? s
+  : s.slice(0, MAX_LOG_CHARS / 3) + '\n[… earlier steps omitted …]\n' + s.slice(-MAX_LOG_CHARS * 2 / 3)
+
+export type ChildPartResult = { ok: true; data: unknown } | { ok: false; error: string; setup?: true }
+
+export async function childTasksPart(kind: 'plan' | 'status', payload: unknown): Promise<ChildPartResult> {
+  if (!cheapAiReady()) return NOT_READY
+  let prompt: string
+  if (kind === 'plan') {
+    const text = String(payload ?? '').trim()
+    if (!text) return { ok: false, error: 'nothing to summarize' }
+    prompt = PLAN_PROMPT + text.slice(0, MAX_CHARS)
+  } else {
+    const s = payload as ChildStatusInput
+    if (!Array.isArray(s?.subtasks) || typeof s.log !== 'string') return { ok: false, error: 'nothing to summarize' }
+    prompt = STATUS_PROMPT({ ...s, log: headTail(s.log) })
+  }
+  const reply = await cheapAi(prompt, TIMEOUT_MS * 2, 1)
+  if (!reply) return CALL_FAILED
+  try { return { ok: true, data: JSON.parse(reply.replace(/^```(?:json)?\s*|\s*```$/g, '')) } }
+  catch { return { ok: false, error: 'the model answered in the wrong shape' } }
 }

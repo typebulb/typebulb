@@ -20,7 +20,7 @@ const PASTE_MENTION_RE = new RegExp(
 const LOGO_LIGHT = new URL('typebulb.png', import.meta.url).href
 const LOGO_DARK = new URL('typebulb-inv.png', import.meta.url).href
 
-function toolSummary(input: Record<string, unknown>): string {
+export function toolSummary(input: Record<string, unknown>): string {
   if (!input || typeof input !== 'object') return ''
   return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.filePath) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
 }
@@ -89,7 +89,7 @@ function diffHunks(t: Tool): Hunk[] | undefined {
 
 // mcp__linqpad-patcher__apply_patch → "Linqpad-patcher [apply_patch]". Lazy server match is CC's own
 // split (a tool name containing __ survives); the bracket format is deliberately not CC's.
-function toolDisplayName(name: string): string {
+export function toolDisplayName(name: string): string {
   const m = /^mcp__(.+?)__(.+)$/.exec(name)
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} [${m[2]}]` : name
 }
@@ -237,7 +237,7 @@ export class MessageList extends Component {
       else if (prev.text) prev.copy = this.#makeCopy(prev.text)
       return
     }
-    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [], agent: e.agent, authored: e.authored })
+    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [], agent: e.agent, authored: e.authored, at: e.at })
   }
 
   applyAssistant(e: Extract<ServerEvent, { type: 'assistant' }>) {
@@ -247,7 +247,8 @@ export class MessageList extends Component {
       role: 'assistant',
       text: e.text,
       thinking: e.thinking,
-      tools: e.tools.map(t => ({ ...t, isError: false })),
+      tools: e.tools.map(t => ({ ...t, isError: false, at: e.at })),
+      at: e.at,
     })
     // Prose mode shows one copy per turn over the joined assistant prose — the per-message split is
     // tool-call timing, not authorship. Share one CopyButton across the turn's consecutive assistant
@@ -314,7 +315,24 @@ export class MessageList extends Component {
 
   applyToolResult(e: Extract<ServerEvent, { type: 'tool_result' }>) {
     const t = this.#findTool(e.id)
-    if (t) { t.result = e.content; t.isError = e.isError; t.digest = e.digest }
+    if (t) { t.result = e.content; t.isError = e.isError; t.digest = e.digest; t.doneAt = e.at }
+  }
+
+  /** Show one tool call in the transcript: its turn switched to Raw, the row scrolled into view and
+   *  briefly marked. The Tasks view's step citations land here. */
+  revealTool(id: string) {
+    const msg = this.messages.find(m => m.tools.some(t => t.id === id))
+    if (!msg) return
+    msg.turnView?.showRaw()
+    this.#stuckToBottom = false
+    // Two frames: the first lets the Raw re-render land, the second finds its row.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = document.getElementById(`tool-${id}`)
+      if (!el) return
+      el.scrollIntoView({ block: 'center' })
+      el.classList.add('revealed')
+      setTimeout(() => el.classList.remove('revealed'), 1600)
+    }))
   }
 
   // An abandoned branch the server surfaced at this point in the stream (TB-LostMessage.md). It rides in
@@ -806,7 +824,7 @@ export class MessageList extends Component {
       : filePath ? () => { tb.server.openFile(filePath) }
       : undefined
     // The head is inert prose (only the file-path link reacts); the digest row below is the toggle.
-    return div({ class: ['tool', t.isError ? 'err' : ''] },
+    return div({ class: ['tool', t.isError ? 'err' : ''], id: `tool-${t.id}` },
       div({ class: 'tool-head' },
         // Verb + summary wrap together so inline flow baseline-aligns them across
         // their two fonts (see .tool-label).

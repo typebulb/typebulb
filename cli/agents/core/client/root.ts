@@ -7,6 +7,7 @@ import { ChildrenPill } from './childrenPill.js'
 import { MessageList } from './messageList.js'
 import { basename, truncate } from './util.js'
 import { armTooltipDismiss } from './ui.js'
+import { childName } from '../events.js'
 import type { ChildRow, ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
 
 // The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
@@ -71,6 +72,13 @@ export class Root extends Component implements IRoot {
     if (this.#started) return
     this.#started = true
     armTooltipDismiss()     // one global listener set, so every harness's entry gets it
+    this.childrenPill.tasks.bind({
+      msgs: () => this.messageList.messages,
+      working: () => this.working,
+      name: () => { const c = this.childrenPill.viewing; return c ? childName(c) : '' },
+      onChange: () => this.update(),
+      reveal: id => { this.messageList.revealTool(id); this.update() },
+    })
     // Esc leaves an open child transcript, matching the diff doc's own key — global because the
     // child view IS the message list, which has no focused surface of its own to hang it on.
     document.addEventListener('keydown', e => {
@@ -166,6 +174,8 @@ export class Root extends Component implements IRoot {
         const composerChanged = this.composer && composer ? this.composer.syncFromPoll(composer) : false
         if (events.length || workingChanged || modelChanged || childChanged || composerChanged || busyChanged) this.update()
         if (events.length || composerChanged) this.messageList.scrollSoon()
+        // A quiet tick, so a swap's full re-emit has landed before the Tasks view digests it.
+        if (!events.length && this.childrenPill.viewing) this.childrenPill.tasks.sync()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()
@@ -215,7 +225,9 @@ export class Root extends Component implements IRoot {
       div({ class: 'chat' },
         // An open git-diff doc takes the transcript's slot — render-only; the transcript keeps
         // draining underneath and returns intact on close.
-        this.diffPill.viewing ? this.diffPill.docView() : this.messageList.view(),
+        this.diffPill.viewing ? this.diffPill.docView()
+          : this.childrenPill.viewing && this.childrenPill.tasks.open ? this.childrenPill.tasks.view()
+          : this.messageList.view(),
         this.#cwdHint(),
         // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.
         ...this.#overlays.map(o => o()),

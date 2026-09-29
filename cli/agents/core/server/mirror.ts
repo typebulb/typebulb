@@ -6,7 +6,7 @@ import { InlineStatusDedup } from './inlineStatusLog.js'
 import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
-import { summarizeProse } from './summarize.js'
+import { summarizeProse, childTasksPart } from './summarize.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
 import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, Thread, TokenCounts } from '../events.js'
@@ -533,7 +533,11 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (adapter.isSidechain(entry, state.thread)) return
     try {
       const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
-      for (const e of onThread(events)) state.buffer.push(e)
+      const at = Date.parse(adapter.timestampOf(entry) ?? '')
+      for (const e of onThread(events)) {
+        if (!isNaN(at) && (e.type === 'user' || e.type === 'assistant' || e.type === 'tool_result')) e.at = at
+        state.buffer.push(e)
+      }
       // The durable row for a driver-streamed message just landed — drop the ephemeral draft so the
       // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1). The
       // drain only ever runs for the viewed file, so this targets the viewed rec alone — background
@@ -831,6 +835,12 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return summarizeProse(String(text ?? ''), String(userPrompt ?? ''))
   }
 
+  // A child's Tasks view: a plan call per parent message, or a status call over the work log. Same
+  // licence as summarizeTurn: the open view is the request, and nothing here touches the transcript.
+  async function childTasks(kind: string, payload: unknown) {
+    return childTasksPart(kind === 'status' ? 'status' : 'plan', payload)
+  }
+
   // ── session picker ──
 
   async function listSessions(): Promise<SessionRow[]> {
@@ -897,37 +907,6 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       if (++sessions >= SEARCH_MAX_SESSIONS) break
     }
     return out
-  }
-
-  // ── session peek: the picker's hover-preview (TB-Agent-Mirror-Ready.md) ──
-
-  // The session's last assistant prose chunk — verbatim + display-cleaned through the same `apply`
-  // the transcript renders (no inference — Invariant 1). mtime-keyed like searchTurns: the first
-  // hover pays the scan, repeats are instant, a changed file re-extracts alone.
-  const PEEK_MAX = 800
-  const peekCache = new Map<string, { mtime: number; text: string }>()
-  function peekTail(file: string, mtime: number): string {
-    const hit = peekCache.get(file)
-    if (hit && hit.mtime === mtime) return hit.text
-    let raw = ''
-    try { raw = readFileSync(file, 'utf8') } catch { return '' }
-    let last = ''
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue
-      const e = adapter.parseEntry(line)
-      if (!e) continue
-      for (const ev of adapter.apply(e, state.sessionStartMs).events) {
-        if (ev.type === 'assistant' && ev.text.trim()) last = ev.text.trim()
-      }
-    }
-    const text = last.length > PEEK_MAX ? last.slice(0, PEEK_MAX).trimEnd() + '…' : last
-    peekCache.set(file, { mtime, text })
-    return text
-  }
-
-  async function sessionPeek(sessionId: string) {
-    const sf = adapter.listSessionFiles(state.cwd).find(f => f.sessionId === sessionId)
-    return { text: sf ? peekTail(sf.file, sf.mtime) : '' }
   }
 
   async function attach(sessionId: string) {
@@ -1023,5 +1002,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logInlineStatus, listSessions, searchSessions, sessionPeek, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childTasks, shutdownComposer }
 }

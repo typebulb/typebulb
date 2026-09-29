@@ -142,7 +142,9 @@ export interface ComposerPoll {
 }
 
 /** One conversational event the server emits to the client via poll(). The client consumes ONLY this
- *  union — it never sees a CC or Pi transcript entry; every adapter maps its on-disk schema onto these. */
+ *  union — it never sees a CC or Pi transcript entry; every adapter maps its on-disk schema onto these.
+ *  `at` is the entry's own timestamp (ms epoch), stamped by the engine from `timestampOf`; the child
+ *  Summary measures time spent from it. Absent when the entry carries none. */
 export type Event =
   | { type: 'session'; sessionId: string }
   // `agent` marks a turn the harness delivered on a sub-agent's behalf rather than one the user
@@ -150,12 +152,12 @@ export type Event =
   // that transcript. Its text is the report alone, the envelope already reduced away by the adapter.
   // `authored` marks a turn a model wrote rather than a person typed — every user turn in a child
   // view, where the brief and follow-ups come from the parent agent — so it renders as markdown.
-  | { type: 'user'; text: string; agent?: { from: string }; authored?: boolean }
-  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean }
+  | { type: 'user'; text: string; agent?: { from: string }; authored?: boolean; at?: number }
+  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean; at?: number }
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
   // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.
-  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string }
+  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string; at?: number }
   | { type: 'cleared' }
   // `cost` is THIS entry's harness-computed spend (pi writes usage.cost.total into every assistant
   // entry; CC transcripts carry none) — the client sums it for the driverless session-cost display.
