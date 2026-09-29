@@ -2,9 +2,9 @@
 // and the token/session shapes. NEUTRAL GROUND at core/ top-level (not under server/ or client/) so
 // BOTH halves import the same canonical definitions and the wire contract can't drift: the client
 // never redefines the event union, the server never redefines the token shape (TB-Agent-Harness.md).
-// Types plus a few shared literal constants, no imports, so it crosses the client/server boundary
-// without dragging either half's dependencies along (the boundary test allows a client module to
-// import it — no `src/`, no node builtin, no `server/` path).
+// Types plus a few shared literals and pure helpers, no imports, so it crosses the client/server
+// boundary without dragging either half's dependencies along (the boundary test allows a client
+// module to import it — no `src/`, no node builtin, no `server/` path).
 
 /** Where composer pastes land, relative to the project cwd (posix separators — it's prompt text). */
 export const PASTE_DIR = '.typebulb/paste'
@@ -75,24 +75,22 @@ export interface ChildTranscript {
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself
   stopped: boolean           // the user killed it — the one terminal state only the harness knows
-  /** The harness's OWN answer to whether this child is still working, when it has one: Codex writes
-   *  its turn boundaries into the child's own file, so its tail says outright
-   *  (TB-Agent-Children-Codex.md). `undefined` leaves the question to the engine's settlement scan,
-   *  which is CC's shape — there a child's tail cannot tell a finished run from one stalled
-   *  mid-flush, so only the parent's record of the spawn can answer. */
+  /** Whether the child is mid-turn, read from its own file (TB-Agent-Children.md): every wake writes
+   *  there, however the harness delivered it. `undefined` when the file can't be read, which reads
+   *  as finished. */
   running?: boolean
 }
 
-/** A `ChildTranscript` as the client sees it: the engine adds the state it alone can decide, since
- *  "finished" is the parent holding a tool result for `spawnId` (TB-Agent-Children.md). */
+/** A `ChildTranscript` as the client sees it: the engine adds its state, gating `running` on the
+ *  session's process being alive (TB-Agent-Children.md). */
 export interface ChildRow extends ChildTranscript { state: 'running' | 'done' | 'stopped' }
 
-/** What one entry says about a spawn (TB-Agent-Children.md): the child it names has stopped, or has
- *  been woken again. Read from the parent's transcript and each child's own, since a child can wake
- *  itself. `at` orders them: a harness may write an old stop after a newer
- *  wake (CC delivers a queued notification at the turn's end, stamped with its enqueue time), so the
- *  latest by time wins, never the latest by file position. */
-export interface SpawnSignal { id: string; stopped: boolean; at: number }
+/** A child's display name, wherever one is shown or sent: its description, else its type, else
+ *  "agent" — `kind` is omitted where it would say only that (TB-Agent-Children.md). */
+export const childName = (c: { label: string; kind?: string }) => c.label || c.kind || 'agent'
+
+/** The tooltip on every way into a child's transcript. */
+export const childOpenTip = (c: { kind?: string }) => `Open this ${c.kind ? `${c.kind} ` : ''}agent's transcript`
 
 /** One line of ambient driver state (TB-Agent-Composer-Toolkit.md Piece 2): a retry/compaction in
  *  progress, an extension notify, or joined extension setStatus entries. Display-only. */

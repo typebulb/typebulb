@@ -1,8 +1,9 @@
-import { statSync, fstatSync, readdirSync, openSync, readSync, closeSync, existsSync } from 'fs'
+import { statSync, readdirSync, existsSync } from 'fs'
 import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
+import { readHead, readTail } from '../../core/server/sessions.js'
 import type { ChildTranscript, Event, SessionFile, Thread, TokenCounts } from '../../core/events.js'
 
 // The Codex CLI realization of the AgentAdapter contract (TB-Agent-Codex.md, TB-Agent-Harness.md) —
@@ -531,7 +532,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // than under whichever sibling happens to precede it.
   listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     const want = normCwd(cwd)
-    type Found = { file: string; mtime: number; started?: number; running: boolean | undefined; tokens?: number; spawn: CodexSpawn; model?: string }
+    type Found = { file: string; mtime: number; started?: number; running?: boolean; tokens?: number; spawn: CodexSpawn; model?: string }
     const found = new Map<string, Found>()
     // The attached session's own THREAD id and model, picked up in this same pass: `sessionId` is a
     // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
@@ -555,10 +556,13 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       // `spawn` is the narrow marker: a guardian_review thread carries `subagent` too, nests under
       // children as readily as sessions, and is nothing a user spawned (Children-Codex Invariant 1).
       if (!meta.spawn || normCwd(meta.cwd) !== want) continue
+      // Whether it is mid-turn is its own last turn boundary: the parent's `completed` record and the
+      // child's own `task_complete` land within milliseconds of each other, only the child's is
+      // readable at any depth, and it re-answers when `followup_task` wakes a finished agent — one
+      // observed child completed seven times across forty minutes (TB-Agent-Children-Codex.md).
+      const { running, tokens } = this.#tailFacts(file, size, mtimeMs)
       found.set(meta.spawn.id, {
-        file, mtime: this.#lastActivity(file, size, mtimeMs), started, running: this.#childRunning(file, size, mtimeMs),
-        tokens: this.#tailFacts(file, size, mtimeMs).tokens,
-        spawn: meta.spawn, model: meta.model,
+        file, mtime: this.#lastActivity(file, size, mtimeMs), started, running, tokens, spawn: meta.spawn, model: meta.model,
       })
     }
     if (!sessionThread) return []           // no such session in this tree — nothing can belong to it
@@ -588,15 +592,6 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       })
     }
     return out
-  }
-
-  // Is this thread mid-turn? Its own last turn boundary answers, which is why a Codex child needs no
-  // settlement scan: the parent's `completed` record and the child's own `task_complete` land within
-  // milliseconds of each other, and only the child's is readable at any depth. It also re-answers,
-  // where a settled set could not: `followup_task` wakes a finished agent, and one observed child
-  // completed seven times across forty minutes (TB-Agent-Children-Codex.md).
-  #childRunning(file: string, size: number, mtimeMs: number): boolean | undefined {
-    return this.#tailFacts(file, size, mtimeMs).running
   }
 
   // The sessions Codex is mid-turn on right now — the picker's working dot, batched as the contract
@@ -814,32 +809,6 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     if (role !== 'user' && role !== 'assistant') return ''
     return blocksText(e.payload.content, role === 'user').replace(/\s+/g, ' ').trim()
   }
-}
-
-// Head-capped UTF-8 read — how every scan here bounds its I/O; undefined when the file can't be opened.
-// `bytes` is the raw count: a caller asking "did we hit the cap?" can't use text.length (chars).
-function readHead(file: string, cap: number): { text: string; bytes: number } | undefined {
-  let fd: number
-  try { fd = openSync(file, 'r') } catch { return undefined }
-  try {
-    const buf = Buffer.alloc(cap)
-    const n = readSync(fd, buf, 0, cap, 0)
-    return { text: buf.subarray(0, n).toString('utf8'), bytes: n }
-  } finally { closeSync(fd) }
-}
-
-// Tail-capped UTF-8 read — readHead's mirror, sized and positioned off the same handle it reads, so a
-// growing file can't tear the two apart. `partial` marks a read that began past byte 0, whose first
-// line is therefore a fragment.
-function readTail(file: string, cap: number): { text: string; partial: boolean } | undefined {
-  let fd: number
-  try { fd = openSync(file, 'r') } catch { return undefined }
-  try {
-    const from = Math.max(0, fstatSync(fd).size - cap)
-    const buf = Buffer.alloc(cap)
-    const n = readSync(fd, buf, 0, cap, from)
-    return { text: buf.subarray(0, n).toString('utf8'), partial: from > 0 }
-  } finally { closeSync(fd) }
 }
 
 // Two windows, because a single entry can dwarf the first — a `compacted` snapshot or long tool result

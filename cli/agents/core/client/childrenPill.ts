@@ -2,6 +2,7 @@ import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
 import { busyPill, closeChip } from './ui.js'
 import { formatDuration, formatTokens } from './util.js'
+import { childName } from '../events.js'
 import type { ChildRow } from './types.js'
 
 // Status-bar agents pill (TB-Agent-Children.md): the attached session's child transcripts — the
@@ -76,7 +77,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     if (!this.enabled) return
     try {
       // newest-at-bottom among siblings, then nested under the agent that spawned them
-      const next = byAncestry((await tb.server.listChildren() as ChildRow[]).reverse())
+      const next = byAncestry((await tb.server.listChildren() as ChildRow[]).sort((a, b) => a.mtime - b.mtime))
       const changed = next.length !== this.children.length ||
         next.some((c, i) => { const o = this.children[i]; return c.id !== o?.id || c.state !== o.state || c.mtime !== o.mtime || c.tokens !== o.tokens }) ||
         next.some(c => c.state === 'running')          // a running row's duration ticks with no write
@@ -182,8 +183,8 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // it said the same thing twice and cost the pill width its neighbours need.
       span({
         class: ['children-doc-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''],
-        title: [c.kind, c.label || 'no description'].filter(Boolean).join(' — '),
-      }, c.label || c.kind || 'agent'),
+        title: childName(c),
+      }, childName(c)),
       closeChip(() => void this.closeChild()),
     )
   }
@@ -210,7 +211,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       span({ class: ['children-dot', c.state] }),
       c.kind ? span({ class: 'children-kind' }, c.kind) : null,
       span({ class: ['children-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''] },
-        c.label || '(no description)'),
+        childName(c)),
       c.model ? span({ class: 'children-model' }, c.model) : null,
       // CC's agent map's two figures: how long it has run (to its last write once done), and its
       // context window. Recency went — the list is already ordered by it.

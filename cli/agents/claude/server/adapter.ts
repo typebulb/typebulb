@@ -2,9 +2,9 @@ import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, exi
 import { join } from 'path'
 import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
-import { listJsonlFiles } from '../../core/server/sessions.js'
+import { listJsonlFiles, readTail } from '../../core/server/sessions.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
-import type { ChildTranscript, Event, SpawnSignal, Thread, TokenCounts } from '../../core/events.js'
+import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
 
 // The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
 // schema-specific about CC's on-disk transcript — the `uuid`/`parentUuid` tree, the `isSidechain`/
@@ -28,14 +28,9 @@ interface JsonlEntry {
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage; stop_reason?: string | null }
   usage?: TokenUsage
   attachment?: { type?: string; prompt?: unknown; commandMode?: string }
-  // A `queue-operation` line's payload — the text CC queued. Its `enqueue` is where a
-  // task-notification is recorded FIRST, at the moment the agent stops (spawnSignals).
-  content?: string
-  operation?: string
   // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
   // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
   toolUseResult?: unknown
-  origin?: { kind?: string }
 }
 
 interface ContentBlock {
@@ -63,8 +58,8 @@ function sanitizePath(p: string): string {
   return p.replace(/[^a-zA-Z0-9]/g, '-')
 }
 
-const PROJECTS_DIR = join(homedir(), '.claude', 'projects')
-const projectDir = (cwd: string) => join(PROJECTS_DIR, sanitizePath(cwd))
+// `root` is CC's config dir, ~/.claude unless a test points the adapter at fixtures.
+const projectDir = (root: string, cwd: string) => join(root, 'projects', sanitizePath(cwd))
 
 // CC writes each sub-agent to its own transcript beside the session that spawned it:
 // `<projectDir>/<sessionId>/subagents/agent-<agentId>.jsonl` plus an `.meta.json` label
@@ -83,10 +78,11 @@ interface ChildMeta {
   stoppedByUser?: boolean
 }
 
-function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
-  const dir = join(projectDir(cwd), sessionId, CHILD_DIR)
+function listChildren(root: string, cwd: string, sessionId: string): ChildTranscript[] {
+  const dir = join(projectDir(root, cwd), sessionId, CHILD_DIR)
   let names: string[]
   try { names = readdirSync(dir) } catch { return [] }        // no children, or no session dir yet
+  const since = liveSince(root, sessionId)
   const out: ChildTranscript[] = []
   for (const name of names) {
     if (!name.endsWith('.jsonl')) continue
@@ -97,11 +93,17 @@ function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     let meta: ChildMeta = {}
     try { meta = JSON.parse(readFileSync(join(dir, `${stem}.meta.json`), 'utf8')) as ChildMeta } catch {}
     // The id is the bare agentId, so a child's `parentAgentId` names its parent's id directly.
+    const tail = childTail(file, st.size, st.mtimeMs)
     out.push({
       id: stem.startsWith('agent-') ? stem.slice('agent-'.length) : stem,
       file, mtime: st.mtimeMs,
       started: st.birthtimeMs || undefined,
-      tokens: childTokens(file, st.size, st.mtimeMs),
+      tokens: tail.tokens,
+      // Mid-turn in a process that is still alive: a child last written before the oldest live
+      // process for its session started ran in an earlier one, now dead — a resume revives the
+      // session, not the child. That catches a crash, and the CC versions through 2.1.272 whose
+      // finished children end with no stop_reason (41 of 574 on disk) and so read as mid-turn.
+      running: !!tail.running && (since === undefined || st.mtimeMs >= since),
       label: meta.description ?? '',
       kind: meta.agentType === DEFAULT_AGENT_TYPE ? undefined : meta.agentType,
       model: meta.model,
@@ -118,91 +120,70 @@ function listChildren(cwd: string, sessionId: string): ChildTranscript[] {
 // Plan and custom agents name themselves (ChildTranscript.kind).
 const DEFAULT_AGENT_TYPE = 'general-purpose'
 
-// The row's token figure: the child's context window as of its last response — the token chip's
-// sum, off the last assistant row in the file's tail. Cached per file until it grows, so listing an
-// idle child costs its stat and nothing more.
-const CHILD_TAIL = 256 * 1024
-const childTails = new Map<string, { size: number; mtime: number; tokens?: number }>()
-function childTokens(file: string, size: number, mtime: number): number | undefined {
+// What a child's own tail says (TB-Agent-Children.md): whether it is mid-turn, and its context
+// window as of its last response (the token chip's sum). Every way CC wakes an agent — a resume, a
+// queued message, its own background task — writes to this file, so the tail needs to know none of
+// them. Cached per file until it grows, so listing an idle child costs its stat and nothing more.
+// The window widens only when one line fills it, which would otherwise hide the leaf.
+const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
+const childTails = new Map<string, { size: number; mtime: number; tokens?: number; running?: boolean }>()
+function childTail(file: string, size: number, mtime: number): { tokens?: number; running?: boolean } {
   const hit = childTails.get(file)
-  if (hit && hit.size === size && hit.mtime === mtime) return hit.tokens
-  let tokens: number | undefined
-  let fd: number | undefined
-  try {
-    fd = openSync(file, 'r')
-    const len = Math.min(CHILD_TAIL, size)
-    const buf = Buffer.alloc(len)
-    const n = readSync(fd, buf, 0, len, size - len)
-    const lines = buf.subarray(0, n).toString('utf8').split('\n')
-    for (let i = lines.length - 1; i >= 0 && tokens === undefined; i--) {
-      if (!lines[i].includes('"usage"')) continue
-      let e: JsonlEntry
-      try { e = JSON.parse(lines[i]) } catch { continue }       // the cut first line, or a partial flush
-      const u = e?.type === 'assistant' ? e.message?.usage : undefined
-      if (u) tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+  if (hit && hit.size === size && hit.mtime === mtime) return { tokens: hit.tokens, running: hit.running }
+  let facts: { tokens?: number; running?: boolean } = {}
+  for (const cap of CHILD_TAIL_WINDOWS) {
+    const tail = readTail(file, cap)
+    if (!tail) break                                             // unreadable: no facts, reads as finished
+    const lines = tail.text.split('\n')
+    if (tail.partial) lines.shift()                              // cut mid-line: a fragment, not an entry
+    const entries: JsonlEntry[] = []
+    for (const l of lines) { if (l.trim()) try { entries.push(JSON.parse(l)) } catch {} }   // a torn last line is mid-write
+    if (!entries.length && tail.partial) continue
+    let usage: TokenUsage | undefined
+    for (let i = entries.length - 1; i >= 0 && !usage; i--) if (entries[i]?.type === 'assistant') usage = entries[i].message?.usage
+    facts = {
+      tokens: usage && (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+      running: chainWorking(entries),
     }
-  } catch {} finally { if (fd !== undefined) closeSync(fd) }
-  childTails.set(file, { size, mtime, tokens })
-  return tokens
+    break
+  }
+  childTails.set(file, { size, mtime, ...facts })
+  return facts
+}
+
+// "CC is mid-turn" judged from the last conversational entry: a user leaf is pending unless it's a
+// synthetic interrupt marker (cleans to '' with no tool_result — an ended turn); an assistant leaf
+// stays working while a tool_use has no matching tool_result, or while its message is unfinished.
+// CC writes each block as its own entry, and a sub-agent's while still streaming, with no
+// stop_reason yet (6236 of 6290 mid-message entries, against 3 of 1805 on the main thread): read
+// as ended, every thinking block flipped the live turn to settled for seconds. `tool_use` means
+// the call is on its way. Fully guarded — runs inside poll().
+function chainWorking(entries: JsonlEntry[]): boolean {
+  let leaf: JsonlEntry | undefined           // entries is a re-iterable array, file-ordered
+  for (const e of entries) if (e.type === 'user' || e.type === 'assistant') leaf = e
+  if (!leaf) return false
+  if (leaf.type === 'user') {
+    try {
+      const c = leaf.message?.content
+      const text = typeof c === 'string' ? c
+        : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text ?? '').join('') : ''
+      const hasToolResult = Array.isArray(c) && c.some(b => b && b.type === 'tool_result')
+      if (!hasToolResult && text.trim() && cleanUserText(text) === '') return false
+    } catch { /* malformed leaf — fall through to the safe default (working) */ }
+    return true
+  }
+  const blocks = Array.isArray(leaf.message?.content) ? leaf.message!.content as ContentBlock[] : []
+  const toolUseIds = blocks.filter(b => b.type === 'tool_use').map(b => b.id)
+  if (toolUseIds.length === 0) return !leaf.message?.stop_reason || leaf.message.stop_reason === 'tool_use'
+  const resolved = new Set<string>()
+  for (const e of entries) {
+    const c = e.message?.content
+    if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result' && b.tool_use_id) resolved.add(b.tool_use_id)
+  }
+  return toolUseIds.some(id => id && !resolved.has(id))
 }
 
 // A base64 image block → an inline markdown image, so it renders instead of dumping its raw base64.
-
-// CC's structured result for an Agent call it launched in the BACKGROUND: `{ isAsync: true, status:
-// 'async_launched', agentId, … }`, with result text "Async agent launched successfully". The call is
-// answered at launch and the agent runs on, so this result must never settle its spawn — that bug
-// showed every background child as finished from the moment it started (TB-Agent-Children.md).
-// Inside a sub-agent's own transcript CC writes no structured result at all (13 of 13 on disk), so a
-// nested launch is known by its text alone; missing it grayed every depth-2 agent at launch.
-function isAsyncLaunch(r: unknown, b: ContentBlock): boolean {
-  const o = r && typeof r === 'object' ? r as { isAsync?: unknown; status?: unknown } : {}
-  return o.status === 'async_launched' || o.isAsync === true || toText(b.content).startsWith(ASYNC_LAUNCH_TEXT)
-}
-const ASYNC_LAUNCH_TEXT = 'Async agent launched successfully'
-
-// CC's structured result for a SendMessage that woke a finished background agent: `{ success: true,
-// message: "Resuming agent …", resumedAgentId }`. The agent runs on from there — observed 2026-09-22,
-// green in CC's own agent map for 25 minutes after a grow-only settled set had latched it done.
-function resumedAgentId(r: unknown): string | undefined {
-  const id = r && typeof r === 'object' ? (r as { resumedAgentId?: unknown }).resumedAgentId : undefined
-  return typeof id === 'string' && id ? id : undefined
-}
-
-// Where a `<task-notification>` can ride. THREE shapes occur: CC delivers it as an ordinary user
-// turn whose content is a plain string, as a queued-command attachment when it had to queue it
-// mid-turn, and it records the enqueue itself as a `queue-operation` line. Reading only the
-// attachment left agents stuck green for hours.
-//
-// The queue-operation is the EARLIEST of the three, written when the agent stops rather than when
-// the notification is delivered, and it is the only one that arrives when the parent is idle with
-// nobody to deliver to. Measured: delivery normally follows the enqueue within 0.1s, but 103 of 3422
-// ids on disk were enqueued and never delivered in that file at all. It carries no `uuid`, so it
-// only reaches here through the settlement scan, never through the chain.
-function notificationText(e: JsonlEntry): string {
-  if (e.type === 'attachment' && e.attachment?.type === 'queued_command') return toText(e.attachment.prompt)
-  if (e.type === 'user' && typeof e.message?.content === 'string') return e.message.content
-  // Only the enqueue: the `remove` written at delivery re-carries the text under the removal's own
-  // timestamp, which in the field landed 200ms after a resume of the very agent it reports.
-  if (e.type === 'queue-operation' && e.operation === 'enqueue' && typeof e.content === 'string') return e.content
-  return ''
-}
-
-// The ids a `<task-notification>` settles: its `<tool-use-id>` (the spawn call) AND its `<task-id>`
-// (the agent itself), because two notifications in twenty-one carried only the latter. CC's own note
-// is the contract — it "fires each time this agent stops" — so every status is terminal (observed:
-// completed, failed, killed, stopped) and none needs special-casing.
-//
-// Deliberately NOT bounded by the closing tag: one block in fourteen was written without one, and a
-// bounded match skipped it silently. Scanning unbounded is safe because `<tool-use-id>` appears
-// nowhere else in a transcript (19 of 19 occurrences measured), and the guard below keeps the scan
-// to text that is a notification at all.
-function notifiedIds(text: string): string[] {
-  if (!text.includes('<task-notification>')) return []
-  const out: string[] = []
-  for (const re of [/<tool-use-id>\s*([^<\s]+)/g, /<task-id>\s*([^<\s]+)/g])
-    for (const m of text.matchAll(re)) out.push(m[1])
-  return out
-}
 
 // '' for any non-image block. Exported for the imageBlock test.
 export function blockToMarkdown(b: ContentBlock | undefined): string {
@@ -440,20 +421,32 @@ function readPreview(file: string): string {
 
 // CC's own pid-session store — one record per *running* CC process, removed on clean exit. A session
 // is live iff a record names it and that pid is alive.
-const SESSIONS_DIR = join(homedir(), '.claude', 'sessions')
-function sessionAlive(sessionId: string): boolean {
+interface SessionRecord { sessionId?: string; pid?: number; startedAt?: number; status?: string }
+function liveRecords(root: string): SessionRecord[] {
+  const dir = join(root, 'sessions')
   let names: string[]
-  try { names = readdirSync(SESSIONS_DIR) } catch { return false }
+  try { names = readdirSync(dir) } catch { return [] }
+  const out: SessionRecord[] = []
   for (const n of names) {
     if (!n.endsWith('.json')) continue
     try {
-      const rec = JSON.parse(readFileSync(join(SESSIONS_DIR, n), 'utf8'))
-      if (rec?.sessionId !== sessionId) continue
-      process.kill(rec.pid, 0)               // throws if the pid is gone
-      return true
+      const rec = JSON.parse(readFileSync(join(dir, n), 'utf8')) as SessionRecord
+      if (!rec?.sessionId) continue
+      process.kill(rec.pid!, 0)              // throws if the pid is gone
+      out.push(rec)
     } catch { /* unreadable record or dead pid — keep scanning */ }
   }
-  return false
+  return out
+}
+function sessionAlive(root: string, sessionId: string): boolean {
+  return liveRecords(root).some(r => r.sessionId === sessionId)
+}
+
+// When the oldest live process for this session started; undefined when none is live or a record
+// carries no `startedAt`, which leaves the liveness gate to say alone.
+function liveSince(root: string, sessionId: string): number | undefined {
+  const starts = liveRecords(root).filter(r => r.sessionId === sessionId).map(r => r.startedAt)
+  return starts.length && starts.every(t => typeof t === 'number') ? Math.min(...(starts as number[])) : undefined
 }
 
 // The sessions CC reports as mid-turn: a record whose pid is alive AND whose `status` reads busy.
@@ -464,35 +457,25 @@ function sessionAlive(sessionId: string): boolean {
 // disagreed once on a session whose status was 62 minutes old — so a stale-busy dot is the failure
 // mode to watch, and the reason this is gated on busy rather than on liveness, which was tried first
 // and showed green on seven idle sessions (TB-Agent-Mirror-Ready.md).
-function workingSessionIds(): Set<string> {
-  const ids = new Set<string>()
-  let names: string[]
-  try { names = readdirSync(SESSIONS_DIR) } catch { return ids }
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue
-    try {
-      const rec = JSON.parse(readFileSync(join(SESSIONS_DIR, n), 'utf8'))
-      if (!rec?.sessionId || rec.status !== 'busy') continue
-      process.kill(rec.pid, 0)               // throws if the pid is gone
-      ids.add(rec.sessionId)
-    } catch { /* unreadable record or dead pid — skip it */ }
-  }
-  return ids
+  function workingSessionIds(root: string): Set<string> {
+    return new Set(liveRecords(root).filter(r => r.status === 'busy').map(r => r.sessionId!))
 }
 
 export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   readonly displayName = 'Claude Mirror'
+
+  constructor(private root = join(homedir(), '.claude')) { super() }
 
   // CC sets CLAUDECODE=1 in every shell it spawns (also CLAUDE_CODE_ENTRYPOINT, and the cross-tool
   // AI_AGENT=claude-code_<ver>); CLAUDECODE is the narrowest, most stable signal.
   detectsSelf() { return process.env.CLAUDECODE === '1' }
 
   // CC creates ~/.claude on first run (settings, projects, sessions all live under it).
-  detectsInstalled() { return existsSync(join(homedir(), '.claude')) }
+  detectsInstalled() { return existsSync(this.root) }
 
-  sessionsDir(cwd: string) { return projectDir(cwd) }
-  listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(cwd)) }
-  listChildren(cwd: string, sessionId: string) { return listChildren(cwd, sessionId) }
+  sessionsDir(cwd: string) { return projectDir(this.root, cwd) }
+  listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(this.root, cwd)) }
+  listChildren(cwd: string, sessionId: string) { return listChildren(this.root, cwd, sessionId) }
 
   parseEntry(line: string): JsonlEntry | null {
     try { return JSON.parse(line) as JsonlEntry } catch { return null }
@@ -564,65 +547,11 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
     return { events }   // mode, permission-mode, file-history-snapshot, system, summary, etc.
   }
 
-  // "CC is mid-turn" judged from the last conversational entry: a user leaf is pending unless it's a
-  // synthetic interrupt marker (cleans to '' with no tool_result — an ended turn); an assistant leaf
-  // stays working while a tool_use has no matching tool_result, or while its message is unfinished.
-  // CC writes each block as its own entry, and a sub-agent's while still streaming, with no
-  // stop_reason yet (6236 of 6290 mid-message entries, against 3 of 1805 on the main thread): read
-  // as ended, every thinking block flipped the live turn to settled for seconds. `tool_use` means
-  // the call is on its way. Fully guarded — runs inside poll().
-  chainWorking(entries: JsonlEntry[]): boolean {
-    let leaf: JsonlEntry | undefined           // entries is a re-iterable array, file-ordered
-    for (const e of entries) if (e.type === 'user' || e.type === 'assistant') leaf = e
-    if (!leaf) return false
-    if (leaf.type === 'user') {
-      try {
-        const c = leaf.message?.content
-        const text = typeof c === 'string' ? c
-          : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text ?? '').join('') : ''
-        const hasToolResult = Array.isArray(c) && c.some(b => b && b.type === 'tool_result')
-        if (!hasToolResult && text.trim() && cleanUserText(text) === '') return false
-      } catch { /* malformed leaf — fall through to the safe default (working) */ }
-      return true
-    }
-    const blocks = Array.isArray(leaf.message?.content) ? leaf.message!.content as ContentBlock[] : []
-    const toolUseIds = blocks.filter(b => b.type === 'tool_use').map(b => b.id)
-    if (toolUseIds.length === 0) return !leaf.message?.stop_reason || leaf.message.stop_reason === 'tool_use'
-    const resolved = new Set<string>()
-    for (const e of entries) {
-      const c = e.message?.content
-      if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result' && b.tool_use_id) resolved.add(b.tool_use_id)
-    }
-    return toolUseIds.some(id => id && !resolved.has(id))
-  }
+  chainWorking(entries: JsonlEntry[]): boolean { return chainWorking(entries) }
 
-  sessionAlive(sessionId: string) { return sessionAlive(sessionId) }
+  sessionAlive(sessionId: string) { return sessionAlive(this.root, sessionId) }
 
-  sessionsWorking(_cwd: string) { return workingSessionIds() }
-
-  // What says a child has stopped, or started again (TB-Agent-Children.md). Two stop shapes, because
-  // CC has two: a FOREGROUND Agent call is answered when its agent finishes, so its tool_result
-  // settles the spawn; a BACKGROUND one is answered at launch and reports its outcome later as a
-  // task-notification naming the same tool-use-id. Reading only the first marked every background
-  // child finished the instant it started. One wake is a SendMessage that resumed a finished
-  // background agent, which runs on and notifies again under the same ids when it next stops.
-  // The other wake is in the child's OWN file: a background task of its own finishing after it
-  // stopped is delivered there as a task-notification turn, and the child runs on (observed
-  // 2026-09-24, 26 of 26 such turns on disk came after a stop and before the next one).
-  spawnSignals(e: JsonlEntry): SpawnSignal[] {
-    const at = Date.parse(e.timestamp ?? '') || 0
-    const notified = notifiedIds(notificationText(e)).map(id => ({ id, stopped: true, at }))
-    if (e.agentId && e.origin?.kind === 'task-notification') return [...notified, { id: e.agentId, stopped: false, at }]
-    if (notified.length) return notified
-    if (e.type !== 'user') return []
-    const resumed = resumedAgentId(e.toolUseResult)
-    if (resumed) return [{ id: resumed, stopped: false, at }]
-    const content = e.message?.content
-    if (!Array.isArray(content)) return []
-    return content.filter(b => b?.type === 'tool_result' && !isAsyncLaunch(e.toolUseResult, b))
-      .map(b => b.tool_use_id ?? '').filter(Boolean)
-      .map(id => ({ id, stopped: true, at }))
-  }
+  sessionsWorking(_cwd: string) { return workingSessionIds(this.root) }
 
   readPreview(file: string) { return readPreview(file) }
 

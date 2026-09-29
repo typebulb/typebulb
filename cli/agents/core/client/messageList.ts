@@ -9,7 +9,7 @@ import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
 import { asStr, turnClassFor, displayPath } from './util.js'
 import { stuckToBottom } from './ui.js'
-import { PASTE_DIR, PASTE_IMAGE_MIME } from '../events.js'
+import { PASTE_DIR, PASTE_IMAGE_MIME, childName, childOpenTip } from '../events.js'
 
 const PASTE_MENTION_RE = new RegExp(
   `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
@@ -703,9 +703,9 @@ export class MessageList extends Component {
       span({ class: 'glyph-img' }, '🤖'),
       span({ class: 'agent-kind' }, child?.kind ?? 'agent'),
       child
-        ? a({ class: 'agent-name', title: `Open this ${child.kind ? `${child.kind} ` : ''}agent's transcript`,
+        ? a({ class: 'agent-name', title: childOpenTip(child),
               onClick: (e: MouseEvent) => { e.preventDefault(); this.parent.openChild(child.id) } },
-            child.label || child.kind || 'agent')
+            childName(child))
         : span({ class: 'agent-name' }, from.slice(0, 8)),
     )
   }
@@ -816,7 +816,7 @@ export class MessageList extends Component {
             ? (follow
                 ? a({
                     class: 'tool-sum link',
-                    title: child ? `Open this ${child.kind ? `${child.kind} ` : ''}agent's transcript` : filePath,
+                    title: child ? childOpenTip(child) : filePath,
                     onClick: (e: MouseEvent) => {
                       e.preventDefault()
                       follow()

@@ -9,7 +9,8 @@ import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import { summarizeProse } from './summarize.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
-import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, SpawnSignal, Thread, TokenCounts } from '../events.js'
+import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, Thread, TokenCounts } from '../events.js'
+import { childName } from '../events.js'
 
 // The mirror's harness-NEUTRAL core (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails an on-disk JSONL
 // transcript and renders it; it drives nothing. Everything format-specific — where the sessions live,
@@ -68,8 +69,7 @@ interface State<E> {
   // nothing else: `sessionId`, the lock and the pid-store liveness stay the parent session's
   // (Children Invariant 2), so all the return needs is the file to drain again — the id it goes back
   // under is the one still in `sessionId`, and a field holding a second copy would imply otherwise.
-  // The file it goes back TO is `settleFile`, which the settlement scan already holds for the same
-  // conversation: one field, two readers, so they cannot disagree about which session is attached.
+  // The file it goes back TO is `sessionFile`, set wherever a conversation is bound.
   thread: Thread
   child?: ChildTranscript
 }
@@ -95,62 +95,13 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     thread: 'main',
   }
 
-  // The latest word on each spawn — stopped, or woken again — which is what says a child has
-  // finished (TB-Agent-Children.md). Keyed by both ids the adapter may report: the spawn call's, and
-  // the agent's own where the harness names only that. Latest by the entry's time, not by file
-  // position: CC writes an old notification's delivery after the resume that outdates it.
-  //
-  // Fed by its OWN scan of the parent transcript and of each child's, one offset per file, never as
-  // a side effect of the tail. Two things that buys, neither of which the drain could: a child open
-  // on screen doesn't stop its siblings settling (the tail is on the child's file then, and the
-  // parent's isn't read at all), and an entry that never joins the chain still counts — CC's
-  // `queue-operation` lines carry a task-notification and have no `uuid`, so the chain walk drops
-  // them before the adapter ever sees them. The children's files are read because a child can wake
-  // itself, recorded only there. It is a byte scan, not a second tail: no entry map, no walk, no
-  // event buffer.
-  const spawnSignals = new Map<string, SpawnSignal>()
-  let settleFile: string | undefined
-  const settleCursors = new Map<string, { offset: number; partial: string }>()
-
-  // Point the scan at a conversation, dropping what the last one settled: another session's settled
-  // calls say nothing about this one. Called wherever the view binds a different conversation, which
-  // is exactly where `leaveChild` is — a swap into a child is not one of those (Invariant 2).
-  function resetSettlements(file: string | undefined) {
-    spawnSignals.clear()
-    settleFile = file
-    settleCursors.clear()
-  }
-
-  // Read whatever the parent and its children have appended since last time and let the adapter say
-  // what it signals. Runs off `listChildren`, the only reader of the map, so nothing pays for it
-  // unless the agents pill is up. An adapter with no `spawnSignals` leaves every child running while
-  // its session is.
-  function scanSettlements(children: ChildTranscript[]) {
-    if (!settleFile || !adapter.spawnSignals) return
-    for (const file of [settleFile, ...children.map(c => c.file)]) {
-      let cur = settleCursors.get(file)
-      if (!cur) settleCursors.set(file, cur = { offset: 0, partial: '' })
-      const fresh = readNew(file, cur.offset)
-      if (!fresh.text) continue
-      cur.offset = fresh.offset
-      cur.partial += fresh.text
-      let nl: number
-      while ((nl = cur.partial.indexOf('\n')) >= 0) {
-        const line = cur.partial.slice(0, nl)
-        cur.partial = cur.partial.slice(nl + 1)
-        if (!line.trim()) continue
-        const entry = adapter.parseEntry(line)
-        if (entry) for (const s of adapter.spawnSignals(entry)) {
-          const prev = spawnSignals.get(s.id)
-          if (!prev || s.at >= prev.at) spawnSignals.set(s.id, s)
-        }
-      }
-    }
-  }
+  // The attached session's own transcript: what a child view returns to (see State.thread). Set
+  // wherever the view binds a conversation, which is exactly where `leaveChild` is — a swap into a
+  // child is not one of those (Invariant 2).
+  let sessionFile: string | undefined
 
   // A file's bytes past `offset`: the new offset and the text read, '' when there is nothing new or
-  // the file can't be opened. Shared by the tail and the settlement scan, which hold separate
-  // offsets over what is usually the same file.
+  // the file can't be opened.
   function readNew(file: string, offset: number): { offset: number; text: string } {
     const none = { offset, text: '' }
     let size: number
@@ -422,7 +373,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // either the very rec being attached (found by file from here on) or abandoned to the sweep.
     blank = undefined
     leaveChild()
-    resetSettlements(found.file)
+    sessionFile = found.file
     resetTail(found.file, found.sessionId)
     s.everAttached = true
     claimLock(s.cwd, found.sessionId)        // claim before the drain so siblings skip us
@@ -443,7 +394,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // so the fresh-boot auto-attach can't steal the blank view back to the newest old session.
   function detachToBlank() {
     leaveChild()
-    resetSettlements(undefined)
+    sessionFile = undefined
     resetTail(undefined, '')
   }
 
@@ -937,7 +888,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
         .filter(x => x.hit.hitCount)
       if (!own.hitCount && !kids.length) continue
       for (const { c, hit } of orderByDescending(kids, x => x.c.mtime))
-        out.push({ sessionId, mtime: c.mtime, preview: c.label || c.kind || 'agent', ...hit, child: { id: c.id, kind: c.kind, depth: c.depth } })
+        out.push({ sessionId, mtime: c.mtime, preview: childName(c), ...hit, child: { id: c.id, kind: c.kind, depth: c.depth } })
       // Same working cue as the browse list. Child rows above carry none: that dot would be their
       // parent's turn, not theirs.
       out.push({ sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), ...own })
@@ -993,7 +944,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       if (blank !== rec || s.sessionId !== rec.id) {
         blank = rec
         leaveChild()
-        resetSettlements(undefined)
+        sessionFile = undefined
         resetTail(undefined, rec.id)
         s.everAttached = true
         sweepIdle()
@@ -1015,52 +966,20 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
 
   // ── child transcripts (TB-Agent-Children.md) ──
 
-  // The session's children, newest first, each with the state only this side can decide. The session
-  // id is the parent's on both threads (Children Invariant 2), so the list reads the same whichever
-  // is on screen — which is what lets the pill move between children without returning first.
+  // The session's children, each with its state; the pill orders them. The session id is the
+  // parent's on both threads (Children Invariant 2), so the list reads the same whichever is on
+  // screen — which is what lets the pill move between children without returning first.
   async function listChildren(): Promise<ChildRow[]> {
     if (!adapter.listChildren || !state.sessionId) return []
     const live = sessionLive()
-    const all = adapter.listChildren(state.cwd, state.sessionId)
-    scanSettlements(all)                     // the map's only reader, so its only feeder
-    const byId = new Map(all.map(c => [c.id, c]))
-    // A DESCENDANT's own settlement is written in its parent child's transcript, not the session's.
-    // Whether or not the scan finds it there, a parent cannot finish while a child of its own is
-    // still live — CC's notification "fires each time this agent stops with no live background
-    // children" — so a terminal ancestor settles everything under it.
-    const terminal = (c: ChildTranscript, seen = new Set<string>()): boolean => {
-      if (c.stopped || settled(c)) return true
-      if (!c.parentId || seen.has(c.id)) return false      // seen guards a malformed parent cycle
-      seen.add(c.id)
-      const parent = byId.get(c.parentId)
-      return parent ? terminal(parent, seen) : false
-    }
-    return orderByDescending(all, c => c.mtime)
-      .map(c => ({ ...c, state: childState(c, live, terminal(c)) }))
+    return adapter.listChildren(state.cwd, state.sessionId).map(c => ({ ...c, state: childState(c, live) }))
   }
 
-  // The later word on either of its ids says stopped (see `spawnSignals`): a notification names
-  // both at one time, a wake names the agent's own id later.
-  function settled(c: ChildTranscript): boolean {
-    const own = spawnSignals.get(c.id)
-    const spawn = c.spawnId ? spawnSignals.get(c.spawnId) : undefined
-    const latest = own && spawn ? (own.at >= spawn.at ? own : spawn) : own ?? spawn
-    return !!latest?.stopped
-  }
-
-  // Finished is the PARENT having settled the spawn (adapter.spawnSignals): a child's own tail
-  // cannot tell a finished run from one stalled mid-flush. A parent process that is gone with no
-  // settlement reads as finished, never as running — the child died with it.
-  // Unless the ADAPTER answers, which it may when its children say so themselves: Codex writes turn
-  // boundaries into the child's own file, and the `followup_task` that wakes a finished one lands
-  // there too, where the parent scan never looks — TB-Agent-Children-Codex.md. The liveness gate
-  // still applies on that path: whatever
-  // the harness reports, a child of a dead process is finished.
-  function childState(c: ChildTranscript, live: boolean, isTerminal: boolean): ChildRow['state'] {
+  // The adapter reads whether a child is mid-turn from the child's own file; the engine adds only
+  // what the file can't say — a child of a dead process is finished, whatever its tail shows.
+  function childState(c: ChildTranscript, live: boolean): ChildRow['state'] {
     if (c.stopped) return 'stopped'
-    if (c.running !== undefined) return c.running && live ? 'running' : 'done'
-    if (isTerminal) return 'done'
-    return live ? 'running' : 'done'
+    return c.running && live ? 'running' : 'done'
   }
 
   // Swap the tail onto a child, keeping the session's identity: its id, its lock, its pid-store
@@ -1082,7 +1001,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // pays; a second tail state to make the return free would double the engine's tail machinery for
   // one keystroke.
   async function closeChild() {
-    const file = settleFile                  // the attached session's own transcript (see State.thread)
+    const file = sessionFile
     if (!leaveChild() || !file) return { ok: true }
     resetTail(file, state.sessionId)
     drainAndWatch(file)
