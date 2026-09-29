@@ -562,7 +562,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     const events: Event[] = []
     for (const e of collected) {
       if (adapter.isRecoveryNoise(e)) continue               // typed error-recovery noise, not a turn
-      events.push(...adapter.apply(e, state.sessionStartMs).events)   // sink + no state tracking
+      events.push(...onThread(adapter.apply(e, state.sessionStartMs).events))   // sink + no state tracking
     }
     const count = events.reduce((n, ev) => n + (ev.type === 'user' || ev.type === 'assistant' ? 1 : 0), 0)
     return { count, events }
@@ -582,7 +582,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (adapter.isSidechain(entry, state.thread)) return
     try {
       const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
-      for (const e of events) state.buffer.push(e)
+      for (const e of onThread(events)) state.buffer.push(e)
       // The durable row for a driver-streamed message just landed — drop the ephemeral draft so the
       // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1). The
       // drain only ever runs for the viewed file, so this targets the viewed rec alone — background
@@ -598,6 +598,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       if (usage) state.latest = usage
       if (usage || cost) state.buffer.push({ type: 'usage', ...state.latest, cost })
     } catch (err) { console.error('[mirror] skipped malformed entry:', errorMessage(err)) }
+  }
+
+  // Nobody types into a child transcript: its user turns are the parent agent's brief and messages,
+  // so they render as the markdown they were written in. Marked here, where the thread is known
+  // before the first event leaves; the client learns which view it is in a beat later.
+  function onThread(events: Event[]): Event[] {
+    if (state.thread !== 'child') return events
+    return events.map(e => e.type === 'user' ? { ...e, authored: true } : e)
   }
 
   // ── exported RPC surface (callable from the browser as tb.server.<name>) ──

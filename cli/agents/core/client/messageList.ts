@@ -237,7 +237,7 @@ export class MessageList extends Component {
       else if (prev.text) prev.copy = this.#makeCopy(prev.text)
       return
     }
-    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [], agent: e.agent })
+    this.#addMessage({ id: ++this.#idSeq, role: 'user', text: e.text, thinking: '', tools: [], agent: e.agent, authored: e.authored })
   }
 
   applyAssistant(e: Extract<ServerEvent, { type: 'assistant' }>) {
@@ -763,11 +763,11 @@ export class MessageList extends Component {
           : this.#renderInline(seg))
     }
     if (!msg.text) return null
-    // A hand-back sits in a user bubble but is authored markup, not keystrokes, so it renders through
-    // the assistant pipeline: the allowlist parser exists because misrendering what a person TYPED is
-    // worse than not rendering it, and that reason doesn't reach a report the model wrote in markdown
-    // (TB-Agent-Children.md). Headings, lists and tables in a sub-agent's report are meant as such.
-    const user = msg.role === 'user' && !msg.agent
+    // A hand-back, or any turn in a child view, sits in a user bubble but is authored markup, not
+    // keystrokes, so it renders through the assistant pipeline: the allowlist parser exists because
+    // misrendering what a person TYPED is worse than not rendering it, and that reason doesn't reach
+    // markdown a model wrote (TB-Agent-Children.md). Headings, lists and tables there are meant.
+    const user = msg.role === 'user' && !msg.agent && !msg.authored
     return this.#mdDiv(`md-${msg.id}`, user ? userMarkdown(msg) : renderMarkdown(msg.text))
   }
 

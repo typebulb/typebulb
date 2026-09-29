@@ -150,7 +150,9 @@ export type Event =
   // `agent` marks a turn the harness delivered on a sub-agent's behalf rather than one the user
   // typed: `from` is the child's id (TB-Agent-Children.md), so the mirror frames it and links to
   // that transcript. Its text is the report alone, the envelope already reduced away by the adapter.
-  | { type: 'user'; text: string; agent?: { from: string } }
+  // `authored` marks a turn a model wrote rather than a person typed — every user turn in a child
+  // view, where the brief and follow-ups come from the parent agent — so it renders as markdown.
+  | { type: 'user'; text: string; agent?: { from: string }; authored?: boolean }
   | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean }
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
