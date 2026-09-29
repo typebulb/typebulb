@@ -480,6 +480,15 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // (CODEX_MANAGED_BY_NPM) — install-method specific.
   detectsSelf() { return !!process.env.CODEX_THREAD_ID }
 
+  // idOf stamps ordinals and the fork seam, and apply pairs calls with results, all per drain.
+  override forRead() { return new CodexAdapter(this.root) }
+
+  // The thread id Codex gives its shells is the UUID that ends the session's file stem.
+  callerSessionId(cwd: string) {
+    const thread = process.env.CODEX_THREAD_ID
+    return thread ? this.listSessionFiles(cwd).find(f => f.sessionId.endsWith(thread))?.sessionId : undefined
+  }
+
   // Codex creates ~/.codex on first run (auth, sessions, state all live under it). The desktop app
   // shares the dir, so this also fires for app-only users — per contract, sessions only order the
   // picker, never gate it.

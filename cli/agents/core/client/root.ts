@@ -5,7 +5,8 @@ import { BulbsPill } from './bulbsPill.js'
 import { DiffPill } from './diffPill.js'
 import { ChildrenPill } from './childrenPill.js'
 import { MessageList } from './messageList.js'
-import { basename, truncate } from './util.js'
+import { truncate } from './util.js'
+import { basename } from '../format.js'
 import { armTooltipDismiss } from './ui.js'
 import { childName } from '../events.js'
 import type { ChildRow, ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
@@ -72,10 +73,11 @@ export class Root extends Component implements IRoot {
     if (this.#started) return
     this.#started = true
     armTooltipDismiss()     // one global listener set, so every harness's entry gets it
-    this.childrenPill.tasks.bind({
+    this.childrenPill.status.bind({
       msgs: () => this.messageList.messages,
       working: () => this.working,
       name: () => { const c = this.childrenPill.viewing; return c ? childName(c) : '' },
+      cwd: () => this.cwd,
       onChange: () => this.update(),
       reveal: id => { this.messageList.revealTool(id); this.update() },
     })
@@ -175,7 +177,7 @@ export class Root extends Component implements IRoot {
         if (events.length || workingChanged || modelChanged || childChanged || composerChanged || busyChanged) this.update()
         if (events.length || composerChanged) this.messageList.scrollSoon()
         // A quiet tick, so a swap's full re-emit has landed before the Tasks view digests it.
-        if (!events.length && this.childrenPill.viewing) this.childrenPill.tasks.sync()
+        if (!events.length && this.childrenPill.viewing) this.childrenPill.status.sync()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()
@@ -226,7 +228,7 @@ export class Root extends Component implements IRoot {
         // An open git-diff doc takes the transcript's slot — render-only; the transcript keeps
         // draining underneath and returns intact on close.
         this.diffPill.viewing ? this.diffPill.docView()
-          : this.childrenPill.viewing && this.childrenPill.tasks.open ? this.childrenPill.tasks.view()
+          : this.childrenPill.viewing && this.childrenPill.status.open ? this.childrenPill.status.view()
           : this.messageList.view(),
         this.#cwdHint(),
         // Agent-supplied overlay banners (Claude's switcher watchdog: red/amber/null). Empty for Pi.

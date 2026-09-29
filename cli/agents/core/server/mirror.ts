@@ -6,7 +6,9 @@ import { InlineStatusDedup } from './inlineStatusLog.js'
 import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
-import { summarizeProse, childTasksPart } from './summarize.js'
+import { summarizeProse, childStatusPart } from './summarize.js'
+import { entryEvents, sessionLive as sessionLiveOf, childState } from './transcript.js'
+import { judgeChild } from './childReport.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
 import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, Thread, TokenCounts } from '../events.js'
@@ -513,7 +515,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     const events: Event[] = []
     for (const e of collected) {
       if (adapter.isRecoveryNoise(e)) continue               // typed error-recovery noise, not a turn
-      events.push(...onThread(adapter.apply(e, state.sessionStartMs).events))   // sink + no state tracking
+      events.push(...entryEvents(adapter, e, state.thread, state.sessionStartMs).events)   // sink + no state tracking
     }
     const count = events.reduce((n, ev) => n + (ev.type === 'user' || ev.type === 'assistant' ? 1 : 0), 0)
     return { count, events }
@@ -532,12 +534,8 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // chain walks THROUGH on its way to the root.
     if (adapter.isSidechain(entry, state.thread)) return
     try {
-      const { events, usage, model, cost } = adapter.apply(entry, state.sessionStartMs)
-      const at = Date.parse(adapter.timestampOf(entry) ?? '')
-      for (const e of onThread(events)) {
-        if (!isNaN(at) && (e.type === 'user' || e.type === 'assistant' || e.type === 'tool_result')) e.at = at
-        state.buffer.push(e)
-      }
+      const { events, usage, model, cost } = entryEvents(adapter, entry, state.thread, state.sessionStartMs)
+      for (const e of events) state.buffer.push(e)
       // The durable row for a driver-streamed message just landed — drop the ephemeral draft so the
       // bubble hands off to the transcript without overlap (TB-Agent-Composer.md, Invariant C1). The
       // drain only ever runs for the viewed file, so this targets the viewed rec alone — background
@@ -553,14 +551,6 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       if (usage) state.latest = usage
       if (usage || cost) state.buffer.push({ type: 'usage', ...state.latest, cost })
     } catch (err) { console.error('[mirror] skipped malformed entry:', errorMessage(err)) }
-  }
-
-  // Nobody types into a child transcript: its user turns are the parent agent's brief and messages,
-  // so they render as the markdown they were written in. Marked here, where the thread is known
-  // before the first event leaves; the client learns which view it is in a beat later.
-  function onThread(events: Event[]): Event[] {
-    if (state.thread !== 'child') return events
-    return events.map(e => e.type === 'user' ? { ...e, authored: true } : e)
   }
 
   // ── exported RPC surface (callable from the browser as tb.server.<name>) ──
@@ -616,13 +606,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   }
 
   // "The agent is mid-turn" is two predicates ANDed: the chain shape (adapter) and process liveness
-  // (adapter). When liveness is unknowable from disk (adapter returns undefined — e.g. Pi has no pid
-  // store), fall back to file-mtime freshness so an idle session doesn't shimmer forever.
+  // (adapter), with a file-mtime fallback where liveness is unknowable from disk (Pi has no pid store).
   function sessionLive(): boolean {
-    const known = adapter.sessionAlive(state.sessionId, state.cwd)
-    if (known !== undefined) return known
-    if (!state.file) return false
-    try { return Date.now() - statSync(state.file).mtimeMs < 10_000 } catch { return false }
+    return sessionLiveOf(adapter, state.sessionId, state.cwd, state.file)
   }
 
   // The attached session's chain is mid-turn and its owner looks alive — a (possibly foreign)
@@ -835,10 +821,19 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return summarizeProse(String(text ?? ''), String(userPrompt ?? ''))
   }
 
-  // A child's Tasks view: a plan call per parent message, or a status call over the work log. Same
+  // A child's Status view: a plan call per parent message, or a status call over the work log. Same
   // licence as summarizeTurn: the open view is the request, and nothing here touches the transcript.
-  async function childTasks(kind: string, payload: unknown) {
-    return childTasksPart(kind === 'status' ? 'status' : 'plan', payload)
+  async function childStatus(kind: string, payload: unknown) {
+    return childStatusPart(kind === 'status' ? 'status' : 'plan', payload)
+  }
+
+  // The agents menu's status link: a child judged here, without swapping into it, so the reader goes
+  // on reading while it runs and the view opens on a finished result. Same licence: the click.
+  async function judgeChildStatus(id: string) {
+    const c = adapter.listChildren?.(state.cwd, state.sessionId).find(x => x.id === id)
+    if (!c) return { ok: false, error: 'child not found' }
+    const j = await judgeChild(adapter, { ...c, state: childState(c, sessionLive()) })
+    return { ok: true, plans: Object.fromEntries(j.plans), frozen: Object.fromEntries(j.frozen), judged: j.judged, error: j.error, setup: j.setup, cached: j.cached }
   }
 
   // ── session picker ──
@@ -954,13 +949,6 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return adapter.listChildren(state.cwd, state.sessionId).map(c => ({ ...c, state: childState(c, live) }))
   }
 
-  // The adapter reads whether a child is mid-turn from the child's own file; the engine adds only
-  // what the file can't say — a child of a dead process is finished, whatever its tail shows.
-  function childState(c: ChildTranscript, live: boolean): ChildRow['state'] {
-    if (c.stopped) return 'stopped'
-    return c.running && live ? 'running' : 'done'
-  }
-
   // Swap the tail onto a child, keeping the session's identity: its id, its lock, its pid-store
   // liveness (Children Invariant 2). The child takes no lock of its own — refreshActive goes on
   // heartbeating `state.sessionId`, which the swap never touches.
@@ -1002,5 +990,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childTasks, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, judgeChildStatus, shutdownComposer }
 }

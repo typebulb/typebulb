@@ -37,6 +37,7 @@ import { runPull } from './commands/pull.js'
 import { runPush } from './commands/push.js'
 import { runGet } from './commands/get.js'
 import { runPut } from './commands/put.js'
+import { runStatus } from './commands/status.js'
 import { ensureHarnessSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -115,6 +116,11 @@ async function main(): Promise<void> {
     // Pure string derivation — no bulb file, no env, no registry. Dispatch with the other
     // file-less commands so naming a bulb never depends on one existing yet.
     runSlug(args.slugName)
+    return
+  }
+  if (args.subcommand === 'status') {
+    // Reads the harness's transcripts, not a bulb, so no file resolution.
+    await runStatus(args.statusQuery, args.mode)
     return
   }
   if (args.subcommand === 'pull') {

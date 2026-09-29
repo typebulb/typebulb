@@ -1,8 +1,9 @@
 import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
-import { ChildTasks } from './childTasks.js'
+import { ChildStatusView, type StatusSeed } from './childStatusView.js'
 import { busyPill, closeChip } from './ui.js'
-import { formatDuration, formatTokens } from './util.js'
+import { formatTokens } from './util.js'
+import { formatDuration } from '../format.js'
 import { childName } from '../events.js'
 import type { ChildRow } from './types.js'
 
@@ -49,9 +50,14 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   // The open child. Resolved from poll's `child` rather than held locally: the server owns which file
   // it drains, so a reload finds the pill wearing what is actually on screen.
   viewing: ChildRow | null = null
-  // The open child's Tasks view (public, so domeleon discovers it). A row's tasks link opens the
-  // child straight into it; the row itself opens the transcript.
-  tasks = new ChildTasks()
+  // The open child's Status view (public, so domeleon discovers it). A row's status link judges the
+  // child on the server while the reader carries on, shimmering; lime means ready, and a click then
+  // opens the view on that result at once. The row itself opens the transcript.
+  status = new ChildStatusView()
+  #links = new Map<string, { state: 'busy' } | { state: 'ready'; seed: StatusSeed } | { state: 'failed'; error: string }>()
+  // The rows' order as the menu opened. Running agents write constantly, so ordering by recency
+  // while it is open moved rows out from under the pointer; it re-sorts on the next open.
+  #order: string[] = []
   #viewingId: string | null = null
   protected keepOpenSelector = '.children-wrap'
   protected filterId = 'children-filter'
@@ -81,7 +87,12 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     if (!this.enabled) return
     try {
       // newest-at-bottom among siblings, then nested under the agent that spawned them
-      const next = byAncestry((await tb.server.listChildren() as ChildRow[]).sort((a, b) => a.mtime - b.mtime))
+      let next = byAncestry((await tb.server.listChildren() as ChildRow[]).sort((a, b) => a.mtime - b.mtime))
+      if (this.open && this.#order.length) {
+        // An agent spawned since the menu opened goes to the bottom.
+        const at = new Map(this.#order.map((id, i) => [id, i]))
+        next = next.map((c, i) => [c, at.get(c.id) ?? this.#order.length + i] as const).sort((x, y) => x[1] - y[1]).map(([c]) => c)
+      }
       const changed = next.length !== this.children.length ||
         next.some((c, i) => { const o = this.children[i]; return c.id !== o?.id || c.state !== o.state || c.mtime !== o.mtime || c.tokens !== o.tokens }) ||
         next.some(c => c.state === 'running')          // a running row's duration ticks with no write
@@ -105,6 +116,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   // session, so leaving them up until the lazy tick shows another session's agents under this one.
   reset() {
     this.children = []
+    this.#links.clear()
     void this.refresh()
   }
 
@@ -112,22 +124,44 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     this.viewing = this.#viewingId ? this.children.find(c => c.id === this.#viewingId) ?? null : null
   }
 
-  async openChild(id: string, tasks = false) {
+  // `seed` opens the Status view on a result already judged; without one, the transcript.
+  async openChild(id: string, seed?: StatusSeed) {
     this.close()
     this.parent.messageList.stickToBottomNextRender()   // land at the child's tail, not the old scroll
     try {
       await tb.server.openChild(id)
       this.#viewingId = id                             // the poll confirms; this is just the same tick
       this.#resolveViewing()
-      this.tasks.show(tasks)
+      this.status.show(!!seed, seed)
       this.update()
     } catch (err) { console.error('[mirror] openChild failed', err) }
     void this.refresh()
   }
 
+  // Ready opens, and spends the result: a later visit judges afresh. Anything else (re)starts the
+  // judging, which a failure retries only on this click. A result that needed no call (the child has
+  // not moved since it was last judged) opens at once: green only ever means "the wait is over".
+  async #statusLink(c: ChildRow) {
+    const link = this.#links.get(c.id)
+    if (link?.state === 'busy') return
+    if (link?.state === 'ready') { this.#links.delete(c.id); return this.openChild(c.id, link.seed) }
+    this.#links.set(c.id, { state: 'busy' })
+    this.update()
+    try {
+      const r = await tb.server.judgeChildStatus(c.id)
+      if (r?.ok && !r.error && r.cached) { this.#links.delete(c.id); return this.openChild(c.id, { plans: r.plans, frozen: r.frozen, judged: r.judged }) }
+      this.#links.set(c.id, r?.ok && !r.error
+        ? { state: 'ready', seed: { plans: r.plans, frozen: r.frozen, judged: r.judged } }
+        : { state: 'failed', error: r?.error ?? 'could not judge' })
+    } catch { this.#links.set(c.id, { state: 'failed', error: 'could not judge' }) }
+    this.update()
+  }
+
+  get #anyReady() { return [...this.#links.values()].some(l => l.state === 'ready') }
+
   async closeChild() {
     this.parent.messageList.stickToBottomNextRender()
-    this.tasks.open = false
+    this.status.open = false
     try {
       await tb.server.closeChild()
       this.#viewingId = null
@@ -138,6 +172,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
 
   show() {
     this.beginOpen()
+    this.#order = this.children.map(c => c.id)
     void this.refresh()          // not awaited — the sibling pills' shape; a change repaints via update()
     this.refreshList()
     this.armClose()
@@ -160,7 +195,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   chip(n: number) {
     const running = this.running
     return button({
-      class: ['pill', 'children-pill', busyPill(running > 0), this.open ? 'on' : ''],
+      class: ['pill', 'children-pill', busyPill(running > 0), this.open ? 'on' : '', this.#anyReady ? 'status-ready' : ''],
       'data-tip': running
         ? `${running} of ${n} agent${n === 1 ? '' : 's'} still working — open one`
         : `${n} agent${n === 1 ? '' : 's'} this session spawned — open one`,
@@ -178,7 +213,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     const c = this.viewing!
     const n = this.children.length
     return button({
-        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on'],
+        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on', this.#anyReady ? 'status-ready' : ''],
         'data-tip': `${n} agent${n === 1 ? '' : 's'} — switch`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       },
@@ -223,12 +258,20 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // context window. Recency went — the list is already ordered by it.
       c.started ? span({ class: 'children-time' }, formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started)) : null,
       c.tokens ? span({ class: 'children-tokens' }, formatTokens(c.tokens)) : null,
-      // Straight into the task view, which is often all a peek wants.
-      span({
-        class: 'children-tasks-link',
-        'data-tip': 'Where this agent stands on each task (a few cheap model calls)',
-        onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id, true) },
-      }, 'tasks'),
+      this.#statusLinkView(c),
     )
+  }
+
+  #statusLinkView(c: ChildRow) {
+    const link = this.#links.get(c.id)
+    const tip = !link ? 'Where this agent stands on each task (a few cheap model calls); turns green when ready'
+      : link.state === 'busy' ? 'Working out where it stands…'
+      : link.state === 'ready' ? 'Ready: open its status'
+      : `${link.error}. Click to retry`
+    return span({
+      class: ['children-status-link', link?.state === 'busy' ? 'shimmer-text shimmer-slow' : link?.state ?? ''],
+      'data-tip': tip,
+      onClick: (e: MouseEvent) => { e.stopPropagation(); void this.#statusLink(c) },
+    }, 'status')
   }
 }

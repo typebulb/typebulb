@@ -7,7 +7,8 @@ import { TurnView } from './turnView.js'
 import { InlineBulb } from './inlineBulb.js'
 import { stripFrontmatter, bulbName } from '../../../src/render.js'
 import { supersededFlags, chainPositions } from './chains.js'
-import { asStr, turnClassFor, displayPath } from './util.js'
+import { turnClassFor } from './util.js'
+import { asStr, displayPath, toolSummary, toolDisplayName } from '../format.js'
 import { stuckToBottom } from './ui.js'
 import { PASTE_DIR, PASTE_IMAGE_MIME, childName, childOpenTip } from '../events.js'
 
@@ -19,11 +20,6 @@ const PASTE_MENTION_RE = new RegExp(
 // rendered; CSS picks one by the host theme (light → black wordmark, dark → outline).
 const LOGO_LIGHT = new URL('typebulb.png', import.meta.url).href
 const LOGO_DARK = new URL('typebulb-inv.png', import.meta.url).href
-
-export function toolSummary(input: Record<string, unknown>): string {
-  if (!input || typeof input !== 'object') return ''
-  return asStr(input.command) ?? asStr(input.file_path) ?? asStr(input.filePath) ?? asStr(input.path) ?? asStr(input.pattern) ?? asStr(input.query) ?? asStr(input.url) ?? asStr(input.skill) ?? asStr(input.description) ?? ''
-}
 
 // A multi-line summary (a heredoc Bash command) must not break the one-line row: first line + '…'.
 function oneLine(s: string): string {
@@ -85,13 +81,6 @@ function diffHunks(t: Tool): Hunk[] | undefined {
       : undefined
     default:             return undefined
   }
-}
-
-// mcp__linqpad-patcher__apply_patch → "Linqpad-patcher [apply_patch]". Lazy server match is CC's own
-// split (a tool name containing __ survives); the bracket format is deliberately not CC's.
-export function toolDisplayName(name: string): string {
-  const m = /^mcp__(.+?)__(.+)$/.exec(name)
-  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} [${m[2]}]` : name
 }
 
 // Unified-diff string inputs, if the tool carries any (patcher's patch/diff fields).

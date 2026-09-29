@@ -487,6 +487,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   sessionsDir(cwd: string) { return projectDir(this.root, cwd) }
   listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(this.root, cwd)) }
   listChildren(cwd: string, sessionId: string) { return listChildren(this.root, cwd, sessionId) }
+  // CC exports its session id to every shell it runs.
+  callerSessionId() { return process.env.CLAUDE_CODE_SESSION_ID || undefined }
 
   parseEntry(line: string): JsonlEntry | null {
     try { return JSON.parse(line) as JsonlEntry } catch { return null }

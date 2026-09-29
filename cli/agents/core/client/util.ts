@@ -1,7 +1,6 @@
 // Pure formatting / path helpers shared across the mirror's components — no DOM, no domeleon, no tb.
-
-// Tool inputs are heterogeneous JSON; narrow to string at the point of use.
-export const asStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+// The ones the server half needs too live in ../format.ts.
+import { basename } from '../format.js'
 
 export const TURN_PALETTE_SIZE = 5
 export const turnClassFor = (i: number) => `turn-${i % TURN_PALETTE_SIZE}`
@@ -26,16 +25,6 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
-// A run's length: seconds under a minute, then whole minutes, then h+m — minute grain so a running
-// row doesn't jitter on the 3s poll.
-export function formatDuration(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
 export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max).trimEnd() + '…' : s
 }
@@ -45,20 +34,6 @@ export function truncate(s: string, max: number): string {
 // original path for launch + display, this is only the key.
 export function pathKey(p: string): string { return p.replace(/\\/g, '/').toLowerCase() }
 
-// Project-relative display form of an absolute path: strip the cwd prefix (case-insensitive,
-// separator-agnostic) so a tool row reads `runtime/…`, not `c:\Code\typebulb\runtime\…`. A path
-// outside the project stays absolute.
-export function displayPath(p: string, cwd: string): string {
-  if (!cwd) return p
-  const np = p.replace(/\\/g, '/')
-  const ncwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
-  return np.toLowerCase().startsWith(ncwd.toLowerCase() + '/') ? np.slice(ncwd.length + 1) : p
-}
-
-// Last path segment, trailing separators trimmed — the file or directory name ('' for an empty path).
-export function basename(p: string): string {
-  return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
-}
 // A bulb's display name from its path: the basename minus the `.bulb.md` suffix.
 export function bulbBasename(p: string): string {
   return basename(p).replace(/\.bulb\.md$/, '')

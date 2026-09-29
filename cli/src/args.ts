@@ -9,7 +9,7 @@ import { detectCallerHarness } from './agentViewer/resolve.js'
 export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put' | 'status'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -35,6 +35,9 @@ export interface CliArgs {
   /** `slug <name…>`: the bulb title to derive from — positionals joined, so an unquoted
    *  multi-word name works as typed. */
   slugName?: string
+  /** `status [agent…]`: the sub-agent to report on, by id or a piece of its description —
+   *  positionals joined, like `slug`. Absent lists them. */
+  statusQuery?: string
   /** For `agent:<name>` — the agent to launch a mirror for (e.g. `claude`). Bare `agent` (no
    *  target) ensures this project's mirror is up and prints what-to-do guidance. */
   agentTarget?: string
@@ -131,7 +134,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put', 'status'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -264,7 +267,7 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (!arg.startsWith('-') || (arg === '-' && result.subcommand === 'send')) {
       // `send <file> -` reads the message from stdin, so its bare `-` is a positional, not a flag.
       // Scoped to send: elsewhere a lone `-` stays an unknown option, keeping `call`'s --args hint.
-      if (['call', 'send', 'get', 'put', 'slug'].includes(result.subcommand)) callPositionals.push(arg)
+      if (['call', 'send', 'get', 'put', 'slug', 'status'].includes(result.subcommand)) callPositionals.push(arg)
       else result.file = arg
     } else {
       // Unknown flag: fail rather than silently ignore — a typo'd `--no-wath` running with watch
@@ -306,6 +309,8 @@ export function parseArgs(args: string[]): CliArgs {
     }
     result.slugName = callPositionals.join(' ')
   }
+
+  if (result.subcommand === 'status' && callPositionals.length) result.statusQuery = callPositionals.join(' ')
 
   // get <file> <kind>: exactly one block per invocation — stdout owns one payload (TB-Get-Put.md).
   if (result.subcommand === 'get') {
@@ -417,6 +422,11 @@ Usage:
                                  fs/AI/server.ts without --trust (no arg: list the
                                  remembered-trusted bulbs).
   typebulb untrust <file>        Forget a bulb's trust (back to Restricted).
+  typebulb status [agent]        A sub-agent's Status: its request, each subtask's
+                                 progress, tests, any decision it needs, and the
+                                 files it edited (the mirror's Copy Status). Name
+                                 it by id or a piece of its description; no arg
+                                 lists this session's agents. Claude Code, Codex.
 
 Options:
   -f, --follow                Stream new log output until interrupted (logs)

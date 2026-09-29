@@ -71,9 +71,9 @@ export async function summarizeProse(text: string, userPrompt = ''): Promise<Sum
   return summary ? { ok: true, text: summary } : CALL_FAILED
 }
 
-// A child's Tasks view (TB-Agent-Children.md). `plan` turns one message from the parent
+// A child's Status (TB-Agent-Children.md). `plan` turns one message from the parent
 // (the brief, or a later follow-up) into a request line and its subtasks, once per message. `status`
-// judges every subtask against the work log the client digests (numbered tool lines, prose, sends,
+// judges every subtask against the work log childStatus.ts digests (numbered tool lines, prose, sends,
 // never raw results) plus facts it counted, and is re-run as the child grows. Both answer JSON.
 const PLAN_PROMPT = `A coordinator sent this message to a sub-agent. Return JSON only:
 {"request": "one or two plain sentences: what it asks for and what must be delivered", "subtasks": ["..."]}
@@ -107,7 +107,7 @@ Rules:
 - Make the work the subject of every sentence ("Counted 14 references", "The build passes"); never refer to the agent itself, as "the agent", "it", or otherwise.
 - Unfinished is not off track: a subtask not started yet is normal while earlier ones run.
 - "note" only for something that would change what the delegator does: repeated failures, a problem found outside the task, a risk to the deliverable, unexpected time spent. Use the FACTS, which are counted. Most rows have no note, and a whole table rarely has more than two. Never a note: remaining work, a failure fixed at once, an instruction followed as directed, a remark on style, or anything "did" or "decision" already says.
-- "offBrief": work the brief did not ask for. Empty array if none.
+- "offBrief": work the brief did not ask for, done by the sub-agent itself. Something it only saw is not its work: a file changed by someone else, shown in a status or a diff. Empty array if none.
 
 FACTS (counted from the log):
 ${s.facts || 'none'}
@@ -124,7 +124,7 @@ const headTail = (s: string) => s.length <= MAX_LOG_CHARS ? s
 
 export type ChildPartResult = { ok: true; data: unknown } | { ok: false; error: string; setup?: true }
 
-export async function childTasksPart(kind: 'plan' | 'status', payload: unknown): Promise<ChildPartResult> {
+export async function childStatusPart(kind: 'plan' | 'status', payload: unknown): Promise<ChildPartResult> {
   if (!cheapAiReady()) return NOT_READY
   let prompt: string
   if (kind === 'plan') {

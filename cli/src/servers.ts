@@ -44,3 +44,5 @@ export { pushBulb, type PushOutcome } from './commands/push.js'
 // Fresh per-call read of one .env-cascade key — the mirror server reads TYPEBULB_TOKEN/ORIGIN
 // through this so a mid-session .env edit takes effect without a mirror restart.
 export { readEnvVar } from './env.js'
+// The per-user home, where a child's Status report caches its model calls between runs.
+export { typebulbHome } from './serve/paths.js'

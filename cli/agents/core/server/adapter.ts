@@ -134,6 +134,18 @@ export abstract class AgentAdapter<E = unknown> {
    * session's liveness.
    */
   listChildren?(cwd: string, sessionId: string): ChildTranscript[]
+  /**
+   * The session the CURRENT process runs in, read from the env the harness gives its shells, so
+   * `typebulb status` finds the calling orchestrator's own children before anyone else's. Optional:
+   * absent or undefined, the newest session with a match answers instead.
+   */
+  callerSessionId?(cwd: string): string | undefined
+  /**
+   * The adapter a one-shot read of another file uses (a child's Status, TB-Agent-Children.md). An
+   * adapter whose `idOf`/`apply` keep per-drain state returns a fresh instance, or the read would
+   * interleave with the live drain's; a stateless one is its own.
+   */
+  forRead(): AgentAdapter<E> { return this }
 
   // ── tree schema: the engine walks the parent-linked tree through these, never a literal field ──
   /** Parse one JSONL line into a typed entry, or null to drop it (a JSON error, a header, a line with
