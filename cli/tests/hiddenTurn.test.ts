@@ -37,6 +37,24 @@ describe('isSidechain is relative to the rendered thread', () => {
   })
 })
 
+// A sub-agent's blocks are written while still streaming, stop_reason unset: an unfinished message
+// is mid-turn, or the live turn flips to settled on every thinking block (the Raw/Reply wobble).
+describe('chainWorking reads an unfinished message as mid-turn', () => {
+  const a = new ClaudeAdapter()
+  const leaf = (stop_reason: string | null, type = 'thinking') =>
+    [{ type: 'assistant', message: { content: [{ type }], stop_reason } }] as never
+
+  it('keeps working on a block with no stop_reason yet, or one whose tool call is coming', () => {
+    expect(a.chainWorking(leaf(null))).toBe(true)
+    expect(a.chainWorking(leaf('tool_use', 'text'))).toBe(true)
+  })
+
+  it('ends on a finished message', () => {
+    expect(a.chainWorking(leaf('end_turn', 'text'))).toBe(false)
+    expect(a.chainWorking(leaf('stop_sequence', 'text'))).toBe(false)
+  })
+})
+
 /**
  * What settles a spawn, which is what marks a child finished (TB-Agent-Children.md). CC answers a
  * FOREGROUND Agent call when its agent finishes, but a BACKGROUND one at launch — so reading every

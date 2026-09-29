@@ -25,7 +25,7 @@ interface JsonlEntry {
   sessionId?: string
   aiTitle?: string
   customTitle?: string
-  message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage }
+  message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage; stop_reason?: string | null }
   usage?: TokenUsage
   attachment?: { type?: string; prompt?: unknown; commandMode?: string }
   // A `queue-operation` line's payload — the text CC queued. Its `enqueue` is where a
@@ -566,7 +566,11 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   // "CC is mid-turn" judged from the last conversational entry: a user leaf is pending unless it's a
   // synthetic interrupt marker (cleans to '' with no tool_result — an ended turn); an assistant leaf
-  // stays working while a tool_use has no matching tool_result. Fully guarded — runs inside poll().
+  // stays working while a tool_use has no matching tool_result, or while its message is unfinished.
+  // CC writes each block as its own entry, and a sub-agent's while still streaming, with no
+  // stop_reason yet (6236 of 6290 mid-message entries, against 3 of 1805 on the main thread): read
+  // as ended, every thinking block flipped the live turn to settled for seconds. `tool_use` means
+  // the call is on its way. Fully guarded — runs inside poll().
   chainWorking(entries: JsonlEntry[]): boolean {
     let leaf: JsonlEntry | undefined           // entries is a re-iterable array, file-ordered
     for (const e of entries) if (e.type === 'user' || e.type === 'assistant') leaf = e
@@ -583,7 +587,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
     }
     const blocks = Array.isArray(leaf.message?.content) ? leaf.message!.content as ContentBlock[] : []
     const toolUseIds = blocks.filter(b => b.type === 'tool_use').map(b => b.id)
-    if (toolUseIds.length === 0) return false
+    if (toolUseIds.length === 0) return !leaf.message?.stop_reason || leaf.message.stop_reason === 'tool_use'
     const resolved = new Set<string>()
     for (const e of entries) {
       const c = e.message?.content
