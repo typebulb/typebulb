@@ -124,7 +124,8 @@ const DEFAULT_AGENT_TYPE = 'general-purpose'
 // window as of its last response (the token chip's sum). Every way CC wakes an agent — a resume, a
 // queued message, its own background task — writes to this file, so the tail needs to know none of
 // them. Cached per file until it grows, so listing an idle child costs its stat and nothing more.
-// The window widens only when one line fills it, which would otherwise hide the leaf.
+// The window widens when one line fills it, which would otherwise hide the leaf, or when it holds no
+// response to read the figure from.
 const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
 const childTails = new Map<string, { size: number; mtime: number; tokens?: number; running?: boolean }>()
 function childTail(file: string, size: number, mtime: number): { tokens?: number; running?: boolean } {
@@ -141,10 +142,13 @@ function childTail(file: string, size: number, mtime: number): { tokens?: number
     if (!entries.length && tail.partial) continue
     let usage: TokenUsage | undefined
     for (let i = entries.length - 1; i >= 0 && !usage; i--) if (entries[i]?.type === 'assistant') usage = entries[i].message?.usage
+    // A window of tool results alone has no response in it (one image result runs to 600KB). The
+    // file only grows, so the figure last read still stands.
     facts = {
-      tokens: usage && (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+      tokens: usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : hit?.tokens,
       running: chainWorking(entries),
     }
+    if (facts.tokens === undefined && tail.partial) continue
     break
   }
   childTails.set(file, { size, mtime, ...facts })

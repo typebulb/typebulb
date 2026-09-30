@@ -214,19 +214,16 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     const c = this.viewing!
     const n = this.children.length
     return button({
-        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on', this.#anyReady ? 'status-ready' : ''],
+        // Still running shimmers the pill through busyPill, as the chip and every other pill do. A
+        // "working" word beside the label said the same thing twice and cost width its neighbours need.
+        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on', busyPill(c.state === 'running'), this.#anyReady ? 'status-ready' : ''],
         'data-tip': `${n} agent${n === 1 ? '' : 's'} — switch`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       },
       span({ class: 'glyph-img' }, '🤖'),
       // Native title: .children-doc-label is overflow:hidden for its ellipsis, which would clip a
       // tooltip of its own, and a long description is what title is better at anyway.
-      // Still running shimmers the label itself, exactly as the menu rows do. A "working" word beside
-      // it said the same thing twice and cost the pill width its neighbours need.
-      span({
-        class: ['children-doc-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''],
-        title: childName(c),
-      }, childName(c)),
+      span({ class: 'children-doc-label', title: childName(c) }, childName(c)),
       closeChip(() => void this.closeChild()),
     )
   }
@@ -256,9 +253,10 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         childName(c)),
       c.model ? span({ class: 'children-model' }, c.model) : null,
       // CC's agent map's two figures: how long it has run (to its last write once done), and its
-      // context window. Recency went — the list is already ordered by it.
-      c.started ? span({ class: 'children-time' }, formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started)) : null,
-      c.tokens ? span({ class: 'children-tokens' }, formatTokens(c.tokens)) : null,
+      // context window. Recency went — the list is already ordered by it. Both cells always render:
+      // a row is its own flex line, so a missing one would pull the rest out of their columns.
+      span({ class: 'children-time' }, c.started ? formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started) : ''),
+      span({ class: 'children-tokens' }, c.tokens ? formatTokens(c.tokens) : ''),
       this.statusEnabled ? this.#statusLinkView(c) : null,
     )
   }

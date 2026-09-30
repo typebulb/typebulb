@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { isHiddenTurn } from '../agents/claude/server.js'
@@ -108,5 +108,30 @@ describe('listChildren gates a mid-turn tail on the live process', () => {
     const after = new Date(startedAt + 1_000)
     utimesSync(kid, after, after)
     expect(running()).toBe(true)
+  })
+})
+
+// A child's token figure is its last response's usage, read from the file's tail. One tool result
+// can fill that window (an image read runs to 600KB), leaving no response in it.
+describe('listChildren keeps a token figure when tool results fill the tail window', () => {
+  const cwd = 'C:\Code\fixture'
+  const root = mkdtempSync(join(tmpdir(), 'tb-claude-'))
+  const kids = join(root, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'sess', 'subagents')
+  mkdirSync(kids, { recursive: true })
+  const kid = join(kids, 'agent-kid.jsonl')
+  const line = (e: unknown) => JSON.stringify(e) + '\n'
+  // The small entry CC writes after each result is what keeps the window from reading as one line.
+  const result = line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x'.repeat(300 * 1024) }] } })
+    + line({ type: 'attachment' })
+  writeFileSync(kid,
+    line({ type: 'user', message: { content: 'Read the sheets.' } }) +
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }], stop_reason: 'tool_use', usage: { input_tokens: 2, output_tokens: 8, cache_read_input_tokens: 400 } } }) +
+    result)
+  const tokens = () => new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]?.tokens
+
+  it('widens for it on a first read, then carries it as more results land', () => {
+    expect(tokens()).toBe(410)
+    appendFileSync(kid, result)
+    expect(tokens()).toBe(410)
   })
 })
