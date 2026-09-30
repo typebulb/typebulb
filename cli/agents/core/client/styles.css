@@ -312,8 +312,10 @@ body {
      centres this box, so the extra height never unbalances the row. */
   line-height: 1.3;
   /* The band's core leans from the accent toward --fg, so it stands off muted and body text alike:
-     brighter than the accent in dark, deeper in light. */
-  background-image: linear-gradient(100deg, currentColor 25%, var(--accent) 40%, color-mix(in srgb, var(--accent) 60%, var(--fg)) 50%, var(--accent) 60%, currentColor 75%) !important;
+     brighter than the accent in dark, deeper in light. The ends rest dimmer than currentColor, so the
+     band shows by brightness: a hovered link is already the accent, the same colour as the band. */
+  --shimmer-rest: color-mix(in srgb, currentColor 55%, transparent);
+  background-image: linear-gradient(100deg, var(--shimmer-rest) 25%, var(--accent) 40%, color-mix(in srgb, var(--accent) 60%, var(--fg)) 50%, var(--accent) 60%, var(--shimmer-rest) 75%) !important;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
