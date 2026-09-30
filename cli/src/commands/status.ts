@@ -61,5 +61,6 @@ function printList(s: SessionChildren) {
 
 const row = (c: ChildRow) => {
   const ran = c.started ? formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started) : ''
-  return `${c.id}  ${c.state.padEnd(7)}  ${ran.padStart(6)}  ${childName(c)}`
+  const state = c.failing && c.state !== 'stopped' ? 'failing' : c.state
+  return `${c.id}  ${state.padEnd(7)}  ${ran.padStart(6)}  ${childName(c)}`
 }

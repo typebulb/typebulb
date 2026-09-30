@@ -103,6 +103,7 @@ Rules:
 - One row per subtask, same ids. "steps" lists EVERY bracketed step range that worked on it: reading, attempts, failures and fixes, not only the result. Together the rows and offBrief should cover the whole log; ranges never overlap.
 - "evidence" lists the few steps that show where it stands: the result for done, the latest work for in_progress.
 - "done" only when the log shows the result. If the only evidence is the agent's own report, write "reported" in "did".
+- A step's result is one line of its output, and its last line where the log gives one; "(+N lines)" is how much more there was. Never read a count or a total off a line that does not state it.
 - "did" says what was achieved so far: outcome and state, not tool mechanics. For a done row, one short clause. For an in_progress row, what has been found or confirmed so far, never only what was examined ("Confirmed the per-stroke check drops stretches 3 and 6-10", not "Investigated the dropped stretches"); when nothing is established yet, the hypothesis being tested. A file name only when it is the deliverable. A not_started row has "did": "".
 - Make the work the subject of every sentence ("Counted 14 references", "The build passes"); never refer to the agent itself, as "the agent", "it", or otherwise.
 - Unfinished is not off track: a subtask not started yet is normal while earlier ones run.

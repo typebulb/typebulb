@@ -7,7 +7,7 @@ import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import { summarizeProse, childStatusPart } from './summarize.js'
-import { entryEvents, sessionLive as sessionLiveOf, childState } from './transcript.js'
+import { entryEvents, sessionLive as sessionLiveOf, childState, transcriptIndex, type TranscriptIndex } from './transcript.js'
 import { judgeChild } from './childReport.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
@@ -63,9 +63,9 @@ interface State<E> {
   latestModel: string | null
   everAttached: boolean                    // we've committed to ≥1 session; gates the fresh-boot auto-attach
   // The JSONL is a tree (parent links); the live chain is the walk from the latest leaf to root.
-  // entries indexes id→entry; chainLastId is the last-emitted leaf, so a drain can tell extension
-  // (append) from divergence (rewind, re-emit).
-  entries: Map<string, E>
+  // index holds the tailed file's entries by id; chainLastId is the last-emitted leaf, so a drain can
+  // tell extension (append) from divergence (rewind, re-emit).
+  index: TranscriptIndex<E>
   chainLastId?: string
   // Which thread the view renders (TB-Agent-Children.md). A swap into a child retargets the tail and
   // nothing else: `sessionId`, the lock and the pid-store liveness stay the parent session's
@@ -93,7 +93,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     latest: { in: 0, out: 0, cached: 0, cacheCreate: 0 },
     latestModel: null,
     everAttached: false,
-    entries: new Map(),
+    index: transcriptIndex(adapter),
     thread: 'main',
   }
 
@@ -362,7 +362,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     s.offset = 0
     s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
     s.latestModel = null                     // new session: drop the prior session's resolved model
-    s.entries = new Map()
+    s.index = transcriptIndex(adapter)
     s.chainLastId = undefined
     s.buffer.push({ type: 'cleared' })
     s.buffer.push({ type: 'session', sessionId })
@@ -409,33 +409,22 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     s.partial += fresh.text
     // Index the whole batch first (no events yet) so we can find the latest leaf, then chain-walk to
     // decide extension vs divergence.
-    let latestId: string | undefined
-    let nl: number
-    while ((nl = s.partial.indexOf('\n')) >= 0) {
-      const line = s.partial.slice(0, nl)
-      s.partial = s.partial.slice(nl + 1)
-      if (!line.trim()) continue
-      const entry = adapter.parseEntry(line)
-      if (!entry) continue
-      const id = adapter.idOf(entry)
-      if (id) {
-        s.entries.set(id, entry)
-        // The live chain's leaf is the newest user/assistant entry ON THE VIEWED THREAD — never one
-        // off it. (TB-LostMessage.md, TB-Agent-Children.md)
-        if (!adapter.isSidechain(entry, s.thread) && adapter.isLeafType(entry)) latestId = id
-      }
-    }
+    const cut = s.partial.lastIndexOf('\n')
+    if (cut < 0) return
+    const latestId = s.index.add(s.partial.slice(0, cut).split('\n'), s.thread)
+    s.partial = s.partial.slice(cut + 1)
     if (!latestId) return
     // Walk parent→root. If we pass chainLastId, the new entries extend what we've emitted (common
     // case). If not, a terminal /rewind forked off our leaf — clear and re-emit so the UI matches.
     const walked: E[] = []                                    // leaf → root order
-    let cur: E | undefined = s.entries.get(latestId)
+    const { entries } = s.index
+    let cur: E | undefined = entries.get(latestId)
     let foundPrev = false
     while (cur) {
       walked.push(cur)
       if (adapter.idOf(cur) === s.chainLastId) { foundPrev = true; break }
       const pid = adapter.parentOf(cur)
-      cur = pid ? s.entries.get(pid) : undefined
+      cur = pid ? entries.get(pid) : undefined
     }
     if (foundPrev) {
       // walked[last] is the prior leaf, already emitted; the rest is new (root→leaf).
@@ -453,7 +442,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       // entry is emitted, surface any of its non-sidechain children that aren't on the live chain.
       // (TB-LostMessage.md)
       const liveSet = new Set(walked.map(e => adapter.idOf(e)))
-      const childrenByParent = indexChildren(s.entries)
+      const childrenByParent = indexChildren(entries)
       for (let i = walked.length - 1; i >= 0; i--) {
         emitLive(walked[i])
         surfaceForks(adapter.idOf(walked[i]), childrenByParent, liveSet)
@@ -615,7 +604,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   // harness working. Pass a materialized array, not entries.values(): an adapter may scan the
   // chain more than once, and a one-shot MapIterator would be exhausted after the first pass.
   function terminalTurnLive(): boolean {
-    return adapter.chainWorking([...state.entries.values()]) && sessionLive()
+    return adapter.chainWorking([...state.index.entries.values()]) && sessionLive()
   }
 
   // Pre-warm the viewed conversation's driver so the model pill shows what the composer WILL use,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { byAncestry } from '../agents/core/client/childrenPill.js'
-import { childDigest, editedFiles, type StatusTool } from '../agents/core/childStatus.js'
+import { childDigest, editedFiles, statusFacts, type StatusTool } from '../agents/core/childStatus.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
 /**
@@ -56,5 +56,35 @@ describe('editedFiles', () => {
       { path: 'src/old.ts', deleted: true },
       { path: 'src/renamed.ts', from: 'src/new.ts' },
     ])
+  })
+})
+
+// What the status call reads and what is counted beside it (TB-Agent-Children.md).
+describe('childDigest', () => {
+  const min = 60_000
+
+  // A listing's first row read as a count: "1 p17-…" was reported as one mark, of 27.
+  it('keeps the more-lines marker and a command\'s last line', () => {
+    const d = childDigest([
+      { role: 'user', text: 'brief', tools: [] },
+      { role: 'assistant', text: '', tools: [{
+        id: 't', name: 'Bash', input: { command: 'node build.mjs 17' }, isError: false,
+        digest: `1 p17-diagonal-adjacent a [1334.9,1125.6] ${'x'.repeat(120)} (+26 lines)`,
+        result: '1 p17-diagonal-adjacent\n2 p17-next\n\n27 marks written\n',
+      }] },
+    ])
+    expect(d.log).toMatch(/… \(\+26 lines\), last: 27 marks written$/)
+  })
+
+  // A stop between the hand-back and the parent's next message is neither work nor any row's time.
+  it('counts a wait for the parent as stopped, and splits the rest between tools and the model', () => {
+    const d = childDigest([
+      { role: 'user', text: 'brief', tools: [], at: 0 },
+      { role: 'assistant', text: '', at: min, tools: [{ id: 't', name: 'Bash', input: { command: 'build' }, isError: false, result: 'ok', at: min, doneAt: 2 * min }] },
+      { role: 'assistant', text: 'READY', tools: [], at: 3 * min },
+      { role: 'user', text: 'Phase 2', tools: [], at: 63 * min },
+      { role: 'assistant', text: 'Done', tools: [], at: 64 * min },
+    ])
+    expect(statusFacts(d, null, new Map(), false)).toEqual([['Time', '1m in tools, 3m in the model, 1h 0m stopped']])
   })
 })

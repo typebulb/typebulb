@@ -2,8 +2,8 @@ import { openSync, readSync, closeSync, statSync, readdirSync, readFileSync, exi
 import { join } from 'path'
 import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
-import { listJsonlFiles, readTail } from '../../core/server/sessions.js'
-import { AgentAdapter } from '../../core/server/adapter.js'
+import { listJsonlFiles, readHead, readTail } from '../../core/server/sessions.js'
+import { AgentAdapter, type Linker } from '../../core/server/adapter.js'
 import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
 
 // The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
@@ -27,7 +27,7 @@ interface JsonlEntry {
   customTitle?: string
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage; stop_reason?: string | null }
   usage?: TokenUsage
-  attachment?: { type?: string; prompt?: unknown; commandMode?: string }
+  attachment?: { type?: string; prompt?: unknown; commandMode?: string; identity?: { modelId?: string } }
   // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
   // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
   toolUseResult?: unknown
@@ -52,6 +52,9 @@ interface TokenUsage {
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
 }
+
+const isToolResult = (e: JsonlEntry) =>
+  e.type === 'user' && Array.isArray(e.message?.content) && e.message.content.some(b => b?.type === 'tool_result')
 
 // Mirror sessionStoragePortable.sanitizePath: non-alphanumeric → '-'.
 function sanitizePath(p: string): string {
@@ -99,6 +102,7 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
       file, mtime: st.mtimeMs,
       started: st.birthtimeMs || undefined,
       tokens: tail.tokens,
+      failing: tail.failing,
       // Mid-turn in a process that is still alive: a child last written before the oldest live
       // process for its session started ran in an earlier one, now dead — a resume revives the
       // session, not the child. That catches a crash, and the CC versions through 2.1.272 whose
@@ -106,7 +110,9 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
       running: !!tail.running && (since === undefined || st.mtimeMs >= since),
       label: meta.description ?? '',
       kind: meta.agentType === DEFAULT_AGENT_TYPE ? undefined : meta.agentType,
-      model: meta.model,
+      // The id the child's own file records, so every row names its model alike; the caller's alias
+      // ("opus") only where the file has none.
+      model: tail.model?.replace(/^claude-/, '').replace(/-\d{8}$/, '') ?? meta.model,
       spawnId: meta.toolUseId,
       parentId: meta.parentAgentId,
       depth: meta.spawnDepth ?? 1,
@@ -120,18 +126,19 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
 // Plan and custom agents name themselves (ChildTranscript.kind).
 const DEFAULT_AGENT_TYPE = 'general-purpose'
 
-// What a child's own tail says (TB-Agent-Children.md): whether it is mid-turn, and its context
-// window as of its last response (the token chip's sum). Every way CC wakes an agent — a resume, a
-// queued message, its own background task — writes to this file, so the tail needs to know none of
-// them. Cached per file until it grows, so listing an idle child costs its stat and nothing more.
-// The window widens when one line fills it, which would otherwise hide the leaf, or when it holds no
-// response to read the figure from.
+// What a child's own tail says (TB-Agent-Children.md): whether it is mid-turn, its model and its
+// context window as of its last response (the token chip's sum), and whether that response was an
+// API error. Every way CC wakes an agent — a resume, a queued message, its own background task —
+// writes to this file, so the tail needs to know none of them. Cached per file until it grows, so
+// listing an idle child costs its stat and nothing more. The window widens when one line fills it,
+// which would otherwise hide the leaf, or when it holds no response to read the figure from.
 const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
-const childTails = new Map<string, { size: number; mtime: number; tokens?: number; running?: boolean }>()
-function childTail(file: string, size: number, mtime: number): { tokens?: number; running?: boolean } {
+interface TailFacts { tokens?: number; model?: string; running?: boolean; failing?: boolean }
+const childTails = new Map<string, TailFacts & { size: number; mtime: number }>()
+function childTail(file: string, size: number, mtime: number): TailFacts {
   const hit = childTails.get(file)
-  if (hit && hit.size === size && hit.mtime === mtime) return { tokens: hit.tokens, running: hit.running }
-  let facts: { tokens?: number; running?: boolean } = {}
+  if (hit && hit.size === size && hit.mtime === mtime) return hit
+  let facts: TailFacts = {}
   for (const cap of CHILD_TAIL_WINDOWS) {
     const tail = readTail(file, cap)
     if (!tail) break                                             // unreadable: no facts, reads as finished
@@ -139,20 +146,46 @@ function childTail(file: string, size: number, mtime: number): { tokens?: number
     if (tail.partial) lines.shift()                              // cut mid-line: a fragment, not an entry
     const entries: JsonlEntry[] = []
     for (const l of lines) { if (l.trim()) try { entries.push(JSON.parse(l)) } catch {} }   // a torn last line is mid-write
-    if (!entries.length && tail.partial) continue
-    let usage: TokenUsage | undefined
-    for (let i = entries.length - 1; i >= 0 && !usage; i--) if (entries[i]?.type === 'assistant') usage = entries[i].message?.usage
+    // Nothing to judge a turn by: one result can fill the window (an image read runs to 600KB) and
+    // leave only the bookkeeping entry CC writes after it.
+    if (tail.partial && !entries.some(e => e.type === 'user' || e.type === 'assistant')) continue
+    // The newest reply, and the newest the model wrote: CC records a failed request as a reply of
+    // its own, with no model and no usage.
+    let last: JsonlEntry | undefined, reply: JsonlEntry | undefined
+    for (let i = entries.length - 1; i >= 0 && !reply; i--) {
+      const e = entries[i]
+      if (e?.type !== 'assistant') continue
+      last ??= e
+      if (!e.isApiErrorMessage && e.message?.usage) reply = e
+    }
+    const usage = reply?.message?.usage
     // A window of tool results alone has no response in it (one image result runs to 600KB). The
-    // file only grows, so the figure last read still stands.
+    // file only grows, so the figures last read still stand.
     facts = {
       tokens: usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : hit?.tokens,
+      model: reply?.message?.model ?? hit?.model,
       running: chainWorking(entries),
+      failing: !!last?.isApiErrorMessage,
     }
     if (facts.tokens === undefined && tail.partial) continue
     break
   }
+  facts.model ??= headModel(file)
   childTails.set(file, { size, mtime, ...facts })
   return facts
+}
+
+// The model CC tells a fresh agent it runs on, in an attachment near the head of its file: what a
+// child that has no reply yet can still say.
+function headModel(file: string): string | undefined {
+  for (const line of (readHead(file, 256 * 1024)?.text ?? '').split('\n')) {
+    if (!line.includes('"modelId"')) continue
+    try {
+      const id = (JSON.parse(line) as JsonlEntry).attachment?.identity?.modelId
+      if (id) return id
+    } catch {}
+  }
+  return undefined
 }
 
 // "CC is mid-turn" judged from the last conversational entry: a user leaf is pending unless it's a
@@ -171,8 +204,7 @@ function chainWorking(entries: JsonlEntry[]): boolean {
       const c = leaf.message?.content
       const text = typeof c === 'string' ? c
         : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text ?? '').join('') : ''
-      const hasToolResult = Array.isArray(c) && c.some(b => b && b.type === 'tool_result')
-      if (!hasToolResult && text.trim() && cleanUserText(text) === '') return false
+      if (!isToolResult(leaf) && text.trim() && cleanUserText(text) === '') return false
     } catch { /* malformed leaf — fall through to the safe default (working) */ }
     return true
   }
@@ -499,6 +531,24 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   }
   idOf(raw: JsonlEntry) { return raw.uuid }
   parentOf(raw: JsonlEntry) { return raw.parentUuid }
+  // CC parents each parallel call's result on its own call, so a walk from the leaf keeps one branch
+  // and drops the other results (TB-LostMessage.md). Chaining a message's blocks and results in the
+  // order written gives the engine the list it walks.
+  linker(): Linker<JsonlEntry> {
+    const messageOf = new Map<string, string>()   // entry → the assistant message it belongs to
+    const tip = new Map<string, string>()         // message → its newest entry
+    return { link(e) {
+      // A uuid written twice keeps the parent it has: the tip could by then be the entry itself.
+      if (!e.uuid || messageOf.has(e.uuid)) return
+      const from = e.parentUuid === undefined ? undefined : messageOf.get(e.parentUuid)
+      const message = e.type === 'assistant' ? e.message?.id : isToolResult(e) ? from : undefined
+      if (!message) return
+      // Only an entry parented inside its own message moves; the message's first keeps its parent.
+      if (from === message) e.parentUuid = tip.get(message)
+      messageOf.set(e.uuid, message)
+      tip.set(message, e.uuid)
+    } }
+  }
   timestampOf(raw: JsonlEntry) { return raw.timestamp }
   // Every entry in a child transcript carries isSidechain, so the flag means "off this view's
   // thread" only against the thread being rendered (TB-Agent-Children.md).
@@ -552,7 +602,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
       if (text || thinking || tools.length) {
         const ts = Date.parse(entry.timestamp ?? '')
         const live = !isNaN(ts) && ts >= sessionStartMs
-        events.push({ type: 'assistant', text, thinking, tools, live })
+        events.push({ type: 'assistant', text, thinking, tools, live, error: entry.isApiErrorMessage || undefined })
       }
       const usageRaw = entry.message?.usage ?? entry.usage
       const usage: TokenCounts | undefined = usageRaw && {

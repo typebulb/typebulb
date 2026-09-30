@@ -3,7 +3,7 @@
 // the plain text the orchestrating agent reads. Pure and harness-neutral, so the mirror's Status view
 // and `typebulb status` build one report from one code path.
 import type { Event } from './events.js'
-import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName } from './format.js'
+import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi, MORE_LINES } from './format.js'
 
 const RECENT = 30              // the newest steps keep full detail; "where it is now" lives there
 const LONG_STEP_MS = 3 * 60_000
@@ -40,19 +40,34 @@ export type Digest = ReturnType<typeof childDigest>
 export interface Edited { path: string; deleted?: boolean; from?: string }
 export type Fact = [label: string, value: string, cls?: string]
 
-const clip = (s: string, n: number) => { s = s.replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
+const clip = (s: string, n: number) => { s = stripAnsi(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
 const abridge = (s: string, n: number) => s.length <= n ? s : s.slice(0, n / 2) + '\n[…]\n' + s.slice(-n / 2)
 const firstLine = (s: string) => s.split('\n').find(l => l.trim()) ?? ''
+const lastLine = (s: string) => s.split('\n').reverse().find(l => l.trim()) ?? ''
 // Shell preamble that says nothing about the step.
 const stripBoiler = (s: string) => s.replace(/^(\s*(cd\s+\S+|export\s+PATH=\S+)\s*(;|&&)\s*)+/, '')
 // "Bash: node build.mjs", the step as the log and the counted facts both name it.
 const stepLabel = (t: StatusTool, n: number) => `${toolDisplayName(t.name)}: ${clip(stripBoiler(toolSummary(t.input)), n)}`
+// The shell command a step ran, whatever its tool is called, and how long its call took.
+const commandOf = (t: StatusTool) => asStr(t.input?.command) ?? asStr(t.input?.cmd)
+const ranMs = (t: StatusTool) => t.at !== undefined && t.doneAt !== undefined ? t.doneAt - t.at : undefined
 export const statusLabel = (status: string) => status === 'off' ? 'off brief' : status.replace('_', ' ')
 export const inRanges = (n: number, ranges: [number, number?][]) => ranges.some(([a, b]) => n >= a && n <= (b ?? a))
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 // A child whose brief never reaches its transcript in the clear (Codex encrypts it): nothing to plan,
 // so no calls, and the report keeps only what is counted.
 export const NO_BRIEF = 'No readable brief on record, so no subtasks to judge.'
+
+// A result as the log shows it: the adapter's one-line digest, clipped around its more-lines marker,
+// which is what tells a listing's first row from an answer. A command's output keeps its last line
+// too, where a total or a test count lands.
+function shown(t: StatusTool, n: number): string {
+  const digest = t.digest ?? ''
+  const more = MORE_LINES.exec(digest)?.[0] ?? ''
+  const head = clip(digest.slice(0, digest.length - more.length), n) + more
+  const last = more && commandOf(t) ? clip(lastLine(t.result ?? ''), n) : ''
+  return last ? `${head}, last: ${last}` : head
+}
 
 /** The event stream as the digest's messages: the mirror's own reduction (consecutive sends fold into
  *  one, a hand-back stays its own turn), for a report built where no mirror page is open. */
@@ -103,8 +118,7 @@ export function childDigest(msgs: StatusMsg[]) {
         say.push({ after: steps.length, line: `AGENT SENDS (${toolDisplayName(t.name)}): ${abridge(message, 8000)}` })
     }
   }
-  const tail = end
-  const time = childTimeline(msgs, steps, tail)
+  const time = childTimeline(msgs, steps, end)
   // The last message whole: a final report is the densest line in the log.
   const last = say.at(-1)
   if (last && /^AGENT SAYS/.test(last.line)) {
@@ -135,14 +149,14 @@ export function childDigest(msgs: StatusMsg[]) {
     const t = s.tool
     const out = t.result === undefined ? '(running)'
       : t.isError ? 'ERROR: ' + clip(firstLine(t.result), 160)
-      : clip(t.digest ?? '', recent ? 120 : 60) || 'ok'
+      : shown(t, recent ? 120 : 60) || 'ok'
     lines.push(`[${s.n}] ${stepLabel(t, recent ? 160 : 80)} → ${out}`)
     lines.push(...sayAt.get(s.n) ?? [])
     i++
   }
   return {
-    brief, followups, steps, log: lines.join('\n'), facts: countedFacts(steps),
-    span: time.span, idle: time.idle, wakes: time.wakes, tests: lastTestRun(steps), lastAt: end,
+    brief, followups, steps, log: lines.join('\n'), facts: countedFacts(steps), ...time,
+    tests: lastTestRun(steps), lastAt: end,
   }
 }
 
@@ -151,14 +165,13 @@ export function childDigest(msgs: StatusMsg[]) {
 function lastTestRun(steps: Step[]): TestRun | undefined {
   for (let i = steps.length - 1; i >= 0; i--) {
     const t = steps[i]!.tool
-    const cmd = asStr(t.input?.command) ?? asStr(t.input?.cmd)
+    const cmd = commandOf(t)
     if (!cmd || !TEST_CMD.test(cmd) || t.result === undefined) continue
     // The runner's own label ("Tests  213 passed") is dropped: the header already says Tests.
-    const counts = (t.result.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter(l => /\b\d+\s+(passed|failed)\b/i.test(l)).at(-1) ?? '')
+    const counts = (stripAnsi(t.result).split('\n').filter(l => /\b\d+\s+(passed|failed)\b/i.test(l)).at(-1) ?? '')
       .trim().replace(/^tests?:?\s+/i, '')
     const state = t.isError || /\b[1-9]\d*\s+failed\b/i.test(counts) ? 'red' : /\bpassed\b/i.test(counts) ? 'green' : 'unknown'
-    const ms = t.at !== undefined && t.doneAt !== undefined ? t.doneAt - t.at : undefined
-    return { n: steps[i]!.n, state, line: clip(counts, 90), ms }
+    return { n: steps[i]!.n, state, line: clip(counts, 90), ms: ranMs(t) }
   }
   return undefined
 }
@@ -218,7 +231,19 @@ function childTimeline(msgs: StatusMsg[], steps: Step[], tail: number) {
     if (y > cursor) s.parts.push({ from: act(cursor), to: act(y) })
   })
   for (const s of steps) s.wall = s.parts.reduce((n, p) => n + p.to - p.from, 0)
-  return { span: act(tail), idle: idleBefore(tail), wakes: wakes.filter(w => w > start && w < tail).map(act) }
+  return { span: act(tail), idle: idleBefore(tail), wakes: wakes.filter(w => w > start && w < tail).map(act), toolMs: toolTime(steps, tail) }
+}
+
+// How long tool calls were running: overlapping ones counted once, an open one to the last entry.
+// The rest of the active time is the model.
+function toolTime(steps: Step[], end: number): number {
+  const calls = steps.map(s => s.tool).filter(t => t.at !== undefined).sort((a, b) => a.at! - b.at!)
+  let ms = 0, covered = -Infinity
+  for (const t of calls) {
+    const to = t.doneAt ?? end
+    if (to > covered) { ms += to - Math.max(t.at!, covered); covered = to }
+  }
+  return ms
 }
 
 // What the status call should not have to infer: failures, repeats, long waits. Counted, so an
@@ -235,8 +260,12 @@ function countedFacts(steps: Step[]): string {
   for (const [k, ns] of byCmd) if (ns.length > 1) facts.push(`${k} failed ${ns.length} times (steps ${ns.join(', ')}).`)
   const recent = steps.slice(-20).filter(s => s.tool.isError).length
   if (recent >= 4) facts.push(`${recent} of the last 20 steps failed.`)
-  for (const s of steps) if (s.wall >= LONG_STEP_MS)
-    facts.push(`Step ${s.n} (${stepLabel(s.tool, 60)}) took ${mins(s.wall)}.`)
+  for (const s of steps) if (s.wall >= LONG_STEP_MS) {
+    // A step owns the thinking that led to its call, so a quick call can carry minutes of model time.
+    const ran = ranMs(s.tool)
+    const where = ran !== undefined && ran < s.wall / 2 ? `: the call ran ${mins(ran)}, the rest was the model before it` : ''
+    facts.push(`Step ${s.n} (${stepLabel(s.tool, 60)}) took ${mins(s.wall)}${where}.`)
+  }
   const total = steps.reduce((n, s) => n + s.wall, 0)
   if (total) facts.push(`${mins(total)} in all over ${steps.length} steps.`)
   return facts.join('\n')
@@ -314,11 +343,11 @@ function placeTime(lines: Line[], d: Digest) {
   })
 }
 
-/** The closing facts, in the order a delegator acts on them. Tests are counted from the transcript;
- *  the finding and the decision are the status call's, and only while that call has judged the
- *  parent's latest message: after it, what it said may already be answered, and a stale "needs a
- *  decision" invites deciding twice. Until then Now names the follow-up being worked on, from its
- *  plan. A slot with nothing to say is left out. */
+/** The closing facts, in the order a delegator acts on them. Tests and where the time went are
+ *  counted from the transcript; the finding and the decision are the status call's, and only while
+ *  that call has judged the parent's latest message: after it, what it said may already be answered,
+ *  and a stale "needs a decision" invites deciding twice. Until then Now names the follow-up being
+ *  worked on, from its plan. A slot with nothing to say is left out. */
 export function statusFacts(d: Digest, judged: Judged | null | undefined, plans: Map<string, Plan>, busy: boolean): Fact[] {
   const t = d.tests
   const current = judged && judged.followups === d.followups.length
@@ -329,6 +358,7 @@ export function statusFacts(d: Digest, judged: Judged | null | undefined, plans:
   return ([
     ['Now', now],
     ['Tests', t ? `${t.state}${t.line ? `, ${t.line}` : ''}${t.ms !== undefined ? `, took ${mins(t.ms)}` : ''} (step ${t.n})` : '', t ? `tests-${t.state}` : undefined],
+    ['Time', d.span && d.steps.length ? `${mins(d.toolMs)} in tools, ${mins(Math.max(0, d.span - d.toolMs))} in the model${d.idle ? `, ${mins(d.idle)} stopped` : ''}` : ''],
     ['Needs a decision', current ? judged.data.decision : '', 'warn'],
   ] as Fact[]).filter(([, v]) => v)
 }
@@ -386,7 +416,7 @@ export function editedFiles(d: Digest, cwd: string): Edited[] {
     }
     const path = asStr(i.file_path) ?? asStr(i.filePath) ?? asStr(i.path)
     if (!headed && path && WRITE_FIELDS.some(k => k in i)) touch(path)
-    const cmd = asStr(i.command) ?? asStr(i.cmd)
+    const cmd = commandOf(t)
     if (cmd) for (const g of gitMoves(cmd)) g.to ? move(g.from, g.to) : touch(g.from, { deleted: true })
   }
   return [...out.values()]

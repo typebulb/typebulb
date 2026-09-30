@@ -73,6 +73,10 @@ export interface AgentDriver {
   dispose(): Promise<void>
 }
 
+/** One file's pass over its entries (see `AgentAdapter.linker`). A method, not a function property,
+ *  so an adapter stays assignable to `AgentAdapter<unknown>`. */
+export interface Linker<E> { link(e: E): void }
+
 /**
  * The contract a coding agent's transcript format realizes so the neutral mirror engine can render it.
  * `E` is the adapter's parsed-entry type (CC's JsonlEntry, Pi's session entry): the adapter produces it
@@ -161,6 +165,10 @@ export abstract class AgentAdapter<E = unknown> {
   abstract idOf(e: E): string | undefined
   /** The entry's parent id (CC `parentUuid` / Pi `parentId`); undefined at the root. */
   abstract parentOf(e: E): string | undefined
+  /** One pass over a file's entries in the order written, run on each before the engine indexes it:
+   *  a harness whose transcript is not a tree re-parents here, so the single-parent walk reaches every
+   *  entry (CC's parallel tool calls). One per file read, so it may keep state. Default: a tree. */
+  linker(): Linker<E> { return { link() {} } }
   /** The entry's ISO timestamp (used to order an orphan branch chronologically). */
   abstract timestampOf(e: E): string | undefined
   /** Is this entry OFF the thread the view renders — excluded from the live-chain leaf and from fork

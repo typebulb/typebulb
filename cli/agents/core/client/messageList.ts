@@ -237,6 +237,7 @@ export class MessageList extends Component {
       text: e.text,
       thinking: e.thinking,
       tools: e.tools.map(t => ({ ...t, isError: false, at: e.at })),
+      error: e.error,
       at: e.at,
     })
     // Prose mode shows one copy per turn over the joined assistant prose — the per-message split is
@@ -689,7 +690,7 @@ export class MessageList extends Component {
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
-    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
+    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', msg.error ? 'error' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
       turnView ? turnView.view(live) : null,
       msg.agent ? this.#agentHead(msg.agent.from) : null,
       raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { isHiddenTurn } from '../agents/claude/server.js'
 import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
+import { readTranscript } from '../agents/core/server/transcript.js'
 
 /**
  * The mirror hides non-conversational turns structurally (TB-Agent-Mirror.md):
@@ -79,14 +80,20 @@ describe('chainWorking reads a message delivered to an agent as a wake', () => {
   })
 })
 
+// A fresh CC config root holding one session's sub-agent folder.
+const cwd = 'C:\\Code\\fixture'
+function subagents() {
+  const root = mkdtempSync(join(tmpdir(), 'tb-claude-'))
+  const kids = join(root, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'sess', 'subagents')
+  mkdirSync(kids, { recursive: true })
+  return { root, kids }
+}
+
 // A child is running only while mid-turn in a process that is still alive. Through CC 2.1.272 a
 // finished child could end with no stop_reason, so its tail reads mid-turn forever; a `--resume`
 // revives the session's process, and without this gate those children turned green again.
 describe('listChildren gates a mid-turn tail on the live process', () => {
-  const cwd = 'C:\Code\fixture'
-  const root = mkdtempSync(join(tmpdir(), 'tb-claude-'))
-  const kids = join(root, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'sess', 'subagents')
-  mkdirSync(kids, { recursive: true })
+  const { root, kids } = subagents()
   mkdirSync(join(root, 'sessions'))
   const kid = join(kids, 'agent-kid.jsonl')
   writeFileSync(kid, [
@@ -111,13 +118,10 @@ describe('listChildren gates a mid-turn tail on the live process', () => {
   })
 })
 
-// A child's token figure is its last response's usage, read from the file's tail. One tool result
-// can fill that window (an image read runs to 600KB), leaving no response in it.
-describe('listChildren keeps a token figure when tool results fill the tail window', () => {
-  const cwd = 'C:\Code\fixture'
-  const root = mkdtempSync(join(tmpdir(), 'tb-claude-'))
-  const kids = join(root, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'sess', 'subagents')
-  mkdirSync(kids, { recursive: true })
+// A child's token figure and its running state are read from the file's tail. One tool result can
+// fill that window (an image read runs to 600KB), leaving no response in it, or no turn at all.
+describe('listChildren reads past tool results that fill the tail window', () => {
+  const { root, kids } = subagents()
   const kid = join(kids, 'agent-kid.jsonl')
   const line = (e: unknown) => JSON.stringify(e) + '\n'
   // The small entry CC writes after each result is what keeps the window from reading as one line.
@@ -127,11 +131,50 @@ describe('listChildren keeps a token figure when tool results fill the tail wind
     line({ type: 'user', message: { content: 'Read the sheets.' } }) +
     line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }], stop_reason: 'tool_use', usage: { input_tokens: 2, output_tokens: 8, cache_read_input_tokens: 400 } } }) +
     result)
-  const tokens = () => new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]?.tokens
+  const kidRow = () => { const { tokens, running } = new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]!; return { tokens, running } }
 
-  it('widens for it on a first read, then carries it as more results land', () => {
-    expect(tokens()).toBe(410)
+  it('widens on a first read, then carries the count and still reads the turn as more results land', () => {
+    expect(kidRow()).toEqual({ tokens: 410, running: true })
     appendFileSync(kid, result)
-    expect(tokens()).toBe(410)
+    expect(kidRow()).toEqual({ tokens: 410, running: true })
+  })
+})
+
+// CC records a failed request as a reply of its own. A child with nothing else has no count to show,
+// but its row still names its model, from the attachment at the head of its file, and says it fails.
+describe('listChildren reads a child whose only reply is an API error', () => {
+  const { root, kids } = subagents()
+  writeFileSync(join(kids, 'agent-kid.jsonl'), [
+    { type: 'user', message: { content: 'Drive the run.' } },
+    { type: 'attachment', attachment: { type: 'model', identity: { modelId: 'claude-opus-5-5' } } },
+    { type: 'assistant', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 529 Overloaded.' }], stop_reason: 'stop_sequence', usage: { input_tokens: 0, output_tokens: 0 } } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n')
+
+  it('names the model, shows no tokens, and reads as failing', () => {
+    const { model, tokens, failing } = new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]!
+    expect({ model, tokens, failing }).toEqual({ model: 'opus-5-5', tokens: undefined, failing: true })
+  })
+})
+
+// CC parents each parallel call's result on its own call, so the file is a graph and a walk from the
+// leaf passes through one branch. The linker chains a message's entries in the order written.
+describe('a parallel tool call keeps every result', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'tb-claude-')), 'session.jsonl')
+  const call = (uuid: string, parentUuid: string, id: string) =>
+    ({ type: 'assistant', uuid, parentUuid, message: { id: 'msg_1', content: [{ type: 'tool_use', id, name: 'Read', input: {} }], stop_reason: 'tool_use' } })
+  const result = (uuid: string, parentUuid: string, id: string) =>
+    ({ type: 'user', uuid, parentUuid, message: { content: [{ type: 'tool_result', tool_use_id: id, content: id }] } })
+  writeFileSync(file, [
+    { type: 'user', uuid: 'u', message: { content: 'Read both.' } },
+    call('a1', 'u', 't1'),
+    call('a2', 'a1', 't2'),
+    result('r1', 'a1', 't1'),
+    result('r2', 'a2', 't2'),
+    { type: 'assistant', uuid: 'a3', parentUuid: 'r2', message: { id: 'msg_2', content: [{ type: 'text', text: 'Read.' }], stop_reason: 'end_turn' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n')
+
+  it('reads both results, not only the one on the leaf\'s own branch', () => {
+    const results = readTranscript(new ClaudeAdapter(), file, 'main').filter(e => e.type === 'tool_result')
+    expect(results.map(e => e.type === 'tool_result' && e.id)).toEqual(['t1', 't2'])
   })
 })

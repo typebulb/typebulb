@@ -2,6 +2,8 @@
 // the adapter (it becomes a data-URI markdown image); everything else — a base64 blob an agent emitted
 // as text, a huge tool dump — is capped before it reaches the view, truncated with a marker rather than
 // streamed in full.
+import { moreLines, stripAnsi } from '../format.js'
+
 export const MAX_BLOCK_CHARS = 50_000
 
 // "463 lines", "2 files" — the count vocabulary of every digest, shared by the adapters.
@@ -16,15 +18,14 @@ export function capText(s: string): string {
 // One-line OUT digest of raw tool-result text — the generic fallback every adapter shares (Pi always,
 // Claude for toolUseResult shapes it doesn't know): first non-empty line, ANSI-stripped and capped,
 // with a "(+K lines)" tail so a wall of output still reads at a glance. '' when there's nothing to say.
-const ANSI_CODES = /\u001b\[[0-9;]*m/g
 export function firstLineDigest(text: string): string {
-  const lines = text.replace(ANSI_CODES, '').split('\n').map(l => l.trim()).filter(Boolean)
+  const lines = stripAnsi(text).split('\n').map(l => l.trim()).filter(Boolean)
   const first = lines[0]
   if (!first) return ''
   // Payload bound only — visual fit is the client's CSS ellipsis, which knows the actual width.
   const capped = first.length > 300 ? first.slice(0, 300).trimEnd() + '…' : first
   const rest = lines.length - 1
-  return rest > 0 ? `${capped} (+${rest} line${rest === 1 ? '' : 's'})` : capped
+  return rest > 0 ? capped + moreLines(rest) : capped
 }
 
 // A base64 image → an inline markdown image so it renders instead of dumping raw base64. One format,

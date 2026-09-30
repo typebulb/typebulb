@@ -68,9 +68,8 @@ export interface ChildTranscript {
   tokens?: number            // its context window as of its last response, where the harness reads one
   label: string              // the caller's one-line description; '' when the harness records none
   kind?: string              // the child's own type, only where it says more than "agent": CC omits
-                             // general-purpose, the type every plain Agent call gets, as `model`
-                             // omits the session's own
-  model?: string             // set only where the caller overrode the session's model
+                             // general-purpose, the type every plain Agent call gets
+  model?: string             // the model it runs on, as the harness names it
   spawnId?: string           // the parent tool call that spawned it (CC: toolUseId)
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself
@@ -79,6 +78,9 @@ export interface ChildTranscript {
    *  there, however the harness delivered it. `undefined` when the file can't be read, which reads
    *  as finished. */
   running?: boolean
+  /** Its latest reply is the harness's own error notice, not the model's (CC: an API error): it is
+   *  getting nowhere, whatever `running` says. */
+  failing?: boolean
 }
 
 /** A `ChildTranscript` as the client sees it: the engine adds its state, gating `running` on the
@@ -153,7 +155,9 @@ export type Event =
   // `authored` marks a turn a model wrote rather than a person typed — every user turn in a child
   // view, where the brief and follow-ups come from the parent agent — so it renders as markdown.
   | { type: 'user'; text: string; agent?: { from: string }; authored?: boolean; at?: number }
-  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean; at?: number }
+  // `error` marks a notice the harness wrote in the model's place (CC: an API error), so it renders
+  // as a failure rather than as a reply.
+  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean; error?: boolean; at?: number }
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
   // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.

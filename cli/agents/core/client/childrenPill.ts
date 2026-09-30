@@ -247,16 +247,19 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } },
         onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id) },
       },
-      span({ class: ['children-dot', c.state] }),
-      c.kind ? span({ class: 'children-kind' }, c.kind) : null,
+      span({ class: ['children-dot', c.failing && c.state !== 'stopped' ? 'failing' : c.state] }),
       span({ class: ['children-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''] },
         childName(c)),
+      // The description leads every row, so its type sits with the model, after it.
+      c.kind ? span({ class: 'children-kind' }, c.kind) : null,
       c.model ? span({ class: 'children-model' }, c.model) : null,
       // CC's agent map's two figures: how long it has run (to its last write once done), and its
       // context window. Recency went — the list is already ordered by it. Both cells always render:
       // a row is its own flex line, so a missing one would pull the rest out of their columns.
       span({ class: 'children-time' }, c.started ? formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started) : ''),
-      span({ class: 'children-tokens' }, c.tokens ? formatTokens(c.tokens) : ''),
+      // A failing child's count is whatever it reached before; that it is failing is the news.
+      c.failing ? span({ class: 'children-tokens failing', title: 'Its latest reply is an API error, not the model\'s' }, 'error')
+        : span({ class: 'children-tokens' }, c.tokens ? formatTokens(c.tokens) : ''),
       this.statusEnabled ? this.#statusLinkView(c) : null,
     )
   }

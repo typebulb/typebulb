@@ -4,6 +4,13 @@
 // Tool inputs are heterogeneous JSON; narrow to string at the point of use.
 export const asStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
+export const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '')
+
+// The tail a one-line digest carries when its output ran longer: firstLineDigest writes it, and the
+// child Status log clips around it.
+export const moreLines = (n: number) => ` (+${n} line${n === 1 ? '' : 's'})`
+export const MORE_LINES = / \(\+\d+ lines?\)$/
+
 // A run's length: seconds under a minute, then whole minutes, then h+m — minute grain so a running
 // row doesn't jitter on the 3s poll.
 export function formatDuration(ms: number): string {

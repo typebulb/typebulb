@@ -549,7 +549,6 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
     // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
     // nothing. Read here rather than through #files, which only a listing refreshes.
     let sessionThread: string | undefined
-    let sessionModel: string | undefined
     for (const file of this.#rolloutFiles()) {
       let size = 0, mtimeMs = 0, started: number | undefined
       try {
@@ -563,7 +562,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
         if (meta === undefined) continue                // first line not flushed yet — retry next listing
         this.#metaCache.set(file, meta)
       }
-      if (basename(file, '.jsonl') === sessionId) { sessionThread = meta.id; sessionModel = meta.model }
+      if (basename(file, '.jsonl') === sessionId) sessionThread = meta.id
       // `spawn` is the narrow marker: a guardian_review thread carries `subagent` too, nests under
       // children as readily as sessions, and is nothing a user spawned (Children-Codex Invariant 1).
       if (!meta.spawn || normCwd(meta.cwd) !== want) continue
@@ -591,8 +590,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
         id: spawn.id, file, mtime, started, tokens,
         label: spawn.path.split('/').filter(Boolean).pop() ?? spawn.path,
         kind: spawn.role || undefined,
-        // Only an override: the child's own turn_context against the session's.
-        model: model && model !== sessionModel ? model : undefined,
+        model,
         parentId: found.has(spawn.parent) ? spawn.parent : undefined,
         depth: spawn.depth,
         // Codex's nearest signal is the `interrupted` activity kind, and it is NOT terminal — an
