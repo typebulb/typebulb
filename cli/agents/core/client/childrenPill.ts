@@ -47,6 +47,7 @@ export function byAncestry(list: ChildRow[]): ChildRow[] {
 export class ChildrenPill extends ComboboxPill<ChildRow> {
   children: ChildRow[] = []
   enabled = false                 // info().children — the adapter capability gate; no list, no polling
+  statusEnabled = false           // info().childStatus — briefs are readable, so a child has a Status
   // The open child. Resolved from poll's `child` rather than held locally: the server owns which file
   // it drains, so a reload finds the pill wearing what is actually on screen.
   viewing: ChildRow | null = null
@@ -258,13 +259,13 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // context window. Recency went — the list is already ordered by it.
       c.started ? span({ class: 'children-time' }, formatDuration((c.state === 'running' ? Date.now() : c.mtime) - c.started)) : null,
       c.tokens ? span({ class: 'children-tokens' }, formatTokens(c.tokens)) : null,
-      this.#statusLinkView(c),
+      this.statusEnabled ? this.#statusLinkView(c) : null,
     )
   }
 
   #statusLinkView(c: ChildRow) {
     const link = this.#links.get(c.id)
-    const tip = !link ? 'Where this agent stands on each task (a few cheap model calls); turns green when ready'
+    const tip = !link ? 'Where this agent stands on each task (a few cheap model calls)'
       : link.state === 'busy' ? 'Working out where it stands…'
       : link.state === 'ready' ? 'Ready: open its status'
       : `${link.error}. Click to retry`

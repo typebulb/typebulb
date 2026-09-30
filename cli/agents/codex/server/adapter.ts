@@ -443,6 +443,8 @@ const ABANDONED_MS = 120_000
 
 export class CodexAdapter extends AgentAdapter<CodexEntry> {
   readonly displayName = 'Codex Mirror'
+  // Codex encrypts every message a parent sends its agents (TB-Agent-Children-Codex.md).
+  override readonly childBriefs = false
 
   // File-scoped ordinal ids (Invariant 2): the chain is linear, so id = drain order and parent =
   // the previously stamped entry. Monotonic and never reset — the engine clears its entry map on

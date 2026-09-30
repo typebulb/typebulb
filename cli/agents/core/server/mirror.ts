@@ -564,7 +564,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // and, when no supported key is present, explains the small project-.env setup.
     // `children` is the same shape of capability flag as `composer` (TB-Agent-Children.md): static per
     // adapter, so a harness with no children never polls for a list that is always empty.
-    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, children: !!adapter.listChildren, elsewhere: await sessionsElsewhere() }
+    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, children: !!adapter.listChildren, childStatus: !!adapter.listChildren && adapter.childBriefs, elsewhere: await sessionsElsewhere() }
   }
 
   // Wrong-cwd diagnosis (TB-Agent-Mirror.md): zero sessions for this cwd while an ancestor INSIDE

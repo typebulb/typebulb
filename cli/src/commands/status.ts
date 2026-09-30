@@ -17,7 +17,7 @@ export async function runStatus(query: string | undefined, mode: string | undefi
   const cwd = process.cwd()
   const factories = agentAdapterFactories()
   const caller = detectCallerHarness()
-  const able = (caller ? [caller] : Object.keys(factories)).map(n => factories[n]!() as AgentAdapter).filter(a => a.listChildren)
+  const able = (caller ? [caller] : Object.keys(factories)).map(n => factories[n]!() as AgentAdapter).filter(a => a.listChildren && a.childBriefs)
   if (!able.length) {
     console.error(`Sub-agent status isn't supported for ${caller} sessions.`)
     process.exitCode = 1

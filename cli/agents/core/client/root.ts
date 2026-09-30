@@ -114,6 +114,7 @@ export class Root extends Component implements IRoot {
     this.#elsewhere = i.elsewhere ?? null
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.childrenPill.enabled = !!i.children                  // same shape of gate (TB-Agent-Children.md)
+    this.childrenPill.statusEnabled = !!i.childStatus
     void this.childrenPill.refresh()
     this.ready = true
     // Take the page's boot overlay off (agents/core/client/index.html). Gated on ready, not on the

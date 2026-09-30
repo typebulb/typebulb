@@ -411,8 +411,8 @@ function gitMoves(cmd: string): { from: string; to?: string }[] {
 }
 
 /** The report as plain text for the orchestrating agent, in the view's order, stamped with the time
- *  of the last transcript entry it covers: each request and its rows, the closing facts, then the
- *  files it edited. No step numbers, which mean nothing outside the view. A running child also says
+ *  of the last transcript entry it covers: each request and its rows, the files it edited, then the
+ *  closing facts. No step numbers, which mean nothing outside the view. A running child also says
  *  how long it has been quiet, or how long its open call has run: slow and stuck read alike without. */
 export function statusText(r: { d: Digest; lines: Line[]; facts: Fact[]; edited: Edited[]; plans: Map<string, Plan>; name: string; working: boolean; now: number }): string {
   const { d } = r
@@ -420,14 +420,14 @@ export function statusText(r: { d: Digest; lines: Line[]; facts: Fact[]; edited:
   const out = [`Sub-agent "${r.name}": ${state}, ${mins(d.span)} active${d.lastAt ? `, as of ${clock(d.lastAt)}` : ''}.`]
   out.push('', `Request: ${d.brief ? r.plans.get(d.brief)?.request ?? '(not summarized yet)' : NO_BRIEF}`)
   for (const l of r.lines) {
-    if (l.kind === 'group') { out.push('', `Follow-up: ${l.request}`); continue }
+    if (l.kind === 'group') { out.push('', `Follow-up: ${l.request || '(not summarized yet)'}`); continue }
     const time = l.ms ? ` (${mins(l.ms)})` : ''
     out.push(`- ${l.title}: ${statusLabel(l.status || 'pending')}.${l.did ? ` ${l.did}` : ''}${time}`)
     if (l.note) out.push(`  Note: ${l.note}`)
   }
+  if (r.edited.length) out.push('', 'Edited:', ...r.edited.map(editedLine))
   if (r.facts.length) out.push('')
   for (const [label, value] of r.facts) out.push(`${label}: ${value}`)
-  if (r.edited.length) out.push('', 'Edited:', ...r.edited.map(editedLine))
   return out.join('\n')
 }
 

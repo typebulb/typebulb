@@ -1896,11 +1896,17 @@ a.agent-name:hover { text-decoration: underline; }
 .child-status-edited .child-status-label { display: block; margin-bottom: .2rem; }
 .child-status-edited .cs-file { overflow-wrap: anywhere; }
 .child-status-edited a { cursor: pointer; color: var(--accent); }
-/* Under the table, centred: where the table stands in time, then the view's two actions. */
+/* A path stays muted with the list and lights on hover, like the agents menu's status link. */
+.child-status-edited .cs-file a { color: inherit; }
+.child-status-edited .cs-file a:hover { color: var(--accent); text-decoration: underline; }
+/* Under the table, centred: a failed call's retry, then the view's actions. */
 .child-status-foot { display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 0 1.75rem; }
-.child-status-actions { display: flex; gap: 1.4rem; }
+/* Baseline, not the default stretch: a shimmering item has its own line-height (.shimmer-text), and
+   top-aligned boxes of different line-heights put their text at different heights. */
+.child-status-actions { display: flex; align-items: baseline; gap: 1.4rem; }
 .child-status-actions a { cursor: pointer; color: var(--accent); }
 .child-status-actions a:hover { text-decoration: underline; }
+.child-status-actions .current { color: var(--muted); }
 .child-status-note { color: var(--muted); font-size: .9rem; font-style: italic; }
 /* Every working text in this view is centred, like the status line under the table. */
 .child-status-pending { text-align: center; color: var(--muted); padding: .3rem 0; }
@@ -1938,6 +1944,9 @@ a.agent-name:hover { text-decoration: underline; }
    farther apart than the row gap, from the slack in their min-width boxes; the margin matches that. */
 .children-status-link { flex: none; margin-left: 1.2rem; color: var(--muted); cursor: pointer; }
 .children-status-link:hover { color: var(--accent); text-decoration: underline; }
+/* Its tip opens beside the link, on one line no taller than the row: the list scrolls, so a tip
+   above the top row is clipped. */
+.children-status-link[data-tip]::after { top: 50%; bottom: auto; right: calc(100% + .5rem); transform: translateY(-50%); max-width: 27rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Judged and waiting to be opened: the mirror's "something new here" green, on the link and on the
    pill, so it is seen with the menu closed. A failed judgement reads as an error and retries on click. */
 .children-status-link.ready, .children-pill.status-ready { color: var(--fold-marker); }
