@@ -70,6 +70,7 @@ export interface ChildTranscript {
   kind?: string              // the child's own type, only where it says more than "agent": CC omits
                              // general-purpose, the type every plain Agent call gets
   model?: string             // the model it runs on, as the harness names it
+  effort?: string            // its reasoning effort, as the harness names it (high, xhigh)
   spawnId?: string           // the parent tool call that spawned it (CC: toolUseId)
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself

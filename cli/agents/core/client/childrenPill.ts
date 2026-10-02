@@ -230,7 +230,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
 
   popup() {
     const rows = this.rows()
-    return div({ class: 'servers-pop children-pop' },
+    return div({ class: ['servers-pop', 'children-pop', this.statusEnabled ? 'with-status' : ''] },
       rows.length === 0
         ? this.emptyState('No agents in this session yet.')
         : div({ class: 'children-list', onScroll: () => this.onListScroll() }, rows.map((c, i) => this.row(c, i))),
@@ -252,7 +252,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         childName(c)),
       // The description leads every row, so its type sits with the model, after it.
       c.kind ? span({ class: 'children-kind' }, c.kind) : null,
-      c.model ? span({ class: 'children-model' }, c.model) : null,
+      c.model ? span({ class: 'children-model' }, c.effort ? `${c.model} · ${c.effort}` : c.model) : null,
       // CC's agent map's two figures: how long it has run (to its last write once done), and its
       // context window. Recency went — the list is already ordered by it. Both cells always render:
       // a row is its own flex line, so a missing one would pull the rest out of their columns.

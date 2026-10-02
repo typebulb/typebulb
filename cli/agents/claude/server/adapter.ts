@@ -20,6 +20,7 @@ interface JsonlEntry {
   agentId?: string           // set only on a child transcript's entries: the child's own id
   isMeta?: boolean
   isApiErrorMessage?: boolean
+  effort?: string            // on an assistant entry: the reasoning effort it ran at
   parentUuid?: string
   timestamp?: string
   sessionId?: string
@@ -113,6 +114,7 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
       // The id the child's own file records, so every row names its model alike; the caller's alias
       // ("opus") only where the file has none.
       model: tail.model?.replace(/^claude-/, '').replace(/-\d{8}$/, '') ?? meta.model,
+      effort: tail.effort,
       spawnId: meta.toolUseId,
       parentId: meta.parentAgentId,
       depth: meta.spawnDepth ?? 1,
@@ -133,7 +135,7 @@ const DEFAULT_AGENT_TYPE = 'general-purpose'
 // listing an idle child costs its stat and nothing more. The window widens when one line fills it,
 // which would otherwise hide the leaf, or when it holds no response to read the figure from.
 const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
-interface TailFacts { tokens?: number; model?: string; running?: boolean; failing?: boolean }
+interface TailFacts { tokens?: number; model?: string; effort?: string; running?: boolean; failing?: boolean }
 const childTails = new Map<string, TailFacts & { size: number; mtime: number }>()
 function childTail(file: string, size: number, mtime: number): TailFacts {
   const hit = childTails.get(file)
@@ -164,6 +166,7 @@ function childTail(file: string, size: number, mtime: number): TailFacts {
     facts = {
       tokens: usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) : hit?.tokens,
       model: reply?.message?.model ?? hit?.model,
+      effort: reply?.effort ?? hit?.effort,
       running: chainWorking(entries),
       failing: !!last?.isApiErrorMessage,
     }

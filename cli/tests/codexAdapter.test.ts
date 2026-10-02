@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, copyFileSync, writeFileSync, readdirSync, utimesSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, copyFileSync, writeFileSync, appendFileSync, readdirSync, utimesSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
@@ -388,6 +388,21 @@ describe('CodexAdapter discovery (scan-and-filter)', () => {
     // Depth 1 sits directly under the session, which is not a child, so it names no parent.
     const top = kidsOf(new CodexAdapter(fakeRoot())).find(k => k.label === 'reference_migration')
     expect(top?.parentId).toBeUndefined()
+  })
+
+  // A fresh agent writes its first turn_context ~2s after its file appears, and the pill polls
+  // faster than that: a listing in between must not cache "no model" for good. And a fork's first
+  // turn_context is its parent's copy, which spawn_agent's reasoning_effort overrides.
+  it('reads a new agent\'s model and effort from its own newest turn_context', () => {
+    const root = fakeRoot()
+    const file = join(root, '2026', '08', '01', 'rollout-2026-08-01T18-15-00-kid-new.jsonl')
+    writeFileSync(file, agentRollout({ id: 'kid-new', parent: TYPEBULB_THREAD, path: '/root/fresh' }))
+    const a = new CodexAdapter(root)
+    const row = () => { const k = kidsOf(a).find(k => k.label === 'fresh'); return { model: k?.model, effort: k?.effort } }
+    expect(row()).toEqual({ model: undefined, effort: undefined })
+    const turn = (effort: string) => JSON.stringify({ timestamp: '2026-08-01T18:15:02.000Z', type: 'turn_context', payload: { model: 'gpt-6.1-sol', effort } }) + '\n'
+    appendFileSync(file, turn('high') + turn('xhigh'))
+    expect(row()).toEqual({ model: 'gpt-6.1-sol', effort: 'xhigh' })
   })
 
   // A Codex agent re-activates (`followup_task` wakes a finished one), so state is its own LAST

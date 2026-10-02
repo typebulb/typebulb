@@ -1202,7 +1202,9 @@ a.server-port:hover { text-decoration: underline; }
 .children-pill { padding: 0 .3rem; }
 .children-pill:not(.glyph) .glyph-img:first-child { margin-right: .12rem; }
 .children-pill:not(.glyph) .glyph-img:last-child { margin-left: .12rem; }
-.children-pop { width: min(520px, calc(100vw - 2rem)); }
+/* The model cell carries effort too; a harness with a Status link (Codex has none) needs its width. */
+.children-pop { width: min(540px, calc(100vw - 2rem)); }
+.children-pop.with-status { width: min(600px, calc(100vw - 2rem)); }
 .children-row.viewing .children-label { color: var(--accent); }
 /* One dot carries the state: still working (the fold-marker green), finished (dim), killed by the
    user (warn). Green because running is the LIVE-APP axis, the same one the launcher's running

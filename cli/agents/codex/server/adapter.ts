@@ -67,6 +67,7 @@ interface CodexPayload {
   } | null
   // turn_context
   model?: string
+  effort?: string
 }
 
 interface CodexEntry {
@@ -94,7 +95,7 @@ interface ThreadSpawn {
 // rather than a guardian — the identity the agents pill is built from.
 // `id` is the thread's OWN id, which is NOT the adapter's sessionId (that is the file stem): a
 // child names its parent by thread id, so the two have to be translated between.
-interface CodexMeta { cwd: string; subagent: boolean; id?: string; spawn?: CodexSpawn; model?: string }
+interface CodexMeta { cwd: string; subagent: boolean; id?: string; spawn?: CodexSpawn; turn?: Turn; modelPending?: boolean }
 
 // The identity of one spawned agent (TB-Agent-Children-Codex.md): its own thread id, the thread that
 // spawned it (a session at depth 1, another agent below), and its label.
@@ -543,7 +544,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   // than under whichever sibling happens to precede it.
   listChildren(cwd: string, sessionId: string): ChildTranscript[] {
     const want = normCwd(cwd)
-    type Found = { file: string; mtime: number; started?: number; running?: boolean; tokens?: number; spawn: CodexSpawn; model?: string }
+    type Found = { file: string; mtime: number; started?: number; running?: boolean; tokens?: number; spawn: CodexSpawn; turn?: Turn }
     const found = new Map<string, Found>()
     // The attached session's own THREAD id and model, picked up in this same pass: `sessionId` is a
     // file stem and `parent_thread_id` is a thread id, so a direct comparison silently matches
@@ -557,7 +558,7 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
         size = st.size; mtimeMs = st.mtimeMs; started = st.birthtimeMs || undefined
       } catch { continue }                  // races / permissions — skip
       let meta = this.#metaCache.get(file)
-      if (meta === undefined) {
+      if (meta === undefined || meta.modelPending) {
         meta = readMeta(file)
         if (meta === undefined) continue                // first line not flushed yet — retry next listing
         this.#metaCache.set(file, meta)
@@ -570,9 +571,11 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       // child's own `task_complete` land within milliseconds of each other, only the child's is
       // readable at any depth, and it re-answers when `followup_task` wakes a finished agent — one
       // observed child completed seven times across forty minutes (TB-Agent-Children-Codex.md).
-      const { running, tokens } = this.#tailFacts(file, size, mtimeMs)
+      const { running, tokens, turn } = this.#tailFacts(file, size, mtimeMs)
       found.set(meta.spawn.id, {
-        file, mtime: this.#lastActivity(file, size, mtimeMs), started, running, tokens, spawn: meta.spawn, model: meta.model,
+        // The newest turn_context is the child's own; the head's is a fork's copy of its parent's,
+        // which spawn_agent's `model` / `reasoning_effort` override on a partial fork.
+        file, mtime: this.#lastActivity(file, size, mtimeMs), started, running, tokens, spawn: meta.spawn, turn: turn ?? meta.turn,
       })
     }
     if (!sessionThread) return []           // no such session in this tree — nothing can belong to it
@@ -584,13 +587,14 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       return up ? mine(up.spawn, seen) : false
     }
     const out: ChildTranscript[] = []
-    for (const { file, mtime, started, running, tokens, spawn, model } of found.values()) {
+    for (const { file, mtime, started, running, tokens, spawn, turn } of found.values()) {
       if (!mine(spawn)) continue
       out.push({
         id: spawn.id, file, mtime, started, tokens,
         label: spawn.path.split('/').filter(Boolean).pop() ?? spawn.path,
         kind: spawn.role || undefined,
-        model,
+        model: turn?.model,
+        effort: turn?.effort,
         parentId: found.has(spawn.parent) ? spawn.parent : undefined,
         depth: spawn.depth,
         // Codex's nearest signal is the `interrupted` activity kind, and it is NOT terminal — an
@@ -633,7 +637,9 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   #tailFacts(file: string, size: number, mtimeMs: number): TailFacts {
     const hit = this.#tail.get(file)
     if (hit && hit.size === size && hit.mtime === mtimeMs) return hit
-    const facts = { size, mtime: mtimeMs, ...readTailFacts(file) }
+    const read = readTailFacts(file)
+    // A long turn pushes its turn_context out of the window; the one last seen still stands.
+    const facts = { size, mtime: mtimeMs, ...read, turn: read.turn ?? hit?.turn }
     this.#tail.set(file, facts)
     return facts
   }
@@ -843,6 +849,7 @@ const TAIL_WINDOWS = [64 * 1024, 1024 * 1024]
 function readTailFacts(file: string): TailFacts {
   let running: boolean | undefined
   let tokens: number | undefined
+  let turn: Turn | undefined
   for (const cap of TAIL_WINDOWS) {
     const tail = readTail(file, cap)
     if (tail === undefined) return {}       // unreadable: no recency, and no cue rather than a wrong one
@@ -867,17 +874,19 @@ function readTailFacts(file: string): TailFacts {
         const c = usageCounts(e.payload.info.last_token_usage)
         tokens = c.in + c.out + c.cached + c.cacheCreate
       }
-      if (ms !== undefined && running !== undefined && tokens !== undefined) break
+      if (turn === undefined && e.type === 'turn_context') turn = { model: e.payload?.model, effort: e.payload?.effort }
+      if (ms !== undefined && running !== undefined && tokens !== undefined && turn !== undefined) break
     }
-    if (ms !== undefined) return { ms, running: running ?? true, tokens }
+    if (ms !== undefined) return { ms, running: running ?? true, tokens, turn }
     if (!tail.partial) break                // the whole file was in the window; a wider read can't help
   }
-  return { running: running ?? true, tokens }
+  return { running: running ?? true, tokens, turn }
 }
 
-// What the cached tail read yields: recency, mid-turn or not, and the context window as of the last
-// response (the agents pill's token figure, the token chip's sum).
-interface TailFacts { ms?: number; running?: boolean; tokens?: number }
+// What the cached tail read yields: recency, mid-turn or not, the context window as of the last
+// response (the agents pill's token figure, the token chip's sum), and the newest turn's settings.
+interface TailFacts { ms?: number; running?: boolean; tokens?: number; turn?: Turn }
+interface Turn { model?: string; effort?: string }
 
 // Codex's input_tokens INCLUDES cached_input_tokens; the chip sums in+cached+cacheCreate (CC
 // semantics, where they're disjoint) — so subtract to keep the window total honest.
@@ -911,9 +920,13 @@ function readMeta(file: string): CodexMeta | undefined {
     const spawn = spawnOf(p, sub)
     // A child opens with two session_meta copies and inherited items, so its first turn_context lands
     // past CAP (0.160.0: ~66KB). Only spawn threads (a handful) pay the wider read, once, via #metaCache.
-    const model = headModel(head.text, nl)
-      ?? (spawn && head.bytes >= CAP ? headModel(readHead(file, MODEL_CAP)?.text ?? '', nl) : undefined)
-    return { cwd: p.cwd, subagent: !!sub, id: p.id, spawn, model }
+    const near = headTurn(head.text, nl)
+    const wide = spawn && !near && head.bytes >= CAP ? readHead(file, MODEL_CAP) : undefined
+    const turn = near ?? (wide && headTurn(wide.text, nl))
+    // A read that reached EOF before the first turn_context (written ~2s after the file appears) is a
+    // child not yet that far, so listChildren re-reads it rather than caching "no model" for good.
+    const modelPending = !!spawn && !turn && (wide ?? head).bytes < (wide ? MODEL_CAP : CAP)
+    return { cwd: p.cwd, subagent: !!sub, id: p.id, spawn, turn, modelPending }
   } catch { return { cwd: '', subagent: false } }   // the line is complete (a newline followed) — junk, not a race
 }
 
@@ -929,16 +942,15 @@ function spawnOf(p: CodexPayload, sub: { thread_spawn?: ThreadSpawn } | undefine
   return { id: p.id, parent, path: ts.agent_path ?? '', role: ts.agent_role ?? undefined, depth: ts.depth ?? 1 }
 }
 
-// The thread's model, from the first `turn_context` in the head window. In a child that is the copy
-// inherited from the parent, which is still right: `spawn_agent` takes no model, so a child runs on
-// its parent's. A window that ends before it leaves the model undefined rather than wrong.
+// The first `turn_context` in the head window: listChildren's fallback until the tail has read the
+// child's own. In a fork it is the parent's copy, right unless spawn_agent overrode it.
 const MODEL_CAP = 512 * 1024
-function headModel(text: string, from: number): string | undefined {
+function headTurn(text: string, from: number): Turn | undefined {
   for (const line of text.slice(from + 1).split('\n')) {
     if (!line.trim()) continue
     try {
       const e = JSON.parse(line) as CodexEntry
-      if (e.type === 'turn_context' && typeof e.payload?.model === 'string') return e.payload.model
+      if (e.type === 'turn_context' && typeof e.payload?.model === 'string') return { model: e.payload.model, effort: e.payload.effort }
     } catch { /* the window cut this line short — nothing past it parses either */ }
   }
   return undefined
