@@ -116,19 +116,20 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
     makeEntry: (port, url) => ({ pid: process.pid, port, url, file: `agent:${agent}`, cwd: basePath, startedAt: Date.now(), trust: true, agent }),
   })
 
-  if (args.watch) console.log('  Watching for changes...\n')
-
   // Hot reload (dev). In the repo the mirror's source sits beside `dist/`, so watch it, rebuild the
   // client bundle into the served `dist/` dir on change, recopy the inline assets, then fire the
   // reload the page already listens for — editing client/* / styles.css reloads the browser with no
-  // restart, the same one-command loop a bulb had. esbuild is imported lazily (it's a dev dep). A
-  // published install ships only `dist/` (no source dir), so it falls back to watching the built
-  // assets, where a manual rebuild still reloads. server.ts is bundled into THIS process, so a
-  // server.ts edit still needs a relaunch.
+  // restart, the same one-command loop a bulb had. esbuild is imported lazily (it's a dev dep).
+  // server.ts is bundled into THIS process, so a server.ts edit still needs a relaunch.
+  // A published install watches nothing: only an npm update changes its `dist/`, which would reload
+  // an old server's page onto the new client, and on Windows the delete-and-rewrite left chokidar
+  // spinning ~2 cores per mirror on events for a folder that no longer changed.
   // The agent's client entry (per-agent) pulls in the neutral `agents/client/` modules via its
   // imports; styles.css + index.html are the neutral chrome copied from `agents/client/`.
   const agentClientDir = path.join(agentsSourceDir, agent, 'client')
   const sharedClientDir = path.join(agentsSourceDir, 'core', 'client')
+  const devSource = existsSync(agentClientDir)
+  if (args.watch && devSource) console.log('  Watching for changes...\n')
   async function rebuildClient(): Promise<void> {
     const esbuild = await import('esbuild')
     await esbuild.build({
@@ -145,19 +146,18 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   }
 
   let cleanupWatcher: (() => void) | undefined
-  if (args.watch && reloadEmitter) {
-    // The repo source tree (absent in a published install). Watch the whole `agents/` root so an edit
-    // to either this agent's client or the shared neutral client triggers a rebuild.
-    const devSource = existsSync(agentClientDir)
+  if (args.watch && devSource && reloadEmitter) {
+    // Watch the whole `agents/` root so an edit to either this agent's client or the shared neutral
+    // client triggers a rebuild.
     let building = false
     cleanupWatcher = watchPath({
-      target: devSource ? agentsSourceDir : assetDir,
+      target: agentsSourceDir,
       events: 'all',
       onChange: async () => {
         if (building) return
         building = true
         try {
-          if (devSource) await rebuildClient()
+          await rebuildClient()
           // Say what the reload reached only when it reached nobody (TB-Page-Lifecycle.md,
           // invariant 4): a mirror with no tab is a viewer nobody is reading, not a bulb that
           // stopped running, so the line says that and not the bulb's sentence.

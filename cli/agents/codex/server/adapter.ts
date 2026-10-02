@@ -895,7 +895,7 @@ function usageCounts(u: NonNullable<NonNullable<CodexPayload['info']>['last_toke
 // PERMANENT miss returns a cwd that never matches so it caches: otherwise a junk `.jsonl` costs a 64KB
 // read per listing forever, and the listing runs per poll while unattached.
 function readMeta(file: string): CodexMeta | undefined {
-  const CAP = 64 * 1024                     // session_meta runs ~18KB (base_instructions) — 3.5x headroom
+  const CAP = 64 * 1024                     // session_meta runs ~23KB (base_instructions) — 2.8x headroom
   const head = readHead(file, CAP)
   if (head === undefined) return undefined
   const nl = head.text.indexOf('\n')
@@ -908,7 +908,12 @@ function readMeta(file: string): CodexMeta | undefined {
     // `guardian_review`, `subagent`) — and not `parent_thread_id`, which a fork of a real
     // conversation also carries and which must stay visible.
     const sub = typeof p.source === 'object' ? p.source?.subagent : undefined
-    return { cwd: p.cwd, subagent: !!sub, id: p.id, spawn: spawnOf(p, sub), model: headModel(head.text, nl) }
+    const spawn = spawnOf(p, sub)
+    // A child opens with two session_meta copies and inherited items, so its first turn_context lands
+    // past CAP (0.160.0: ~66KB). Only spawn threads (a handful) pay the wider read, once, via #metaCache.
+    const model = headModel(head.text, nl)
+      ?? (spawn && head.bytes >= CAP ? headModel(readHead(file, MODEL_CAP)?.text ?? '', nl) : undefined)
+    return { cwd: p.cwd, subagent: !!sub, id: p.id, spawn, model }
   } catch { return { cwd: '', subagent: false } }   // the line is complete (a newline followed) — junk, not a race
 }
 
@@ -924,9 +929,10 @@ function spawnOf(p: CodexPayload, sub: { thread_spawn?: ThreadSpawn } | undefine
   return { id: p.id, parent, path: ts.agent_path ?? '', role: ts.agent_role ?? undefined, depth: ts.depth ?? 1 }
 }
 
-// The thread's model, from the first `turn_context` in the window readMeta ALREADY read — free, and
-// the record only reports a model that differs from the session's anyway. A head window that ends
-// before the first turn_context leaves it undefined, and the row shows no model rather than a wrong one.
+// The thread's model, from the first `turn_context` in the head window. In a child that is the copy
+// inherited from the parent, which is still right: `spawn_agent` takes no model, so a child runs on
+// its parent's. A window that ends before it leaves the model undefined rather than wrong.
+const MODEL_CAP = 512 * 1024
 function headModel(text: string, from: number): string | undefined {
   for (const line of text.slice(from + 1).split('\n')) {
     if (!line.trim()) continue
