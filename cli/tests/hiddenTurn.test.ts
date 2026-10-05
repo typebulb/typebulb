@@ -156,6 +156,25 @@ describe('listChildren reads a child whose only reply is an API error', () => {
   })
 })
 
+// From CC 2.1.289 a finished child's last entry is its SubagentHandback's result, with no closing
+// reply after it. A message the parent sends later is a new user turn, and wakes it.
+describe('listChildren reads a child ended by its hand-back as done', () => {
+  const { root, kids } = subagents()
+  const kid = join(kids, 'agent-kid.jsonl')
+  const line = (e: unknown) => JSON.stringify(e) + '\n'
+  writeFileSync(kid,
+    line({ type: 'user', message: { content: 'Map the split.' } }) +
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'h', name: 'SubagentHandback', input: { message: 'Done.' } }], stop_reason: null } }) +
+    line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'h', content: 'Report delivered to your caller.' }] } }))
+  const running = () => new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]?.running
+
+  it('is done after the hand-back, and running again once messaged', () => {
+    expect(running()).toBe(false)
+    appendFileSync(kid, line({ type: 'user', message: { content: 'One more check, please.' } }))
+    expect(running()).toBe(true)
+  })
+})
+
 // CC parents each parallel call's result on its own call, so the file is a graph and a walk from the
 // leaf passes through one branch. The linker chains a message's entries in the order written.
 describe('a parallel tool call keeps every result', () => {

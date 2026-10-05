@@ -192,7 +192,9 @@ function headModel(file: string): string | undefined {
 }
 
 // "CC is mid-turn" judged from the last conversational entry: a user leaf is pending unless it's a
-// synthetic interrupt marker (cleans to '' with no tool_result — an ended turn); an assistant leaf
+// synthetic interrupt marker (cleans to '' with no tool_result — an ended turn) or the result of a
+// sub-agent's SubagentHandback, its last act from 2.1.289 (9 of 9; through 2.1.284 a closing end_turn
+// reply followed it, 550 of 550). An assistant leaf
 // stays working while a tool_use has no matching tool_result, or while its message is unfinished.
 // CC writes each block as its own entry, and a sub-agent's while still streaming, with no
 // stop_reason yet (6236 of 6290 mid-message entries, against 3 of 1805 on the main thread): read
@@ -204,6 +206,7 @@ function chainWorking(entries: JsonlEntry[]): boolean {
   if (!leaf) return false
   if (leaf.type === 'user') {
     try {
+      if (isHandbackResult(leaf, entries)) return false
       const c = leaf.message?.content
       const text = typeof c === 'string' ? c
         : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text ?? '').join('') : ''
@@ -220,6 +223,19 @@ function chainWorking(entries: JsonlEntry[]): boolean {
     if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result' && b.tool_use_id) resolved.add(b.tool_use_id)
   }
   return toolUseIds.some(id => id && !resolved.has(id))
+}
+
+// The leaf answers the child's own SubagentHandback call: the report is delivered and the turn over.
+function isHandbackResult(leaf: JsonlEntry, entries: JsonlEntry[]): boolean {
+  const c = leaf.message?.content
+  const ids = Array.isArray(c) ? c.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id) : []
+  if (ids.length === 0) return false
+  const handbacks = new Set<string | undefined>()
+  for (const e of entries) {
+    const m = e.type === 'assistant' ? e.message?.content : undefined
+    if (Array.isArray(m)) for (const b of m) if (b?.type === 'tool_use' && b.name === 'SubagentHandback') handbacks.add(b.id)
+  }
+  return ids.every(id => handbacks.has(id))
 }
 
 // A base64 image block → an inline markdown image, so it renders instead of dumping its raw base64.
