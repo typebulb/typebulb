@@ -431,6 +431,16 @@ describe('bulbServerCommand — the child is pinned to this package, not unpinne
     expect(bare).not.toContain('--mode')
   })
 
+  // `typebulb restart` relaunches a run as it was: a restricted run of a remembered-trusted bulb
+  // must stay restricted, and its watch and replace flags ride along.
+  it('carries --no-trust, --no-watch and --replace for a restart', () => {
+    const args = bulbServerCommand('/x.bulb.md', { noTrust: true, watch: false, replace: 'pkg=../pkg/dist' }).args.join(' ')
+    expect(args).toContain('--no-trust')
+    expect(args).toContain('--no-watch')
+    expect(args).toContain('--replace pkg=../pkg/dist')
+    expect(bulbServerCommand('/x.bulb.md', { watch: true }).args).not.toContain('--no-watch')
+  })
+
   it('agentViewerCommand pins the same bin and always passes --no-open', () => {
     const { command, args } = agentViewerCommand('claude')
     expect(command).toBe(process.execPath)

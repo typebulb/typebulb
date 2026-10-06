@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import { readHead, readTail } from '../../core/server/sessions.js'
+import { loadedThreads, startToolTurn } from './appServer.js'
 import type { ChildTranscript, Event, SessionFile, Thread, TokenCounts } from '../../core/events.js'
 
 // The Codex CLI realization of the AgentAdapter contract (TB-Agent-Codex.md, TB-Agent-Harness.md) —
@@ -443,6 +444,9 @@ const normCwd = (p: string) => {
 // to Codex's measured within-turn write gaps (Invariant 9), not the engine's 10s.
 const ABANDONED_MS = 120_000
 
+// A session id is the rollout's stem, ending in the thread's UUID.
+const threadOf = (sessionId: string) => sessionId.slice(-36)
+
 export class CodexAdapter extends AgentAdapter<CodexEntry> {
   readonly displayName = 'Codex Mirror'
 
@@ -489,6 +493,22 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
   callerSessionId(cwd: string) {
     const thread = process.env.CODEX_THREAD_ID
     return thread ? this.listSessionFiles(cwd).find(f => f.sessionId.endsWith(thread))?.sessionId : undefined
+  }
+
+  // A background process's exit wakes nothing here, so a wake goes through the shared app server that
+  // hosts the user's interactive sessions (TB-Agent-Codex.md § Waking through the app server). The
+  // thread id is the session id's trailing UUID, as CODEX_THREAD_ID names it.
+  async wakeRoute(sessionId: string): Promise<{ error?: string; hosted?: boolean }> {
+    try {
+      return (await loadedThreads()).includes(threadOf(sessionId)) ? { hosted: true }
+        : { hosted: false, error: 'this Codex session is not hosted by the shared app server, so nothing can wake it' }
+    } catch (e) { return { error: e instanceof Error ? e.message : String(e) } }
+  }
+  // Only into a thread its host has loaded: starting a turn on one it has not would resurrect a
+  // session the user may have closed, which the host cannot tell us apart from one gone quiet.
+  async wake(sessionId: string, tool: string, text: string) {
+    if (!(await loadedThreads()).includes(threadOf(sessionId))) throw new Error('the Codex session is not loaded by its app server now')
+    await startToolTurn(threadOf(sessionId), tool, text)
   }
 
   // Codex creates ~/.codex on first run (auth, sessions, state all live under it). The desktop app

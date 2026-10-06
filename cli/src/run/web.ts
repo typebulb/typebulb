@@ -153,7 +153,10 @@ export async function runWeb(bulbPath: string, args: CliArgs, trustHint: string,
       trusted: args.trust,
       trustHint,
     }),
-    makeEntry: (port, url) => ({ pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, mode: args.mode, predicted }),
+    makeEntry: (port, url) => ({
+      pid: process.pid, port, url, file: bulbPath, cwd: process.cwd(), startedAt: Date.now(), trust: args.trust, mode: args.mode, predicted,
+      watch: args.watch ? undefined : false, replace: args.local ? `${args.local.name}=${args.local.dir}` : undefined,
+    }),
     // The wait a launch that opened no page names (TB-Page-Lifecycle.md).
     waitTarget: path.relative(process.cwd(), bulbPath) || path.basename(bulbPath),
   })

@@ -36,6 +36,10 @@ export interface BulbServer {
   /** `--mode <name>` env mode the run was launched with (TB-Env.md) — recorded so a relaunch
    *  reproduces it (launchBulbServer). */
   mode?: string
+  /** `--no-watch` and `--replace <name>=<path>`, as launched — recorded, like `mode`, so a
+   *  `typebulb restart` reproduces the run rather than a default one. */
+  watch?: false
+  replace?: string
   /** Human label of a capability the proactive scan predicts this (untrusted) bulb will need,
    *  set at register time from predictTrust. Probabilistic, NOT enforcement — it only lets a
    *  host offer --trust before the bulb trips the gate (TB-Security.md). */
@@ -524,14 +528,17 @@ export function typebulbBinPath(): string {
  */
 export function bulbServerCommand(
   file: string,
-  opts: { open?: boolean; trust?: boolean; mode?: string } = {},
+  opts: { open?: boolean; trust?: boolean; noTrust?: boolean; mode?: string; watch?: boolean; replace?: string } = {},
 ): { command: string; args: string[] } {
   return {
     command: process.execPath,
     args: [
       typebulbBinPath(),
       ...(opts.trust ? ['--trust'] : []),
+      ...(opts.noTrust ? ['--no-trust'] : []),
       ...(opts.mode ? ['--mode', opts.mode] : []),
+      ...(opts.watch === false ? ['--no-watch'] : []),
+      ...(opts.replace ? ['--replace', opts.replace] : []),
       file,
       ...(opts.open === false ? ['--no-open'] : []),
     ],
@@ -587,7 +594,7 @@ async function launchDetached(
  */
 export async function launchBulbServer(
   file: string,
-  opts: { cwd?: string; open?: boolean; trust?: boolean; mode?: string } = {},
+  opts: { cwd?: string; open?: boolean; trust?: boolean; noTrust?: boolean; mode?: string; watch?: boolean; replace?: string } = {},
 ): Promise<BulbServer> {
   const cwd = opts.cwd ?? process.cwd()
   const abs = path.resolve(cwd, file)

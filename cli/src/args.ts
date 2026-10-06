@@ -9,7 +9,7 @@ import { detectCallerHarness } from './agentViewer/resolve.js'
 export const DEFAULT_SEND_WAIT_MS = 5000
 
 export interface CliArgs {
-  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'trust' | 'untrust' | 'agent' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put' | 'status'
+  subcommand: 'run' | 'call' | 'check' | 'predict' | 'logs' | 'wait' | 'stop' | 'restart' | 'trust' | 'untrust' | 'agent' | 'models' | 'slug' | 'send' | 'pull' | 'push' | 'get' | 'put' | 'status' | 'babysit'
   file: string
   /** `call <file> <fn> [arg…]`: the server.ts export to invoke. */
   fn?: string
@@ -84,6 +84,10 @@ export interface CliArgs {
    *  "the caller sets no timeout" (TB-Wait.md § Timeout). A shim-backgrounded wait ignores it (no
    *  give-up clock at all); everything else defaults to 1800. */
   timeoutSec?: number
+  /** `wait --wake`: also start the caller's next turn with what fired, for a harness a background
+   *  process's exit cannot wake (Codex; TB-Agent-Codex.md § Waking through the app server). Opt-in,
+   *  because the foreground recipe already returns the line as its result. */
+  wake?: boolean
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
    *  bulb and mirror across all projects — the housekeeping verb for the orphan pile. */
@@ -134,7 +138,7 @@ export function parseArgs(args: string[]): CliArgs {
   // Subcommand detection (first positional arg). `agent` is special: it carries an optional
   // `:<name>` target (`agent:claude` serves that mirror; bare `agent` ensures one is up and
   // emits the skill pointer + status).
-  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'trust', 'untrust', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put', 'status'] as const
+  const SUBCOMMANDS = ['call', 'check', 'predict', 'logs', 'wait', 'stop', 'restart', 'trust', 'untrust', 'models', 'slug', 'send', 'pull', 'push', 'get', 'put', 'status', 'babysit'] as const
   const first = args[0]
   if (first === 'agent' || first?.startsWith('agent:')) {
     result.subcommand = 'agent'
@@ -202,6 +206,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.stopScope = 'agent'
     } else if (arg === '--global') {
       result.stopScope = 'global'
+    } else if (arg === '--wake') {
+      result.wake = true
     } else if (arg === '--match') {
       const m = args[++i]
       if (m === undefined) {
@@ -418,15 +424,25 @@ Usage:
                                  Batch flags: --bulbs (this project's bulbs, the
                                  mirror survives), --agent (this project's mirror),
                                  --global (every bulb + mirror, all projects).
+  typebulb restart [file|pid|agent]
+                                 Relaunch running servers on this typebulb's
+                                 version, each with its own flags and port, so an
+                                 open tab reattaches (no arg: this project's bulbs
+                                 and mirror). Batch flags as for stop.
   typebulb trust [file]          Remember a bulb as Trusted, so a later run grants
                                  fs/AI/server.ts without --trust (no arg: list the
                                  remembered-trusted bulbs).
   typebulb untrust <file>        Forget a bulb's trust (back to Restricted).
-  typebulb status [agent]        A sub-agent's Status: its request, each subtask's
-                                 progress, tests, any decision it needs, and the
-                                 files it edited (the mirror's Copy Status). Name
-                                 it by id or a piece of its description; no arg
-                                 lists this session's agents. Claude Code, Codex.
+  typebulb status [agent]        A sub-agent's Status: what it waits on, commands
+                                 failing repeatedly, uncommitted files. Name it by
+                                 id or a piece of its description; no arg: the
+                                 session's overview. Claude Code, Codex.
+  typebulb babysit               Watch your sub-agents and stay silent until one
+                                 needs you (an idle stall, a background call left
+                                 running, a failure streak, several agents waiting
+                                 at once), then print it and exit.
+                                 Run it in the background; the exit is your
+                                 wake-up. Run it again after handling it.
 
 Options:
   -f, --follow                Stream new log output until interrupted (logs)

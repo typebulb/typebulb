@@ -196,6 +196,22 @@ export abstract class AgentAdapter<E = unknown> {
   abstract chainWorking(entries: E[]): boolean
   /** Is the session's owning process alive? `undefined` ⇒ unknowable from disk (engine falls back). */
   abstract sessionAlive(sessionId: string, cwd: string): boolean | undefined
+  /**
+   * Has the session's process certainly exited? Only for a harness that records its live processes
+   * (CC's pid store), never a guess from quiet: a parent waiting on `babysit` is idle, not gone.
+   * `typebulb babysit` exits when it says so, so an orphan cannot poll for hours. Absent ⇒ unknown.
+   */
+  sessionEnded?(sessionId: string, cwd: string): boolean
+  /**
+   * For a harness a background process's exit cannot wake (TB-Agent-Codex.md § Waking through the
+   * app server): start the session's next turn with an event, through whoever already hosts it, never
+   * a second host. The one place typebulb initiates a turn, so only `babysit` calls it, for the
+   * caller's own session. `wakeRoute` says before arming whether the session is reachable: undefined
+   * when it is, else why not; `hosted: false` means it was asked and the session is not hosted, as
+   * distinct from not being able to ask. `wake` resolves once the harness accepts the turn.
+   */
+  wakeRoute?(sessionId: string): Promise<{ error?: string; hosted?: boolean }>
+  wake?(sessionId: string, tool: string, text: string): Promise<void>
 
   /**
    * The sessions this harness reports as **mid-turn right now**, for the picker's working dot.

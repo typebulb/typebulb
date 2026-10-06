@@ -31,13 +31,14 @@ import { runTrust } from './commands/trust.js'
 import { runAgent } from './commands/agent.js'
 import { runModels } from './commands/models.js'
 import { runSlug } from './commands/slug.js'
-import { runLogs, runWait, runStop, runStopScope } from './commands/lifecycle.js'
+import { runLogs, runWait, runStop, runStopScope, runRestart } from './commands/lifecycle.js'
 import { runSend } from './commands/send.js'
 import { runPull } from './commands/pull.js'
 import { runPush } from './commands/push.js'
 import { runGet } from './commands/get.js'
 import { runPut } from './commands/put.js'
 import { runStatus } from './commands/status.js'
+import { runBabysit } from './commands/babysit.js'
 import { ensureHarnessSupport } from './agentViewer/resolve.js'
 import { runWeb } from './run/web.js'
 import { runAgentViewer } from './agentViewer/serve.js'
@@ -94,12 +95,20 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'wait') {
-    await runWait(args.file || undefined, { match: args.match, timeoutSec: args.timeoutSec })
+    await runWait(args.file || undefined, { match: args.match, timeoutSec: args.timeoutSec, wake: args.wake })
     return
   }
   if (args.subcommand === 'stop') {
     if (args.stopScope) await runStopScope(args.stopScope)
     else await runStop(args.file || undefined)
+    return
+  }
+  if (args.subcommand === 'restart') {
+    await runRestart(args.file || undefined, args.stopScope)
+    return
+  }
+  if (args.subcommand === 'babysit') {
+    await runBabysit(args.mode)
     return
   }
   if (args.subcommand === 'send') {

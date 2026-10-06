@@ -112,13 +112,14 @@ async function launchAndReport(version: string, name: string, t: LaunchClock): P
         // "background" told pi agents to shell-'&' the wait, decoupling the wake (TB-Wait.md).
         // Codex has no background wake at all — its wait runs FOREGROUND in the emitting turn
         // (items stream to the rollout mid-turn), bounded because it occupies that turn
-        // (TB-Agent-Codex.md § Wait under Codex). The outer shell deadline is named too: a mirror
-        // wait lingers 10s AFTER its match, so Codex's own default kills even a clean `ok`.
+        // (TB-Agent-Codex.md § Wait under Codex). Since 0.153 `exec_command` returns at a short
+        // `yield_time_ms` (10–30s effective on Windows, whatever is asked) with the command still
+        // running, so the wait is followed through `write_stdin` until it exits.
         ...(name === 'codex'
           ? [`      verify it this turn — foreground-wait, bounded:`,
              `      • ${lit('typebulb wait agent --match "[inline <name>" --timeout 120')}`,
-             `        raise the shell tool's timeout_ms to 130000`,
-             `        (its 10s default kills even a clean ok)`]
+             `        via exec_command; while it still runs,`,
+             `        poll it with write_stdin until it exits`]
           : [name === 'pi'
               ? `      arm a wait for its render verdict — run it plainly:`
               : `      background a wait for its render verdict:`,

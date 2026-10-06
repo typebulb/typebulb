@@ -221,3 +221,14 @@ describe('apply gives the child Status its call outcomes', () => {
     expect([blocked!.exit, blocked!.refused]).toEqual([undefined, true])
   })
 })
+
+describe('a tool result quoting a task notification', () => {
+  // A reviewer grepping transcripts printed notices; read as one, its result vanished and the call
+  // read as interrupted for good.
+  it('stays a tool result', () => {
+    const a = new ClaudeAdapter()
+    const quoted = '<task-notification>\n<tool-use-id>t9</tool-use-id>\n<status>completed</status>\n</task-notification>'
+    const events = a.apply({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: quoted }] } } as never, 0).events
+    expect(events.map(e => e.type)).toEqual(['tool_result'])
+  })
+})

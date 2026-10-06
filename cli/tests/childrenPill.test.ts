@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { byAncestry } from '../agents/core/order.js'
-import { childDigest, editedFiles, commandsOf, fileTouches, sharedFiles, agentReport, statusText, overviewText } from '../agents/core/childStatus.js'
+import { childDigest, editedFiles, commandsOf, notable, quietRuns, babysitEvents, isRead, commandLabel, fileTouches, sharedFiles, agentReport, statusText, overviewText } from '../agents/core/childStatus.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
@@ -100,11 +100,11 @@ describe('commandsOf', () => {
 
 describe('sharedFiles', () => {
   const row = (id: string, label: string) => ({ id, label, file: '', mtime: 0, depth: 1, stopped: false, state: 'done' as const })
-  // The overwritten audit: B wrote over A's rewrite without reading it after.
-  it('marks a write over another agent\'s with no read between as blind, in both reports', () => {
+  // The overwritten audit: B replaced the file over A's rewrite without reading it after.
+  it('marks a whole-file write over another agent\'s with no read between as blind, in both reports', () => {
     const a = childDigest([brief, call('w', 'Write', { file_path: 'C:/p/docs/T.md', content: 'A' }), result('w', '', 10 * min)])
     const b = childDigest([brief, call('r', 'Read', { file_path: 'C:/p/docs/T.md' }), result('r', '', 5 * min),
-      call('w', 'mcp__patcher__patch', { filePath: 'C:/p/docs/T.md', diff: '@@' }), result('w', '', 20 * min)])
+      call('w', 'Write', { file_path: 'C:/p/docs/T.md', content: 'B' }), result('w', '', 20 * min)])
     const ta = fileTouches(a, 'C:/p'), tb = fileTouches(b, 'C:/p')
     const shared = sharedFiles([{ id: 'A', ...ta }, { id: 'B', ...tb }])
     const names = new Map([['A', 'audit'], ['B', 'baseline']])
@@ -112,6 +112,16 @@ describe('sharedFiles', () => {
     const text = statusText(agentReport(row('A', 'audit'), a, ta.edited, shared, names, true), 30 * min)
     expect(text).toMatch(/docs\/T\.md {2}also "baseline"/)
     expect(text).toMatch(/⚠ "baseline" wrote over this agent's/)
+  })
+
+  // babysit's first fire was a false alarm: a patcher edit applies only where its context still
+  // stands, so it cannot overwrite another agent's change unseen. Shared, not blind.
+  it('leaves a context-checked edit over another agent\'s write as shared', () => {
+    const a = childDigest([brief, call('w', 'Write', { file_path: 'C:/p/docs/T.md', content: 'A' }), result('w', '', 10 * min)])
+    const b = childDigest([brief, call('w', 'mcp__patcher__patch', { filePath: 'C:/p/docs/T.md', diff: '@@' }), result('w', '', 20 * min)])
+    const shared = sharedFiles([{ id: 'A', ...fileTouches(a, 'C:/p') }, { id: 'B', ...fileTouches(b, 'C:/p') }])
+    expect(shared.blind).toEqual([])
+    expect(shared.writers.get('docs/T.md')!.map(w => w.id)).toEqual(['A', 'B'])
   })
 })
 
@@ -143,5 +153,76 @@ describe('overviewText', () => {
     expect(text).toMatch(/runner .* waiting 2m on Run the follow check/)
     expect(text).not.toMatch(/done1/)
     expect(text).toMatch(/\+2 finished, nothing to check/)
+  })
+})
+
+describe('isRead', () => {
+  // A delegator reads Commands for runs, changes and failures; an agent reading files is none of them.
+  it('folds a line only when every part of it reads', () => {
+    for (const cmd of ['grep -n "x" docs/T.md | head -40', 'git log -1 --format=%ct -- a.ts', 'sed -n 1,40p a.md',
+      'for p in "a" "b"; do echo "== $p: $(grep -c "$p" a.md)"; done', 'Get-Content a.log -Tail 20 2>$null']) expect(isRead(cmd)).toBe(true)
+    for (const cmd of ['date +%T; npm run need -- check 2>&1 | tail -30', 'sed -i s/a/b/ a.md', 'git commit -m x',
+      'grep x a.md > hits.txt', 'until grep -q done a.out; do sleep 3; done', 'Stop-Process -Id 4', 'echo "$(rm a)"']) expect(isRead(cmd)).toBe(false)
+  })
+})
+
+describe('isRead with quoted patterns', () => {
+  // A grep's `\|` alternation sits inside quotes; split there, the line read as several broken commands.
+  it('keeps quoted text whole and reads an assigned substitution', () => {
+    expect(isRead('grep -n "action:\s*command\|{action" tests/cli.mjs | head')).toBe(true)
+    expect(isRead('for f in $(ls -t logs/*.log | head -40); do l=$(grep -h "cpu probe" "$f" | head -1); echo "$l"; done')).toBe(true)
+    expect(isRead('grep -h "a\|b" x.txt > out.txt')).toBe(false)
+    // typebulb's own inspection, which an agent runs on itself, is a read.
+    expect(isRead('npx typebulb status a6883ecb')).toBe(true)
+    expect(isRead('npx typebulb push x.bulb.md')).toBe(false)
+  })
+})
+
+describe('commandLabel', () => {
+  // Clipped at its reads, `cat "C:/Users/…/throttleState.ps1"; …` hid the script it went on to run.
+  it('names a mixed line from its first part that does more than read', () => {
+    expect(commandLabel('cat "a b.ps1"; echo ----; powershell -File "a b.ps1"')).toBe('…powershell -File "a b.ps1"')
+    expect(commandLabel('npm run need -- status 2>&1 | tail -5')).toBe('npm run need -- status 2>&1 | tail -5')
+    expect(commandLabel('date; until grep -q ok a.out; do sleep 5; done')).toBe('…until grep -q ok a.out; do sleep 5; done')
+    expect(commandLabel("cat > s.js <<'EOF'\nconst x = 1\nEOF\nnode s.js")).toBe("cat > s.js <<'EOF' … EOF\nnode s.js")
+  })
+})
+
+describe('notable commands', () => {
+  // From takeoff's day of decisions (TB-Agent-Children.md): what changed a parent's mind is listed,
+  // a check that passed folds into a count.
+  it('lists failures, repeats and process stops, and folds the rest', () => {
+    const run = (id: string, command: string, more: Partial<Extract<Event, { type: 'tool_result' }>> = {}): Event[] =>
+      [call(id, 'Bash', { command }), result(id, 'ok', 0, more)]
+    const c = commandsOf(childDigest([brief,
+      ...run('a', 'npm run need -- check'),
+      ...run('b', 'npm run need -- vitest x', { isError: true, exit: 64 }),
+      ...run('c', 'Stop-Process -Id 35072'),
+      ...run('d', 'npm run live -- tabs | grep medley', { isError: true, exit: 1 }),
+      ...run('e', 'node probe.js'), ...run('f', 'node probe.js'), ...run('g', 'node probe.js'),
+    ]))
+    expect(c.groups.filter(notable).map(g => g.cmd).sort()).toEqual(['Stop-Process -Id 35072', 'node probe.js', 'npm run need -- vitest x'])
+    expect(quietRuns(c).runs).toBe(2)                     // the check, and the grep that matched nothing
+    expect(c.failed).toBe(1)
+  })
+})
+
+describe('babysitEvents', () => {
+  // `typebulb babysit` wakes the parent on these; a key carries no minutes, so a condition fires
+  // once while it lasts, and its texts keep the overview's fixed phrases.
+  const none = { writers: new Map(), blind: [] }
+  const agent = (id: string, state: 'running' | 'done', events: Event[]) =>
+    agentReport({ id, label: id, file: '', mtime: 0, depth: 1, stopped: false, state }, childDigest([brief, ...events]), [], none, new Map(), true)
+
+  it('names an idle stall, a deadlock of waits, and a background call left running', () => {
+    const idle = babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min)
+    expect([...idle.keys()]).toEqual(['idle'])
+    expect(idle.get('idle')).toMatch(/^No agent running for 6m/)
+
+    const waits = babysitEvents(['a', 'b'].map(id => agent(id, 'running', [call(`${id}1`, 'Bash', { command: 'npm run need -- check' }, 0)])), 3 * min)
+    expect(waits.get('waiting')).toMatch(/^2 agents waiting on calls at once/)
+
+    const bg = babysitEvents([agent('a', 'done', [call('b1', 'Bash', { command: 'sleep 900' }, 0), result('b1', 'Command running in background', 0, { background: true })])], 11 * min)
+    expect(bg.get('background:b1')).toMatch(/finished, background call running 11m/)
   })
 })

@@ -2,7 +2,9 @@ import * as path from 'path'
 import { valid as semverValid, lt as semverLt } from 'semver'
 import { normalizeBulbPath } from '../serve/paths.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopServer, probePageCount, isAlive, readWaitCursor, writeWaitCursor, isMirror, isProjectMirror, type BulbServer, type StopOutcome } from '../serve/serverRegistry.js'
+import { agentAdapterFactories } from '../agentViewer/registry.js'
+import type { AgentAdapter } from '../../agents/core/server/adapter.js'
+import { listBulbServers, readServerLog, clearServerLog, sliceRunLog, stopServer, probePageCount, isAlive, readWaitCursor, writeWaitCursor, isMirror, isProjectMirror, launchBulbServer, launchAgentViewer, type BulbServer, type StopOutcome } from '../serve/serverRegistry.js'
 import { PAGE_LOG } from '../serve/pages.js'
 import { VERSION } from '../version.js'
 
@@ -182,9 +184,10 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
  * wakes cost one redundant turn the protocol absorbs (the agent reads authoritative state on wake,
  * `typebulb call`, never the printed line).
  */
-export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec?: number }): Promise<void> {
+export async function runWait(arg: string | undefined, opts: { match?: string; timeoutSec?: number; wake?: boolean }): Promise<void> {
   if (!arg) { listServers(await listBulbServers(process.cwd()), 'Run `typebulb wait <file|pid>` to block until one logs a new line.'); return }
   const server = requireServer(await listBulbServers(), arg, 'wait', process.cwd(), detectCallerHarness())
+  const wake = opts.wake ? await wakeTarget() : undefined
 
   // `typebulb wait` is a SUBSCRIBE primitive — block until the next matching line, then exit — not an
   // await-for-completion, so it carries no domain timeout (TB-Wait.md). A wait the
@@ -252,8 +255,11 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
   const watchDeparture = !isMirror(server) && !following
   let settleUntil: number | undefined                  // set on the first match — doubles as "anything matched"
   let pending = ''                                     // trailing partial line, completed by a later poll
+  const seen: string[] = []                            // what fired, for a `--wake` delivery
+  let ended = ''                                       // why it ended without a match, for the same
 
   let exitCode = 0
+  let dead = false
   while (true) {
     // Where this read starts. A departure only ends the wait if THIS wait saw it arrive, and a read
     // that begins before the arm-time EOF is replaying history — a `--match` first run scans from 0
@@ -273,6 +279,7 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
         if (watchDeparture && live && line.startsWith(PAGE_LOG.disconnected)) departed = true
         if (opts.match && !line.includes(opts.match)) continue
         console.log(line)
+        seen.push(line)
         if (following) continue                  // a tail has no burst to gather: the reader is already attached
         settleUntil ??= Date.now() + SETTLE_MS
         // Anchored on the `]`-delimited verdict so a name/message can't false-positive (a false hit only
@@ -285,30 +292,60 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
       // and the linger below still drains its burst. Exits by the loop's tail so the cursor is
       // written — this line was read and acted on, unlike the dead-server path, whose files are gone.
       if (departed && !settleUntil) {
-        console.error(`the last page of ${serverLabel(server)} closed while waiting — a bulb runs in its page, so nothing can log ${opts.match ? `'${opts.match}'` : 'anything'} now`)
+        ended = `the last page of ${serverLabel(server)} closed while waiting — a bulb runs in its page, so nothing can log ${opts.match ? `'${opts.match}'` : 'anything'} now`
+        console.error(ended)
         exitCode = 3
         break
       }
     }
     if (settleUntil && Date.now() >= settleUntil) break
     if (!noDeadline && !settleUntil && Date.now() >= deadline) {
-      console.error(`timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${timeoutSec}s`)
+      ended = `timeout: no ${opts.match ? `line matching '${opts.match}'` : 'new output'} from ${serverLabel(server)} within ${timeoutSec}s`
+      console.error(ended)
       exitCode = 2
       break
     }
     if (!isAlive(server.pid)) {
       // Anything it logged on the way down already printed above (a match ⇒ exit 0 below). A dead
       // server's files are reaped, so skip the cursor write and bail here.
-      if (!settleUntil) { console.error(`server ${serverLabel(server)} (pid ${server.pid}) exited while waiting`); process.exit(3) }
+      if (!settleUntil) { ended = `server ${serverLabel(server)} (pid ${server.pid}) exited while waiting`; console.error(ended); exitCode = 3; dead = true }
       break
     }
     await delay(400)
   }
+  // A `--wake` delivery comes before the cursor moves: an event the host refused stays unread, so
+  // the next wait delivers it again (TB-Agent-Codex.md § Waking through the app server).
+  if (wake) {
+    console.error(`detected ${new Date().toISOString()}`)
+    try { await wake.adapter.wake!(wake.sessionId, 'typebulb_wait', seen.length ? seen.join('\n') : ended) } catch (e) {
+      console.error(`Not delivered: ${e instanceof Error ? e.message : e}`)
+      process.exit(4)
+    }
+    console.error(`accepted ${new Date().toISOString()}`)
+  }
+  if (dead) process.exit(3)
   // Every survived exit is a sync point — a timeout too: everything read was seen. Written under this
   // wait's own `--match`, so it never moves another pattern's offset. A follower writes none: it holds
   // no consumer offset to persist, and its `--match` key is shared with every other session's watcher.
   if (!following) writeWaitCursor(server.pid, cursor, match)
   process.exit(exitCode)
+}
+
+/** For `wait --wake`: the caller's own session on a harness that wakes through its host, checked
+ *  reachable before waiting. Exits when there is none: an unwakeable wait is a foreground wait. */
+async function wakeTarget(): Promise<{ adapter: AgentAdapter; sessionId: string }> {
+  const harness = detectCallerHarness()
+  const adapter = harness ? agentAdapterFactories()[harness]?.() as AgentAdapter | undefined : undefined
+  const sessionId = adapter?.wake ? adapter.callerSessionId?.(process.cwd()) : undefined
+  if (!adapter || !sessionId) {
+    console.error(adapter?.wake
+      ? "Can't --wake: your own session couldn't be identified in this project, and a wake goes to no other."
+      : `--wake needs a harness that wakes through its host (here: ${harness ?? 'none detected'}); on Claude Code, a background wait already wakes you.`)
+    process.exit(1)
+  }
+  const route = await adapter.wakeRoute!(sessionId)
+  if (route.error) { console.error(`Can't --wake: ${route.error}.`); process.exit(1) }
+  return { adapter, sessionId }
 }
 
 /** What the stop observed, appended to its status line (TB-Page-Lifecycle.md, invariant 4). A forced
@@ -358,15 +395,7 @@ export async function runStop(arg: string | undefined): Promise<void> {
  * Only `global` crosses projects; `bulbs`/`agent` stay in this cwd, the same scope as no-arg `stop`.
  */
 export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise<void> {
-  const cwd = process.cwd()
-  // For `--agent`, scope to the caller's harness: an agent (env marker) reaps only its own mirror, an
-  // unmarked human reaps all of this project's mirrors. Mirrors are harness-partitioned (see above);
-  // bulbs are not, so `--bulbs`/`--global` need no such scoping.
-  const callerHarness = scope === 'agent' ? detectCallerHarness() : undefined
-  const servers =
-    scope === 'global' ? await listBulbServers()
-    : scope === 'bulbs' ? await listBulbServers(cwd)
-    : (await listBulbServers()).filter(s => isProjectMirror(s, cwd) && (!callerHarness || s.agent === callerHarness))
+  const servers = await scopedServers(scope)
   const noun = scope === 'global' ? 'server' : scope === 'agent' ? 'mirror' : 'bulb'
   if (!servers.length) {
     console.log(scope === 'global' ? 'No running bulb servers.' : `No running ${noun}s for this project.`)
@@ -378,4 +407,45 @@ export async function runStopScope(scope: 'bulbs' | 'agent' | 'global'): Promise
   const outcomes = await Promise.all(servers.map(s => stopServer(s)))
   console.log(`Stopped ${servers.length} ${noun}${servers.length === 1 ? '' : 's'}:`)
   servers.forEach((s, i) => console.log(`  ${s.url}  pid ${s.pid}  ${serverLabel(s)}${stopNote(s, outcomes[i])}`))
+}
+
+/** The servers a batch flag names, shared by `stop` and `restart`. `--agent` is scoped to the
+ *  caller's harness: an agent (env marker) reaches only its own mirror, an unmarked human all of this
+ *  project's mirrors. Mirrors are harness-partitioned (see above); bulbs are not, so `--bulbs` and
+ *  `--global` need no such scoping. */
+async function scopedServers(scope: 'bulbs' | 'agent' | 'global'): Promise<BulbServer[]> {
+  const cwd = process.cwd()
+  const callerHarness = scope === 'agent' ? detectCallerHarness() : undefined
+  return scope === 'global' ? await listBulbServers()
+    : scope === 'bulbs' ? await listBulbServers(cwd)
+    : (await listBulbServers()).filter(s => isProjectMirror(s, cwd) && (!callerHarness || s.agent === callerHarness))
+}
+
+/**
+ * `typebulb restart [file|pid|agent]` — relaunch running servers on THIS typebulb's version, so an
+ * update (`npm i -g`, a rebuild, a newer npx) reaches what is already running. Same targets as `stop`:
+ * one server, a batch flag, or bare for this project's bulbs and mirrors (where a bare `stop` only
+ * lists). Each relaunch carries the run's own recorded flags (trust stated both ways, so a
+ * `--no-trust` run of a remembered-trusted bulb stays Restricted) and keeps its port, so an open tab
+ * reattaches rather than a new one opening. One at a time, so two never race for a port.
+ */
+export async function runRestart(arg: string | undefined, scope: 'bulbs' | 'agent' | 'global' | undefined): Promise<void> {
+  const cwd = process.cwd()
+  const servers = arg ? [requireServer(await listBulbServers(), arg, 'restart', cwd, detectCallerHarness())]
+    : scope ? await scopedServers(scope)
+    : [...await listBulbServers(cwd), ...await scopedServers('agent')]
+  if (!servers.length) { console.log(scope === 'global' ? 'No running bulb servers.' : 'No running bulbs or mirrors for this project.'); return }
+  console.log(`Restarting on v${VERSION}:`)
+  for (const s of servers) {
+    const from = s.version ? `v${s.version}` : 'unknown version'
+    try {
+      const next = isMirror(s)
+        ? (await stopServer(s, 'keep'), await launchAgentViewer(s.agent!, s.cwd ?? cwd))
+        : await launchBulbServer(s.file, { cwd: s.cwd ?? cwd, open: false, trust: s.trust, noTrust: !s.trust, mode: s.mode, watch: s.watch, replace: s.replace })
+      console.log(`  ${next.url}  ${serverLabel(s)}  ${from} → v${VERSION}`)
+    } catch (e) {
+      console.log(`  ${s.url}  ${serverLabel(s)}  failed: ${e instanceof Error ? e.message : e}`)
+      process.exitCode = 1
+    }
+  }
 }

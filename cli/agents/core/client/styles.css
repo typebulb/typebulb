@@ -1892,13 +1892,6 @@ a.agent-name:hover { text-decoration: underline; }
 .cs-title { display: flex; align-items: center; gap: .6rem; font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
 .cs-title .children-dot { width: 10px; height: 10px; }
 .cs-subtitle { color: var(--muted); margin-top: .2rem; padding-left: calc(10px + .6rem); }
-/* The figures: equal tiles on one row, wrapping on a narrow pane. */
-.cs-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: .6rem; margin-top: 1rem; }
-.cs-tile { background: var(--veil); border-radius: 8px; padding: .6rem .8rem; }
-.cs-tile-value { font-size: 1.35rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.cs-tile-label { color: var(--muted); }
-.cs-tile-sub { color: var(--muted); font-size: .9rem; }
-.cs-tile.bad .cs-tile-value { color: var(--err); }
 /* Now: what it is waiting on, set apart by an accent rule; amber when a call was interrupted. */
 .cs-now { display: flex; gap: .9rem; align-items: baseline; margin-top: 1rem; padding: .6rem .9rem; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .cs-now.quiet { border-left-color: var(--border); background: var(--veil); color: var(--muted); }
@@ -1918,32 +1911,35 @@ a.agent-name:hover { text-decoration: underline; }
 .child-status-note { color: var(--muted); font-size: .9rem; font-style: italic; }
 .child-status-pending { text-align: center; color: var(--muted); padding: .3rem 0; }
 .child-status-note.err { color: var(--err); }
-/* Fixed layout, so a long command or output line ellipsizes instead of widening its column. */
-.cs-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.cs-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: .9rem; padding: .35rem .6rem; border-bottom: 1px solid var(--border); }
-.cs-table td { padding: .55rem .6rem; vertical-align: top; border-bottom: 1px solid var(--border); }
-.cs-table tbody tr:hover { background: var(--veil); }
-.cs-col-cmd { width: 32%; } .cs-col-runs { width: 5.5rem; } .cs-col-latest { width: 14rem; } .cs-col-file { width: 45%; }
+/* Two-line items: the command or file, its outcome at the line's end; beneath, muted, what it said or
+   who else wrote it. Text wraps rather than cutting off, since the cut part is the part that explains. */
+.cs-list { border-top: 1px solid var(--border); }
+.cs-item { padding: .5rem .4rem; border-bottom: 1px solid var(--border); }
+.cs-item:hover { background: var(--veil); }
+.cs-item-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .8rem; }
+.cs-item-main > .cs-mono { flex: 1 1 20rem; min-width: 0; overflow-wrap: anywhere; }
+.cs-item-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .5rem; }
+.cs-item-sub { margin-top: .2rem; padding-left: 1rem; color: var(--muted); overflow-wrap: anywhere; }
 .cs-mono { font: .9rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.cs-table .cs-mono { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cs-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cs-out { color: var(--muted); }
 .cs-dim { color: var(--muted); }
 .cs-bad { color: var(--warn); }
 /* A command or open call cites its call, and a file opens in the editor: text that lights on hover. */
 .cs-link { cursor: pointer; color: inherit; }
 .cs-link:hover { color: var(--accent); text-decoration: underline; }
-.cs-latest { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .5rem; }
 .cs-pill { display: inline-block; padding: 0 .5rem; border-radius: 999px; font-size: .9rem; line-height: 1.5; white-space: nowrap; background: var(--veil); color: var(--muted); }
 .cs-pill.ok { color: var(--diff-add); background: color-mix(in srgb, var(--diff-add) 14%, transparent); }
 .cs-pill.bad { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
 .cs-pill.run { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.cs-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+.cs-pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.cs-chips { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; }
 .cs-chip { padding: 0 .5rem; border-radius: 6px; background: var(--veil); white-space: nowrap; }
 .cs-blind { margin-top: .35rem; padding-left: .5rem; border-left: 2px solid var(--warn); color: var(--warn); }
 /* The agents menu's per-row way straight into a child's Status view. The figures before it read
    farther apart than the row gap, from the slack in their min-width boxes; the margin matches that. */
-.children-status-link { flex: none; margin-left: 1.2rem; color: var(--muted); cursor: pointer; }
+/* It owns the row's whole right end at full height: as bare inline text, a click a few pixels beside
+   or above the word landed on the row, which opens the transcript instead (seen in a status-trace).
+   The old margin is padding now, and the negative margins take in the row's own padding. */
+.children-status-link { flex: none; align-self: stretch; display: flex; align-items: center; margin: -.05rem -.45rem -.05rem .4rem; padding: 0 .45rem 0 .8rem; color: var(--muted); cursor: pointer; }
 .children-status-link:hover { color: var(--accent); text-decoration: underline; }
 /* Its tip opens beside the link, on one line no taller than the row: the list scrolls, so a tip
    above the top row is clipped. */

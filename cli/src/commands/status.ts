@@ -1,7 +1,7 @@
 import { loadEnv } from '../env.js'
 import { agentAdapterFactories } from '../agentViewer/registry.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { sessionsWithChildren, matchChildren, sessionStatus, checkFiles } from '../../agents/core/server/childReport.js'
+import { sessionsWithChildren, matchChildren, sessionStatus } from '../../agents/core/server/childReport.js'
 import { statusText, overviewText } from '../../agents/core/childStatus.js'
 import { childName, type ChildRow } from '../../agents/core/events.js'
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
@@ -26,8 +26,8 @@ export async function runStatus(query: string | undefined, mode: string | undefi
   for (const adapter of able) for (const s of sessionsWithChildren(adapter, cwd)) {
     any = true
     if (!query) {
-      const { reports, shared } = sessionStatus(adapter, cwd, s)
-      console.log(overviewText(s.sessionId, reports, await checkFiles(cwd, reports, shared), Date.now()))
+      const { reports, files } = await sessionStatus(adapter, cwd, s)
+      console.log(overviewText(s.sessionId, reports, files, Date.now()))
       return
     }
     const hits = matchChildren(s, query)
@@ -38,7 +38,7 @@ export async function runStatus(query: string | undefined, mode: string | undefi
       process.exitCode = 1
       return
     }
-    console.log(statusText(sessionStatus(adapter, cwd, s).reports.find(r => r.id === hits[0]!.id)!, Date.now()))
+    console.log(statusText((await sessionStatus(adapter, cwd, s)).reports.find(r => r.id === hits[0]!.id)!, Date.now()))
     return
   }
   if (!any) { console.log('No sub-agents in this project\'s sessions.'); return }

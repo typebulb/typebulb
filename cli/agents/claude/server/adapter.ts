@@ -378,11 +378,13 @@ function userTextBlock(b: ContentBlock | undefined): string {
 // A background call's end (TB-Agent-Children.md): CC notes it in a `<task-notification>` naming the
 // call, carried twice (a queued_command and an isMeta turn), so a reader dedupes by id. A Monitor's
 // events name no call and close nothing. The exit code is phrased `(exit code N`, `failed with exit
-// code N`, or `script failed (exit N)`.
+// code N`, or `script failed (exit N)`. Only those two carriers hold notices: a tool result quoting
+// one (an agent grepping transcripts) is output, and reading it as a notice dropped the result.
 const TASK_NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
 function taskNotices(e: JsonlEntry): Event[] {
+  const c = e.message?.content
   const text = e.type === 'attachment' && e.attachment?.type === 'queued_command' ? toText(e.attachment.prompt)
-    : e.type === 'user' ? toText(e.message?.content) : ''
+    : e.type === 'user' && e.isMeta && !(Array.isArray(c) && c.some(b => b?.type === 'tool_result')) ? toText(c) : ''
   if (!text.includes('<task-notification>')) return []
   const out: Event[] = []
   for (const [, body] of text.matchAll(TASK_NOTICE)) {
@@ -631,6 +633,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
               exit: exit === undefined ? undefined : Number(exit),
               background: background || undefined,
               task: background ? TASK_ID.exec(content)?.[1] ?? asStr(r?.backgroundTaskId) : undefined,
+              output: background ? /Output is being written to: (\S.*?)\.?\s*$/m.exec(content)?.[1] : undefined,
               // Every shell call that ran states its exit, so an error without one never ran: blocked,
               // denied, or unable to spawn (measured over 995 child files, 2026-10-06).
               refused: (!!b.is_error && exit === undefined) || undefined,
@@ -689,6 +692,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   chainWorking(entries: JsonlEntry[]): boolean { return chainWorking(entries) }
 
   sessionAlive(sessionId: string) { return sessionAlive(this.root, sessionId) }
+  // CC writes a record for every running process and removes it on exit, so no live record is final.
+  sessionEnded(sessionId: string) { return !sessionAlive(this.root, sessionId) }
 
   sessionsWorking(_cwd: string) { return workingSessionIds(this.root) }
 

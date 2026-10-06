@@ -167,8 +167,9 @@ export type Event =
   // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.
   // `exit` is a shell call's exit code where the harness states one; `background` marks a result
   // that only says the call went on running, so it stays open until its `task_done`, and `task` is
-  // the id the harness gave that run; `refused` an error from a call that never ran (blocked, denied).
-  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string; exit?: number; background?: boolean; task?: string; refused?: boolean; at?: number }
+  // the id the harness gave that run, `output` the file it writes to; `refused` an error from a call
+  // that never ran (blocked, denied).
+  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string; exit?: number; background?: boolean; task?: string; output?: string; refused?: boolean; at?: number }
   // A background call's end, named by its call `id` or its `task` (CC's task notification, or the
   // agent stopping it), with the file its output went to. Never rendered: the child Status reads it
   // to close the call (TB-Agent-Children.md).
