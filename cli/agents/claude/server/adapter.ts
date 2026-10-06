@@ -5,6 +5,7 @@ import { capText, dataUriImage, firstLineDigest, plural } from '../../core/serve
 import { listJsonlFiles, readHead, readTail } from '../../core/server/sessions.js'
 import { AgentAdapter, type Linker } from '../../core/server/adapter.js'
 import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
+import { asStr } from '../../core/format.js'
 
 // The Claude Code realization of the AgentAdapter contract (TB-Agent-Harness.md, TB-Agent-Mirror.md): everything
 // schema-specific about CC's on-disk transcript — the `uuid`/`parentUuid` tree, the `isSidechain`/
@@ -109,6 +110,7 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
       // session, not the child. That catches a crash, and the CC versions through 2.1.272 whose
       // finished children end with no stop_reason (41 of 574 on disk) and so read as mid-turn.
       running: !!tail.running && (since === undefined || st.mtimeMs >= since),
+      liveSince: since,
       label: meta.description ?? '',
       kind: meta.agentType === DEFAULT_AGENT_TYPE ? undefined : meta.agentType,
       // The id the child's own file records, so every row names its model alike; the caller's alias
@@ -373,6 +375,34 @@ function userTextBlock(b: ContentBlock | undefined): string {
   return b?.type === 'text' && typeof b.text === 'string' ? cleanUserText(b.text) : ''
 }
 
+// A background call's end (TB-Agent-Children.md): CC notes it in a `<task-notification>` naming the
+// call, carried twice (a queued_command and an isMeta turn), so a reader dedupes by id. A Monitor's
+// events name no call and close nothing. The exit code is phrased `(exit code N`, `failed with exit
+// code N`, or `script failed (exit N)`.
+const TASK_NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
+function taskNotices(e: JsonlEntry): Event[] {
+  const text = e.type === 'attachment' && e.attachment?.type === 'queued_command' ? toText(e.attachment.prompt)
+    : e.type === 'user' ? toText(e.message?.content) : ''
+  if (!text.includes('<task-notification>')) return []
+  const out: Event[] = []
+  for (const [, body] of text.matchAll(TASK_NOTICE)) {
+    const id = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(body!)?.[1]
+    const outcome = /<status>([^<]+)<\/status>/.exec(body!)?.[1]
+    if (!id || !outcome || outcome === 'running') continue
+    const exit = /\bexit(?: code)? (\d+)/.exec(/<summary>([\s\S]*?)<\/summary>/.exec(body!)?.[1] ?? '')?.[1]
+    const output = /<output-file>([^<]+)<\/output-file>/.exec(body!)?.[1]
+    out.push({ type: 'task_done', id, outcome, exit: exit === undefined ? undefined : Number(exit), output })
+  }
+  return out
+}
+
+// A result that only says the call went on running: started in the background, moved there at its
+// timeout, or an async agent. Its end comes later, as a task notification, or as the agent's own
+// TaskStop, which writes none. A Monitor is a watch, not work waited on, and expires silently.
+const BACKGROUNDED = /^(Command running in background with ID|Command did not complete within its \d+s timeout and was moved to the background|Async agent launched)/
+const TASK_ID = /\bID: ([A-Za-z0-9]+)/
+const STOP_TOOLS = new Set(['TaskStop', 'KillShell'])
+
 const fmtSize = (n: unknown): string =>
   typeof n !== 'number' ? ''
     : n < 1024 ? `${n}B`
@@ -580,6 +610,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   apply(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
     const delivered = coordinatorMessage(entry)
     if (delivered) return { events: [userEvent(delivered)] }
+    const notices = taskNotices(entry)
+    if (notices.length) return { events: notices }
     if (isHiddenTurn(entry) && !isHandback(entry)) return { events: [] }   // CC's isMeta injections
     const events: Event[] = []
     if (entry.type === 'user') {
@@ -591,7 +623,18 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
         for (const b of content) {
           if (b?.type === 'tool_result') {
             const content = toText(b.content)
-            events.push({ type: 'tool_result', id: b.tool_use_id ?? '', content, isError: !!b.is_error, digest: toolResultDigest(entry.toolUseResult, content) })
+            const exit = b.is_error ? /^Exit code (\d+)/.exec(content)?.[1] : undefined
+            const r = entry.toolUseResult as { backgroundTaskId?: unknown } | undefined
+            const background = BACKGROUNDED.test(content) || (!!r && typeof r === 'object' && !!r.backgroundTaskId)
+            events.push({
+              type: 'tool_result', id: b.tool_use_id ?? '', content, isError: !!b.is_error, digest: toolResultDigest(entry.toolUseResult, content),
+              exit: exit === undefined ? undefined : Number(exit),
+              background: background || undefined,
+              task: background ? TASK_ID.exec(content)?.[1] ?? asStr(r?.backgroundTaskId) : undefined,
+              // Every shell call that ran states its exit, so an error without one never ran: blocked,
+              // denied, or unable to spawn (measured over 995 child files, 2026-10-06).
+              refused: (!!b.is_error && exit === undefined) || undefined,
+            })
           } else {
             const text = userTextBlock(b) || blockToMarkdown(b)
             if (text) events.push(userEvent(text))
@@ -622,6 +665,14 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
         const ts = Date.parse(entry.timestamp ?? '')
         const live = !isNaN(ts) && ts >= sessionStartMs
         events.push({ type: 'assistant', text, thinking, tools, live, error: entry.isApiErrorMessage || undefined })
+      }
+      // The turn ends on a finished reply, or from 2.1.289 on the agent's own SubagentHandback call
+      // (the rule chainWorking reads). Through 2.1.284 a handback was followed by a closing reply, so a
+      // reader counts one per turn.
+      if (entry.message?.stop_reason === 'end_turn' || tools.some(t => t.name === 'SubagentHandback')) events.push({ type: 'turn_end' })
+      for (const t of tools) if (STOP_TOOLS.has(t.name)) {
+        const task = asStr(t.input.task_id) ?? asStr(t.input.shell_id)
+        if (task) events.push({ type: 'task_done', task, outcome: 'stopped' })
       }
       const usageRaw = entry.message?.usage ?? entry.usage
       const usage: TokenCounts | undefined = usageRaw && {

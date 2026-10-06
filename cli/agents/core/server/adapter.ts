@@ -139,12 +139,6 @@ export abstract class AgentAdapter<E = unknown> {
    */
   listChildren?(cwd: string, sessionId: string): ChildTranscript[]
   /**
-   * Whether a child's brief reaches its transcript in the clear. A child's Status is judged against
-   * its brief (TB-Agent-Children.md), so a harness that encrypts it (Codex) has none: no status link
-   * in the agents menu, and `typebulb status` refuses.
-   */
-  readonly childBriefs: boolean = true
-  /**
    * The session the CURRENT process runs in, read from the env the harness gives its shells, so
    * `typebulb status` finds the calling orchestrator's own children before anyone else's. Optional:
    * absent or undefined, the newest session with a match answers instead.

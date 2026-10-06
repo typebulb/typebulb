@@ -24,3 +24,34 @@ export function sortByKeys<T>(array: T[], ...keys: SortKey<T>[]): T[] {
 }
 
 export const orderByDescending = <T>(array: T[], key: (item: T) => unknown) => sortByKeys(array, { key, desc: true })
+
+// Order by ANCESTRY, not by recency alone (TB-Agent-Children.md): each agent is followed immediately
+// by the agents it spawned, and siblings keep the list's order among themselves. Indentation is the
+// only thing on a row that says who spawned it, so a nested row separated from its parent by an
+// unrelated agent reads as that agent's child — which is how it was first reported, a depth-2 agent
+// sitting under a sibling it had nothing to do with. mtime alone cannot express this: a child is
+// almost always newer than its parent, so the two orderings fight.
+export function byAncestry<T extends { id: string; parentId?: string }>(list: T[]): T[] {
+  const present = new Set(list.map(c => c.id))
+  const byParent = new Map<string, T[]>()
+  for (const c of list) {
+    // A row whose parent is not in this list is a top-level row: its parent's transcript is gone, or
+    // it is a depth-1 agent, whose parent is the session itself.
+    const key = c.parentId && present.has(c.parentId) ? c.parentId : ''
+    const bucket = byParent.get(key)
+    if (bucket) bucket.push(c); else byParent.set(key, [c])
+  }
+  const out: T[] = []
+  const seen = new Set<string>()
+  const walk = (key: string) => {
+    for (const c of byParent.get(key) ?? []) {
+      if (seen.has(c.id)) continue                    // a malformed parent cycle
+      seen.add(c.id)
+      out.push(c)
+      walk(c.id)
+    }
+  }
+  walk('')
+  for (const c of list) if (!seen.has(c.id)) out.push(c)   // a cycle's members still belong in the list
+  return out
+}

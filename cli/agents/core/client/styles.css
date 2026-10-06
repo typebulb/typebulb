@@ -1202,9 +1202,8 @@ a.server-port:hover { text-decoration: underline; }
 .children-pill { padding: 0 .3rem; }
 .children-pill:not(.glyph) .glyph-img:first-child { margin-right: .12rem; }
 .children-pill:not(.glyph) .glyph-img:last-child { margin-left: .12rem; }
-/* The model cell carries effort too; a harness with a Status link (Codex has none) needs its width. */
-.children-pop { width: min(540px, calc(100vw - 2rem)); }
-.children-pop.with-status { width: min(600px, calc(100vw - 2rem)); }
+/* The model cell carries effort too, and every row ends in its Status link. */
+.children-pop { width: min(600px, calc(100vw - 2rem)); }
 .children-row.viewing .children-label { color: var(--accent); }
 /* One dot carries the state: still working (the fold-marker green), finished (dim), killed by the
    user (warn). Green because running is the LIVE-APP axis, the same one the launcher's running
@@ -1887,67 +1886,61 @@ a.agent-name:hover { text-decoration: underline; }
    above, minus its row shape and cursor — this one is a label, not a toggle. */
 .no-prose { color: var(--muted); font-size: .85rem; font-style: italic; padding: .15rem 0; }
 
-/* A child's Status view (childStatusView.ts): the parent's request, then the task table. Status reads
-   by colour on the existing roles; anything unusual is --warn, the mirror's amber. */
-/* The request bubble, then the table under it. */
-.child-status > .bubble.user { margin: .5rem auto .9rem; }
-/* The closing facts a delegator acts on, label column then value, just above the view's two actions. */
-.child-status-head { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 1.4rem 0 .2rem; }
-.child-status-fact { display: contents; }
-.child-status-label { color: var(--muted); white-space: nowrap; }
-.child-status-value { overflow-wrap: anywhere; }
-.child-status-value.tests-red { color: var(--err); }
-.child-status-value.tests-green { color: var(--diff-add); }
-.child-status-value.warn { color: var(--warn); }
-/* The files it edited, one small muted line each: reference, not a headline. */
-.child-status-edited { margin-top: 1rem; font-size: .85rem; color: var(--muted); }
-.child-status-edited .child-status-label { display: block; margin-bottom: .2rem; }
-.child-status-edited .cs-file { overflow-wrap: anywhere; }
-.child-status-edited a { cursor: pointer; color: var(--accent); }
-/* A path stays muted with the list and lights on hover, like the agents menu's status link. */
-.child-status-edited .cs-file a { color: inherit; }
-.child-status-edited .cs-file a:hover { color: var(--accent); text-decoration: underline; }
-/* Under the table, centred: a failed call's retry, then the view's actions. */
+/* A child's Status view (childStatusView.ts): header, figures, the Now callout, then commands and
+   files as tables. Pills carry outcomes in the roles' own colours; anything wrong is --warn amber. */
+.cs-header { padding: 1.2rem 0 .2rem; }
+.cs-title { display: flex; align-items: center; gap: .6rem; font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
+.cs-title .children-dot { width: 10px; height: 10px; }
+.cs-subtitle { color: var(--muted); margin-top: .2rem; padding-left: calc(10px + .6rem); }
+/* The figures: equal tiles on one row, wrapping on a narrow pane. */
+.cs-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: .6rem; margin-top: 1rem; }
+.cs-tile { background: var(--veil); border-radius: 8px; padding: .6rem .8rem; }
+.cs-tile-value { font-size: 1.35rem; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.cs-tile-label { color: var(--muted); }
+.cs-tile-sub { color: var(--muted); font-size: .9rem; }
+.cs-tile.bad .cs-tile-value { color: var(--err); }
+/* Now: what it is waiting on, set apart by an accent rule; amber when a call was interrupted. */
+.cs-now { display: flex; gap: .9rem; align-items: baseline; margin-top: 1rem; padding: .6rem .9rem; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cs-now.quiet { border-left-color: var(--border); background: var(--veil); color: var(--muted); }
+.cs-now.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.cs-now-label { font-weight: 600; color: var(--fg); flex: none; }
+.cs-now-rows { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.cs-now-row { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.cs-section { margin-top: 1.6rem; }
+.cs-h { font-weight: 600; margin-bottom: .4rem; }
+.cs-count { color: var(--muted); font-weight: 400; margin-left: .6rem; }
+.cs-more { color: var(--muted); padding: .4rem .5rem; }
+/* Under the tables, centred: a failed read, then the view's actions. */
 .child-status-foot { display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 0 1.75rem; }
-/* Baseline, not the default stretch: a shimmering item has its own line-height (.shimmer-text), and
-   top-aligned boxes of different line-heights put their text at different heights. */
 .child-status-actions { display: flex; align-items: baseline; gap: 1.4rem; }
 .child-status-actions a { cursor: pointer; color: var(--accent); }
 .child-status-actions a:hover { text-decoration: underline; }
-.child-status-actions .current { color: var(--muted); }
 .child-status-note { color: var(--muted); font-size: .9rem; font-style: italic; }
-/* Every working text in this view is centred, like the status line under the table. */
 .child-status-pending { text-align: center; color: var(--muted); padding: .3rem 0; }
 .child-status-note.err { color: var(--err); }
-.child-status-note a { cursor: pointer; color: var(--accent); }
-.cs-table { width: 100%; border-collapse: collapse; }
-.cs-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: .9rem; padding: .3rem .5rem; border-bottom: 1px solid var(--border); }
-.cs-table td { padding: .5rem; vertical-align: top; border-bottom: 1px solid var(--border); }
-.cs-table td:first-child { width: 34%; }
-.cs-status { white-space: nowrap; font-weight: 600; color: var(--muted); }
-.cs-status.in_progress { color: var(--accent); }
-.cs-status.done { color: var(--diff-add); }
-.cs-status.blocked { color: var(--err); }
-.cs-status.off { color: var(--warn); }
-.cs-off td:first-child { color: var(--warn); }
-.cs-note { color: var(--warn); padding-top: .2rem; }
-.cs-cite { color: var(--muted); font-size: .9rem; }
-.cs-cite a { cursor: pointer; color: var(--muted); text-decoration: underline dotted; }
-.cs-cite a:hover { color: var(--accent); }
-.cs-time { white-space: nowrap; color: var(--muted); }
-/* The timeline cell: a fixed track standing for the child's whole run, the row's stretches on it. */
-.cs-gantt-cell { display: flex; align-items: center; gap: .5rem; }
-.cs-gantt { position: relative; width: 140px; height: 10px; flex: none; border-radius: 3px; background: var(--veil); }
-.cs-seg { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; background: var(--muted); }
-.cs-seg.in_progress { background: var(--accent); }
-.cs-seg.done { background: var(--diff-add); }
-.cs-seg.blocked { background: var(--err); }
-.cs-seg.off { background: var(--warn); }
-/* A wake (the child was messaged and resumed): a hairline across the track, above the segments. */
-.cs-wake { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--fg); opacity: .45; }
-.cs-mins { min-width: 2.2rem; text-align: right; }
-/* A follow-up's bubble spans its row, so the columns under it stay aligned with the rest. */
-.cs-table .cs-group td { padding: 1.2rem 0 .6rem; border-bottom: 0; }
+/* Fixed layout, so a long command or output line ellipsizes instead of widening its column. */
+.cs-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.cs-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: .9rem; padding: .35rem .6rem; border-bottom: 1px solid var(--border); }
+.cs-table td { padding: .55rem .6rem; vertical-align: top; border-bottom: 1px solid var(--border); }
+.cs-table tbody tr:hover { background: var(--veil); }
+.cs-col-cmd { width: 32%; } .cs-col-runs { width: 5.5rem; } .cs-col-latest { width: 14rem; } .cs-col-file { width: 45%; }
+.cs-mono { font: .9rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.cs-table .cs-mono { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cs-out { color: var(--muted); }
+.cs-dim { color: var(--muted); }
+.cs-bad { color: var(--warn); }
+/* A command or open call cites its call, and a file opens in the editor: text that lights on hover. */
+.cs-link { cursor: pointer; color: inherit; }
+.cs-link:hover { color: var(--accent); text-decoration: underline; }
+.cs-latest { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .5rem; }
+.cs-pill { display: inline-block; padding: 0 .5rem; border-radius: 999px; font-size: .9rem; line-height: 1.5; white-space: nowrap; background: var(--veil); color: var(--muted); }
+.cs-pill.ok { color: var(--diff-add); background: color-mix(in srgb, var(--diff-add) 14%, transparent); }
+.cs-pill.bad { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+.cs-pill.run { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cs-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+.cs-chip { padding: 0 .5rem; border-radius: 6px; background: var(--veil); white-space: nowrap; }
+.cs-blind { margin-top: .35rem; padding-left: .5rem; border-left: 2px solid var(--warn); color: var(--warn); }
 /* The agents menu's per-row way straight into a child's Status view. The figures before it read
    farther apart than the row gap, from the slack in their min-width boxes; the margin matches that. */
 .children-status-link { flex: none; margin-left: 1.2rem; color: var(--muted); cursor: pointer; }
@@ -1955,10 +1948,6 @@ a.agent-name:hover { text-decoration: underline; }
 /* Its tip opens beside the link, on one line no taller than the row: the list scrolls, so a tip
    above the top row is clipped. */
 .children-status-link[data-tip]::after { top: 50%; bottom: auto; right: calc(100% + .5rem); transform: translateY(-50%); max-width: 27rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Judged and waiting to be opened: the mirror's "something new here" green, on the link and on the
-   pill, so it is seen with the menu closed. A failed judgement reads as an error and retries on click. */
-.children-status-link.ready, .children-pill.status-ready { color: var(--fold-marker); }
-.children-status-link.failed { color: var(--err); }
 /* A citation's landing row, marked briefly so the eye finds it. */
 .tool.revealed { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; transition: outline-color 1s; }
 

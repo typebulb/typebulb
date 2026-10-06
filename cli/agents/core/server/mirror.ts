@@ -6,9 +6,9 @@ import { InlineStatusDedup } from './inlineStatusLog.js'
 import { git, repoRoot } from './git.js'
 import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
-import { summarizeProse, childStatusPart } from './summarize.js'
+import { summarizeProse } from './summarize.js'
 import { entryEvents, sessionLive as sessionLiveOf, childState, transcriptIndex, type TranscriptIndex } from './transcript.js'
-import { judgeChild } from './childReport.js'
+import { sessionStatus } from './childReport.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
 import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, Thread, TokenCounts } from '../events.js'
@@ -553,7 +553,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // and, when no supported key is present, explains the small project-.env setup.
     // `children` is the same shape of capability flag as `composer` (TB-Agent-Children.md): static per
     // adapter, so a harness with no children never polls for a list that is always empty.
-    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, children: !!adapter.listChildren, childStatus: !!adapter.listChildren && adapter.childBriefs, elsewhere: await sessionsElsewhere() }
+    return { cwd: state.cwd, pid: process.pid, composer: !!adapter.createDriver, children: !!adapter.listChildren, elsewhere: await sessionsElsewhere() }
   }
 
   // Wrong-cwd diagnosis (TB-Agent-Mirror.md): zero sessions for this cwd while an ancestor INSIDE
@@ -810,19 +810,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return summarizeProse(String(text ?? ''), String(userPrompt ?? ''))
   }
 
-  // A child's Status view: a plan call per parent message, or a status call over the work log. Same
-  // licence as summarizeTurn: the open view is the request, and nothing here touches the transcript.
-  async function childStatus(kind: string, payload: unknown) {
-    return childStatusPart(kind === 'status' ? 'status' : 'plan', payload)
-  }
-
-  // The agents menu's status link: a child judged here, without swapping into it, so the reader goes
-  // on reading while it runs and the view opens on a finished result. Same licence: the click.
-  async function judgeChildStatus(id: string) {
-    const c = adapter.listChildren?.(state.cwd, state.sessionId).find(x => x.id === id)
-    if (!c) return { ok: false, error: 'child not found' }
-    const j = await judgeChild(adapter, { ...c, state: childState(c, sessionLive()) })
-    return { ok: true, plans: Object.fromEntries(j.plans), frozen: Object.fromEntries(j.frozen), judged: j.judged, error: j.error, setup: j.setup, cached: j.cached }
+  // A child's Status view: its report, counted from the session's transcripts with no model call
+  // (TB-Agent-Children.md), so the open view simply asks again as the child writes.
+  async function childStatus(id: string) {
+    const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
+    const live = sessionLive()
+    const { reports } = sessionStatus(adapter, state.cwd, { sessionId: state.sessionId, live, children: kids.map(c => ({ ...c, state: childState(c, live) })) })
+    const report = reports.find(r => r.id === id)
+    return report ? { ok: true, report } : { ok: false, error: 'child not found' }
   }
 
   // ── session picker ──
@@ -979,5 +974,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, judgeChildStatus, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, shutdownComposer }
 }

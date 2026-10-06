@@ -66,7 +66,7 @@ typebulb stop --agent          Stop this project's agent mirror; its bulbs keep 
 typebulb stop --global         Stop every running bulb and mirror, all projects (housekeeping)
 typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted bulbs)
 typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
-typebulb status [agent]        A sub-agent's status: request, subtasks, tests, open decisions, files edited (no arg: list them)
+typebulb status [agent]        A sub-agent's status: what it waits on, its commands, files and hand-backs (no arg: the session's overview)
 typebulb --no-watch <file>     Disable hot reload
 typebulb --no-open <file>      Open nothing at launch, not even inside VS Code
 typebulb --mode <name> <file>  Also load .env.<name> on top of .env / .env.local
@@ -322,7 +322,7 @@ The host owns light/dark; you style for both.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except inline. It holds what the bulb ships in order to run (e.g. images), never results.
 - **See what's already running** — `typebulb logs` with no argument lists every running bulb and mirror; check it before launching anything.
-- **Checking on a sub-agent you spawned** — `typebulb status <id or description>` reports where it stands without messaging it: each subtask's progress, its tests, anything it needs decided, and the files it edited. Claude Code only.
+- **Checking on sub-agents you spawned** — `typebulb status` is your session's overview, instant and counted from the transcripts: what is running, failure streaks, and the files to check before `git add`. `typebulb status <id or description>` is one agent's commands, files and hand-backs. Run it before committing, and when a hand-back arrives.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.log(...)`, and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Probe handlers go in the first draft** — the selftest, readback, and set handlers you'll want later: adding one is an edit, and that hot reload destroys the very state you meant to inspect.

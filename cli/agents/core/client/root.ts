@@ -8,7 +8,6 @@ import { MessageList } from './messageList.js'
 import { truncate } from './util.js'
 import { basename } from '../format.js'
 import { armTooltipDismiss } from './ui.js'
-import { childName } from '../events.js'
 import type { ChildRow, ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
 
 // The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
@@ -74,10 +73,7 @@ export class Root extends Component implements IRoot {
     this.#started = true
     armTooltipDismiss()     // one global listener set, so every harness's entry gets it
     this.childrenPill.status.bind({
-      msgs: () => this.messageList.messages,
-      working: () => this.working,
-      name: () => { const c = this.childrenPill.viewing; return c ? childName(c) : '' },
-      cwd: () => this.cwd,
+      id: () => this.childrenPill.viewing?.id,
       onChange: () => this.update(),
       reveal: id => { this.messageList.revealTool(id); this.update() },
     })
@@ -114,7 +110,6 @@ export class Root extends Component implements IRoot {
     this.#elsewhere = i.elsewhere ?? null
     if (this.composer) this.composer.enabled = !!i.composer   // the capability gate (TB-Agent-Composer.md)
     this.childrenPill.enabled = !!i.children                  // same shape of gate (TB-Agent-Children.md)
-    this.childrenPill.statusEnabled = !!i.childStatus
     void this.childrenPill.refresh()
     this.ready = true
     // Take the page's boot overlay off (agents/core/client/index.html). Gated on ready, not on the
@@ -154,6 +149,7 @@ export class Root extends Component implements IRoot {
     this.#polling = true
     const tick = async () => {
       try {
+        const swaps = this.childrenPill.swaps
         const { events, cursor, working, latestModel, child, composer, busy } = await tb.server.poll(this.#cursor)
         this.#cursor = cursor
         for (const e of events) this.apply(e)
@@ -170,15 +166,15 @@ export class Root extends Component implements IRoot {
         this.latestModel = latestModel ?? null
         // Which child the server's tail is on — its answer, not ours, so a reload or a swap made in
         // another mirror page still names the transcript on screen (TB-Agent-Children.md).
-        const childChanged = this.childrenPill.syncFromPoll(child ?? null)
+        const childChanged = this.childrenPill.syncFromPoll(child ?? null, swaps)
         // The composer slice: the panel owns ALL of its change detection (syncFromPoll), including
         // the draft/stats it publishes onto IRoot for MessageList and the token pill. A growing
         // draft re-renders and keeps the sticky-bottom scroll pinned, exactly like a landed event.
         const composerChanged = this.composer && composer ? this.composer.syncFromPoll(composer) : false
         if (events.length || workingChanged || modelChanged || childChanged || composerChanged || busyChanged) this.update()
         if (events.length || composerChanged) this.messageList.scrollSoon()
-        // A quiet tick, so a swap's full re-emit has landed before the Tasks view digests it.
-        if (!events.length && this.childrenPill.viewing) this.childrenPill.status.sync()
+        // An open Status view asks the server again; it throttles itself.
+        if (this.childrenPill.viewing) void this.childrenPill.status.sync()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()

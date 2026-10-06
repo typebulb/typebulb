@@ -11,7 +11,7 @@ export function entryEvents<E>(adapter: AgentAdapter<E>, entry: E, thread: Threa
   const at = Date.parse(adapter.timestampOf(entry) ?? '')
   const events = r.events.map(e => {
     const out = thread === 'child' && e.type === 'user' ? { ...e, authored: true } : e
-    if (!isNaN(at) && (out.type === 'user' || out.type === 'assistant' || out.type === 'tool_result')) out.at = at
+    if (!isNaN(at) && (out.type === 'user' || out.type === 'assistant' || out.type === 'tool_result' || out.type === 'task_done' || out.type === 'turn_end')) out.at = at
     return out
   })
   return { ...r, events }

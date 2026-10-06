@@ -1,10 +1,11 @@
 import { div, span, button } from 'domeleon'
 import { ComboboxPill } from './statusPill.js'
-import { ChildStatusView, type StatusSeed } from './childStatusView.js'
+import { ChildStatusView } from './childStatusView.js'
 import { busyPill, closeChip } from './ui.js'
 import { formatTokens } from './util.js'
 import { formatDuration } from '../format.js'
 import { childName } from '../events.js'
+import { byAncestry } from '../order.js'
 import type { ChildRow } from './types.js'
 
 // Status-bar agents pill (TB-Agent-Children.md): the attached session's child transcripts — the
@@ -12,54 +13,25 @@ import type { ChildRow } from './types.js'
 // while it works, and the pill then wears its identity with an × to return (the git-diff pill's
 // shape). Presence is the signal: a session that spawned nothing shows no pill at all. Claude and
 // Codex have children; elsewhere the capability flag is false and none of this renders.
-// Order by ANCESTRY, not by recency alone: each agent is followed immediately by the agents it
-// spawned, and siblings keep the list's newest-last order among themselves. Indentation is the only
-// thing on a row that says who spawned it, so a nested row separated from its parent by an unrelated
-// agent reads as that agent's child — which is how it was first reported, a depth-2 agent sitting
-// under a sibling it had nothing to do with. mtime alone cannot express this: a child is almost
-// always newer than its parent, so the two orderings fight (TB-Agent-Children.md says the same of
-// the session picker, and keeps children out of it for exactly that reason).
-export function byAncestry(list: ChildRow[]): ChildRow[] {
-  const present = new Set(list.map(c => c.id))
-  const byParent = new Map<string, ChildRow[]>()
-  for (const c of list) {
-    // A row whose parent is not in this list is a top-level row: its parent's transcript is gone, or
-    // it is a depth-1 agent, whose parent is the session itself.
-    const key = c.parentId && present.has(c.parentId) ? c.parentId : ''
-    const bucket = byParent.get(key)
-    if (bucket) bucket.push(c); else byParent.set(key, [c])
-  }
-  const out: ChildRow[] = []
-  const seen = new Set<string>()
-  const walk = (key: string) => {
-    for (const c of byParent.get(key) ?? []) {
-      if (seen.has(c.id)) continue                    // a malformed parent cycle
-      seen.add(c.id)
-      out.push(c)
-      walk(c.id)
-    }
-  }
-  walk('')
-  for (const c of list) if (!seen.has(c.id)) out.push(c)   // a cycle's members still belong in the list
-  return out
-}
 
 export class ChildrenPill extends ComboboxPill<ChildRow> {
   children: ChildRow[] = []
   enabled = false                 // info().children — the adapter capability gate; no list, no polling
-  statusEnabled = false           // info().childStatus — briefs are readable, so a child has a Status
   // The open child. Resolved from poll's `child` rather than held locally: the server owns which file
   // it drains, so a reload finds the pill wearing what is actually on screen.
   viewing: ChildRow | null = null
-  // The open child's Status view (public, so domeleon discovers it). A row's status link judges the
-  // child on the server while the reader carries on, shimmering; lime means ready, and a click then
-  // opens the view on that result at once. The row itself opens the transcript.
+  // The open child's Status view (public, so domeleon discovers it). A row's status link opens it;
+  // the row itself opens the transcript.
   status = new ChildStatusView()
-  #links = new Map<string, { state: 'busy' } | { state: 'ready'; seed: StatusSeed } | { state: 'failed'; error: string }>()
   // The rows' order as the menu opened. Running agents write constantly, so ordering by recency
   // while it is open moved rows out from under the pointer; it re-sorts on the next open.
   #order: string[] = []
   #viewingId: string | null = null
+  // Bumped as a swap starts and as it lands. A poll answer sent before then names the child the
+  // server was on before the swap, and applied after it, it flipped an opening Status view back to
+  // the transcript for a tick.
+  #swaps = 0
+  get swaps() { return this.#swaps }
   protected keepOpenSelector = '.children-wrap'
   protected filterId = 'children-filter'
   protected listSelector = '.children-list'
@@ -103,9 +75,11 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     } catch (err) { console.error('[mirror] listChildren failed', err) }
   }
 
-  // Root hands us poll's `child` every tick. Returns whether the open child changed, so Root can
-  // repaint on a swap this tab didn't make (a second mirror page, or a reload landing mid-child).
-  syncFromPoll(id: string | null): boolean {
+  // Root hands us poll's `child` every tick, with `swaps` as it stood when the poll was sent. Returns
+  // whether the open child changed, so Root can repaint on a swap this tab didn't make (a second
+  // mirror page, or a reload landing mid-child).
+  syncFromPoll(id: string | null, swaps: number): boolean {
+    if (swaps !== this.#swaps) return false
     const before = this.viewing?.id ?? null
     this.#viewingId = id
     this.#resolveViewing()
@@ -117,7 +91,6 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   // session, so leaving them up until the lazy tick shows another session's agents under this one.
   reset() {
     this.children = []
-    this.#links.clear()
     void this.refresh()
   }
 
@@ -125,46 +98,29 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     this.viewing = this.#viewingId ? this.children.find(c => c.id === this.#viewingId) ?? null : null
   }
 
-  // `seed` opens the Status view on a result already judged; without one, the transcript.
-  async openChild(id: string, seed?: StatusSeed) {
+  // `status` opens the child on its Status view; without it, the transcript.
+  async openChild(id: string, status = false) {
     this.close()
     this.parent.messageList.stickToBottomNextRender()   // land at the child's tail, not the old scroll
+    this.#swaps++
     try {
       await tb.server.openChild(id)
+      this.#swaps++
       this.#viewingId = id                             // the poll confirms; this is just the same tick
       this.#resolveViewing()
-      this.status.show(!!seed, seed)
+      this.status.show(status)
       this.update()
     } catch (err) { console.error('[mirror] openChild failed', err) }
     void this.refresh()
   }
 
-  // Ready opens, and spends the result: a later visit judges afresh. Anything else (re)starts the
-  // judging, which a failure retries only on this click. A result that needed no call (the child has
-  // not moved since it was last judged) opens at once: green only ever means "the wait is over".
-  async #statusLink(c: ChildRow) {
-    const link = this.#links.get(c.id)
-    if (link?.state === 'busy') return
-    if (link?.state === 'ready') { this.#links.delete(c.id); return this.openChild(c.id, link.seed) }
-    this.#links.set(c.id, { state: 'busy' })
-    this.update()
-    try {
-      const r = await tb.server.judgeChildStatus(c.id)
-      if (r?.ok && !r.error && r.cached) { this.#links.delete(c.id); return this.openChild(c.id, { plans: r.plans, frozen: r.frozen, judged: r.judged }) }
-      this.#links.set(c.id, r?.ok && !r.error
-        ? { state: 'ready', seed: { plans: r.plans, frozen: r.frozen, judged: r.judged } }
-        : { state: 'failed', error: r?.error ?? 'could not judge' })
-    } catch { this.#links.set(c.id, { state: 'failed', error: 'could not judge' }) }
-    this.update()
-  }
-
-  get #anyReady() { return [...this.#links.values()].some(l => l.state === 'ready') }
-
   async closeChild() {
     this.parent.messageList.stickToBottomNextRender()
     this.status.open = false
+    this.#swaps++
     try {
       await tb.server.closeChild()
+      this.#swaps++
       this.#viewingId = null
       this.#resolveViewing()
       this.update()
@@ -196,7 +152,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   chip(n: number) {
     const running = this.running
     return button({
-      class: ['pill', 'children-pill', busyPill(running > 0), this.open ? 'on' : '', this.#anyReady ? 'status-ready' : ''],
+      class: ['pill', 'children-pill', busyPill(running > 0), this.open ? 'on' : ''],
       'data-tip': running
         ? `${running} of ${n} agent${n === 1 ? '' : 's'} still working — open one`
         : `${n} agent${n === 1 ? '' : 's'} this session spawned — open one`,
@@ -216,7 +172,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
     return button({
         // Still running shimmers the pill through busyPill, as the chip and every other pill do. A
         // "working" word beside the label said the same thing twice and cost width its neighbours need.
-        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on', busyPill(c.state === 'running'), this.#anyReady ? 'status-ready' : ''],
+        class: ['pill', 'glyph', 'children-pill', 'viewing', 'on', busyPill(c.state === 'running')],
         'data-tip': `${n} agent${n === 1 ? '' : 's'} — switch`,
         onClick: (e: MouseEvent) => { e.stopPropagation(); this.open ? this.close() : this.show() },
       },
@@ -230,7 +186,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
 
   popup() {
     const rows = this.rows()
-    return div({ class: ['servers-pop', 'children-pop', this.statusEnabled ? 'with-status' : ''] },
+    return div({ class: ['servers-pop', 'children-pop'] },
       rows.length === 0
         ? this.emptyState('No agents in this session yet.')
         : div({ class: 'children-list', onScroll: () => this.onListScroll() }, rows.map((c, i) => this.row(c, i))),
@@ -260,20 +216,11 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
       // A failing child's count is whatever it reached before; that it is failing is the news.
       c.failing ? span({ class: 'children-tokens failing', title: 'Its latest reply is an API error, not the model\'s' }, 'error')
         : span({ class: 'children-tokens' }, c.tokens ? formatTokens(c.tokens) : ''),
-      this.statusEnabled ? this.#statusLinkView(c) : null,
+      span({
+        class: 'children-status-link',
+        'data-tip': 'Where this agent stands: what it is waiting on, its commands, files and hand-backs',
+        onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id, true) },
+      }, 'status'),
     )
-  }
-
-  #statusLinkView(c: ChildRow) {
-    const link = this.#links.get(c.id)
-    const tip = !link ? 'Where this agent stands on each task (a few cheap model calls)'
-      : link.state === 'busy' ? 'Working out where it stands…'
-      : link.state === 'ready' ? 'Ready: open its status'
-      : `${link.error}. Click to retry`
-    return span({
-      class: ['children-status-link', link?.state === 'busy' ? 'shimmer-text shimmer-slow' : link?.state ?? ''],
-      'data-tip': tip,
-      onClick: (e: MouseEvent) => { e.stopPropagation(); void this.#statusLink(c) },
-    }, 'status')
   }
 }

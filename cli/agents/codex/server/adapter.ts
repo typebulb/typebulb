@@ -391,12 +391,13 @@ function toUnifiedDiff(patch: string): { files: string[]; diff: string } {
 // verdict line (or a non-zero exit) is the error flag; the digest is the first body line as for
 // CC's Bash, `N lines` for a read, the ± count for a landed patch, `running (cell N)` for a
 // background cell. Anything unwrapped (a function_call's) passes through.
-function execResult(raw: string, call: PendingCall | undefined): { content: string; isError: boolean; digest: string } {
+function execResult(raw: string, call: PendingCall | undefined): { content: string; isError: boolean; digest: string; exit?: number } {
   const m = /^Script (completed|failed|running with cell ID (\d+))\nWall time [^\n]*\nOutput:\n([\s\S]*)$/.exec(raw)
   if (!m) return { content: raw, isError: false, digest: firstLineDigest(raw) }
   let body = m[3].replace(/^\n+/, '').replace(/^Script error:\n/, '')
   let isError = m[1] === 'failed'
   const env = envelope(body)
+  const exit = env?.exit_code
   if (env) {
     body = env.output
     if (env.exit_code) isError = true
@@ -404,7 +405,7 @@ function execResult(raw: string, call: PendingCall | undefined): { content: stri
   if (m[2]) return { content: body, isError, digest: `running (cell ${m[2]})` }
   if (call?.kind === 'read' && !isError) return { content: body, isError, digest: plural(lineCount(body), 'line') }
   if (call?.kind === 'patch' && !isError) return { content: call.digest, isError, digest: call.digest }   // the digest IS the result — the card shows nothing more
-  return { content: body, isError, digest: firstLineDigest(body) }
+  return { content: body, isError, digest: firstLineDigest(body), exit }
 }
 
 // exec_command's result object, when the script printed it whole.
@@ -444,8 +445,6 @@ const ABANDONED_MS = 120_000
 
 export class CodexAdapter extends AgentAdapter<CodexEntry> {
   readonly displayName = 'Codex Mirror'
-  // Codex encrypts every message a parent sends its agents (TB-Agent-Children-Codex.md).
-  override readonly childBriefs = false
 
   // File-scoped ordinal ids (Invariant 2): the chain is linear, so id = drain order and parent =
   // the previously stamped entry. Monotonic and never reset — the engine clears its entry map on
@@ -755,13 +754,15 @@ export class CodexAdapter extends AgentAdapter<CodexEntry> {
       return { events }
     }
     if (e.type === 'event_msg') {
-      // Render-twins (user_message / agent_message) and turn boundaries produce NO events
-      // (Invariant 5) — they serve chainWorking and the title. token_count carries the usage.
+      // Render-twins (user_message / agent_message) produce NO events (Invariant 5) — they serve
+      // chainWorking and the title. token_count carries the usage; a turn's end is the child
+      // Status's hand-back, never rendered.
       if (p.type === 'token_count') {
         const u = p.info?.last_token_usage
         if (!u) return { events }
         return { events, usage: usageCounts(u) }
       }
+      if (p.type === 'task_complete') events.push({ type: 'turn_end' })
       return { events }
     }
     if (e.type === 'turn_context') return { events, model: p.model }   // native model, read-only

@@ -1,400 +1,188 @@
-// A child's Status (TB-Agent-Children.md), the logic without the view: the digest of its transcript
-// the status call reads, the rows and facts built from the calls' answers, the files it edited, and
-// the plain text the orchestrating agent reads. Pure and harness-neutral, so the mirror's Status view
-// and `typebulb status` build one report from one code path.
-import type { Event } from './events.js'
-import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi, MORE_LINES } from './format.js'
+// A child's Status (TB-Agent-Children.md): facts counted from its transcript, with no model call. The
+// digest is a function of the transcript alone; the report adds what the file can't say (its state,
+// the session's other agents), and the text adds the clock. Pure and harness-neutral, so the mirror's
+// view and `typebulb status` print one report from one code path.
+import { childName, type Event, type ChildRow } from './events.js'
+import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
 
-const RECENT = 30              // the newest steps keep full detail; "where it is now" lives there
-const LONG_STEP_MS = 3 * 60_000
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
-const EXPLORE = new Set(['Read', 'Grep', 'Glob'])
-// A command that runs a test suite: the last one's result is the child's red or green.
-const TEST_CMD = /\b(vitest|jest|pytest|mocha|playwright test|go test|cargo test|dotnet test|(?:npm|pnpm|yarn|bun)(?: run)? test)\b/
+const COMMANDS_SHOWN = 5
 
-export interface Plan { request: string; subtasks: string[] }
-export interface Row { id: number; status: string; did: string; note: string; steps: [number, number?][]; evidence: [number, number?][] }
-interface OffRow { what: string; note: string; steps: [number, number?][] }
-export interface Status { now: string; decision: string; rows: Row[]; offBrief: OffRow[] }
-// A status as judged: its payload's key, and how many steps and parent follow-ups it saw. Fewer
-// follow-ups than the transcript holds means the parent has spoken since, and what it said before
-// may already be answered.
-export interface Judged { key: string; data: Status; steps: number; followups: number; at: number }
-// The last test run: red when it failed, green when its counts say so, unknown when it said nothing.
-// `ms` is how long the call took, call to result: the whole command, startup and all.
-export interface TestRun { n: number; state: 'red' | 'green' | 'unknown'; line: string; ms?: number }
-// The transcript as the digest reads it: the mirror's own messages satisfy this, and `msgsOf` builds
-// it from the event stream where no mirror is running.
-export interface StatusTool { id: string; name: string; input: Record<string, unknown>; result?: string; isError: boolean; digest?: string; at?: number; doneAt?: number }
-export interface StatusMsg { role: 'user' | 'assistant' | 'fork'; text: string; tools: StatusTool[]; agent?: { from: string }; at?: number }
-// `parts` are the step's stretches on the child's active timeline; `wall` their total.
-export interface Step { n: number; tool: StatusTool; wall: number; parts: Span[] }
-// One line of the table, computed once and read by both the table and the copy text.
-export type Line =
-  | { kind: 'group'; request: string; idx: number }
-  | { kind: 'row'; num?: number; title: string; status: string; did: string; note: string; steps: [number, number?][]; cite: [number, number?][]; ms: number; spans: Span[] }
-// A stretch on the child's timeline, in ms of ACTIVE time from its brief: idle waits for a wake are cut.
-export interface Span { from: number; to: number }
+/** One tool call as the transcript records it. A background call's `doneAt` is the result saying it
+ *  went on running; its end is `endAt`, from the harness's notice. */
+export interface Call {
+  id: string; name: string; input: Record<string, unknown>
+  at?: number; doneAt?: number; endAt?: number
+  result?: string; isError: boolean; exit?: number; background?: boolean; refused?: boolean
+  outcome?: string; output?: string
+}
 export type Digest = ReturnType<typeof childDigest>
 // A file the child changed: by an edit tool, or deleted or renamed through git.
 export interface Edited { path: string; deleted?: boolean; from?: string }
-export type Fact = [label: string, value: string, cls?: string]
+interface Touch { path: string; at: number }
 
 const clip = (s: string, n: number) => { s = stripAnsi(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
-const abridge = (s: string, n: number) => s.length <= n ? s : s.slice(0, n / 2) + '\n[…]\n' + s.slice(-n / 2)
-const firstLine = (s: string) => s.split('\n').find(l => l.trim()) ?? ''
-const lastLine = (s: string) => s.split('\n').reverse().find(l => l.trim()) ?? ''
-// Shell preamble that says nothing about the step.
+// Shell preamble that says nothing about the command.
 const stripBoiler = (s: string) => s.replace(/^(\s*(cd\s+\S+|export\s+PATH=\S+)\s*(;|&&)\s*)+/, '')
-// "Bash: node build.mjs", the step as the log and the counted facts both name it.
-const stepLabel = (t: StatusTool, n: number) => `${toolDisplayName(t.name)}: ${clip(stripBoiler(toolSummary(t.input)), n)}`
-// The shell command a step ran, whatever its tool is called, and how long its call took.
-const commandOf = (t: StatusTool) => asStr(t.input?.command) ?? asStr(t.input?.cmd)
-const ranMs = (t: StatusTool) => t.at !== undefined && t.doneAt !== undefined ? t.doneAt - t.at : undefined
-export const statusLabel = (status: string) => status === 'off' ? 'off brief' : status.replace('_', ' ')
-export const inRanges = (n: number, ranges: [number, number?][]) => ranges.some(([a, b]) => n >= a && n <= (b ?? a))
+const commandOf = (c: Call) => asStr(c.input?.command) ?? asStr(c.input?.cmd)
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-// A child whose brief never reaches its transcript in the clear (Codex encrypts it): nothing to plan,
-// so no calls, and the report keeps only what is counted.
-export const NO_BRIEF = 'No readable brief on record, so no subtasks to judge.'
-
-// A result as the log shows it: the adapter's one-line digest, clipped around its more-lines marker,
-// which is what tells a listing's first row from an answer. A command's output keeps its last line
-// too, where a total or a test count lands.
-function shown(t: StatusTool, n: number): string {
-  const digest = t.digest ?? ''
-  const more = MORE_LINES.exec(digest)?.[0] ?? ''
-  const head = clip(digest.slice(0, digest.length - more.length), n) + more
-  const last = more && commandOf(t) ? clip(lastLine(t.result ?? ''), n) : ''
-  return last ? `${head}, last: ${last}` : head
+const label = (c: Call) => {
+  const cmd = commandOf(c)
+  if (cmd) return clip(stripBoiler(cmd), 100)
+  const what = clip(toolSummary(c.input), 80)
+  return what ? `${toolDisplayName(c.name)}: ${what}` : toolDisplayName(c.name)
 }
 
-/** The event stream as the digest's messages: the mirror's own reduction (consecutive sends fold into
- *  one, a hand-back stays its own turn), for a report built where no mirror page is open. */
-export function msgsOf(events: Event[]): StatusMsg[] {
-  const out: StatusMsg[] = []
+/** The child's calls, turn ends and time, from its events. Pure: time runs to its last entry, never
+ *  to the clock, so a cached digest still fits an unchanged file. */
+export function childDigest(events: Event[]) {
+  let calls: Call[] = [], byId = new Map<string, Call>(), byTask = new Map<string, Call>()
+  let wakes: number[] = [], activity: number[] = [], turnEnds: number[] = []
+  let origin: number | undefined, ended = false, lastAt = 0
   for (const e of events) {
-    if (e.type === 'cleared') out.length = 0
-    else if (e.type === 'user') {
-      const prev = out.at(-1)
-      if (prev?.role === 'user' && !e.agent && !prev.agent) prev.text += '\n\n' + e.text
-      else out.push({ role: 'user', text: e.text, tools: [], agent: e.agent, at: e.at })
+    if (e.type === 'cleared') {
+      calls = []; byId = new Map(); byTask = new Map(); wakes = []; activity = []; turnEnds = []; origin = undefined; ended = false
+      continue
+    }
+    const at = 'at' in e ? e.at : undefined
+    if (at !== undefined) lastAt = Math.max(lastAt, at)
+    if (e.type === 'user') {
+      if (origin === undefined && !e.agent) origin = at
+      else if (at !== undefined) wakes.push(at)
+      ended = false
     } else if (e.type === 'assistant') {
-      out.push({ role: 'assistant', text: e.text, tools: e.tools.map(t => ({ ...t, isError: false, at: e.at })), at: e.at })
-    } else if (e.type === 'tool_result') {
-      const t = out.flatMap(m => m.tools).find(x => x.id === e.id)
-      if (t) { t.result = e.content; t.isError = e.isError; t.digest = e.digest; t.doneAt = e.at }
-    }
-  }
-  return out
-}
-
-/** The child's messages from its parent and its work, digested for the status call. Pure, and a
- *  function of the transcript alone: time runs to its last entry, never to the clock, so the same
- *  transcript always digests to the same payload and a cached status still fits it. */
-export function childDigest(msgs: StatusMsg[]) {
-  let brief = ''
-  const followups: string[] = []
-  const steps: Step[] = []
-  const lines: string[] = []
-  const say: { after: number; line: string }[] = []
-  let end = 0
-  for (const m of msgs) {
-    end = Math.max(end, m.at ?? 0, ...m.tools.map(t => t.doneAt ?? t.at ?? 0))
-    if (m.role === 'fork') continue
-    if (m.role === 'user') {
-      if (m.agent) { say.push({ after: steps.length, line: 'REPORT FROM ITS OWN SUB-AGENT: ' + abridge(m.text, 1500) }); continue }
-      if (!brief) { brief = m.text; continue }
-      followups.push(m.text)
-      say.push({ after: steps.length, line: `FOLLOW-UP FROM PARENT: ${abridge(m.text, 1500)}` })
-      continue
-    }
-    if (m.text) say.push({ after: steps.length, line: 'AGENT SAYS: ' + abridge(m.text, 1500) })
-    for (const t of m.tools) {
-      steps.push({ n: steps.length + 1, tool: t, wall: 0, parts: [] })
-      // A long `message` input is the agent talking (a hand-back, a send): where a report lives.
-      const message = t.input?.message
-      if (typeof message === 'string' && message.length > 200)
-        say.push({ after: steps.length, line: `AGENT SENDS (${toolDisplayName(t.name)}): ${abridge(message, 8000)}` })
-    }
-  }
-  const time = childTimeline(msgs, steps, end)
-  // The last message whole: a final report is the densest line in the log.
-  const last = say.at(-1)
-  if (last && /^AGENT SAYS/.test(last.line)) {
-    const m = [...msgs].reverse().find(x => x.role === 'assistant' && x.text)
-    if (m) last.line = 'AGENT SAYS: ' + abridge(m.text, 8000)
-  }
-
-  const sayAt = new Map<number, string[]>()
-  for (const s of say) sayAt.set(s.after, [...(sayAt.get(s.after) ?? []), s.line])
-  lines.push(...sayAt.get(0) ?? [])
-  const cutoff = steps.length - RECENT
-  for (let i = 0; i < steps.length;) {
-    const s = steps[i]!
-    // A run of 3+ clean reads and searches is one line: exploration rarely carries progress.
-    if (s.n <= cutoff && EXPLORE.has(s.tool.name) && !s.tool.isError) {
-      let j = i
-      while (j < steps.length && steps[j]!.n <= cutoff && EXPLORE.has(steps[j]!.tool.name) && !steps[j]!.tool.isError
-        && (j === i || !sayAt.has(steps[j - 1]!.n))) j++
-      if (j - i >= 3) {
-        const names = [...new Set(steps.slice(i, j).map(x => basename(toolSummary(x.tool.input))))]
-        lines.push(`[${s.n}-${steps[j - 1]!.n}] explored ${j - i} files/searches: ${clip(names.join(', '), 160)}`)
-        lines.push(...sayAt.get(steps[j - 1]!.n) ?? [])
-        i = j
-        continue
+      if (at !== undefined) activity.push(at)
+      for (const t of e.tools) {
+        const c: Call = { id: t.id, name: t.name, input: t.input, at, isError: false }
+        calls.push(c)
+        byId.set(t.id, c)
       }
+    } else if (e.type === 'tool_result') {
+      const c = byId.get(e.id)
+      if (!c) continue
+      Object.assign(c, { result: e.content, isError: e.isError, exit: e.exit, background: e.background, refused: e.refused, doneAt: at })
+      if (e.task) byTask.set(e.task, c)
+      if (at !== undefined) activity.push(at)
+    } else if (e.type === 'task_done') {
+      const c = e.id ? byId.get(e.id) : e.task ? byTask.get(e.task) : undefined
+      if (!c?.background || c.endAt !== undefined) continue           // the harness writes a notice twice
+      Object.assign(c, { endAt: at ?? lastAt, outcome: e.outcome, output: e.output })
+      if (e.exit !== undefined) c.exit = e.exit
+      // A notice after the turn ended is what woke the agent.
+      if (ended && at !== undefined) { wakes.push(at); ended = false }
+    } else if (e.type === 'turn_end') {
+      if (!ended && at !== undefined) turnEnds.push(at)
+      ended = true
     }
-    const recent = s.n > cutoff
-    const t = s.tool
-    const out = t.result === undefined ? '(running)'
-      : t.isError ? 'ERROR: ' + clip(firstLine(t.result), 160)
-      : shown(t, recent ? 120 : 60) || 'ok'
-    lines.push(`[${s.n}] ${stepLabel(t, recent ? 160 : 80)} → ${out}`)
-    lines.push(...sayAt.get(s.n) ?? [])
-    i++
   }
-  return {
-    brief, followups, steps, log: lines.join('\n'), facts: countedFacts(steps), ...time,
-    tests: lastTestRun(steps), lastAt: end,
-  }
+  return { calls, turnEnds, lastAt, ...timeline(calls, wakes, activity, origin, lastAt) }
 }
 
-// The most recent finished test run. Its counts line decides green; a failure exit or a nonzero
-// "failed" decides red; a run whose output was filtered down to nothing says only that it ran.
-function lastTestRun(steps: Step[]): TestRun | undefined {
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const t = steps[i]!.tool
-    const cmd = commandOf(t)
-    if (!cmd || !TEST_CMD.test(cmd) || t.result === undefined) continue
-    // The runner's own label ("Tests  213 passed") is dropped: the header already says Tests.
-    const counts = (stripAnsi(t.result).split('\n').filter(l => /\b\d+\s+(passed|failed)\b/i.test(l)).at(-1) ?? '')
-      .trim().replace(/^tests?:?\s+/i, '')
-    const state = t.isError || /\b[1-9]\d*\s+failed\b/i.test(counts) ? 'red' : /\bpassed\b/i.test(counts) ? 'green' : 'unknown'
-    return { n: steps[i]!.n, state, line: clip(counts, 90), ms: ranMs(t) }
-  }
-  return undefined
-}
-
-// Where the child's time went. A child is often woken again after it finishes (a follow-up, its own
-// background task ending, a sub-agent's report): each lands as a user turn, and the wait before it is
-// idle, not work. So the timeline runs in ACTIVE time, those waits cut out, with the wakes kept as
-// marks. A step owns the thinking that led to its call plus the call's run; work written just before
-// a wait (a final report) stays with the step before it. Fills each step's `parts` and `wall`.
-function childTimeline(msgs: StatusMsg[], steps: Step[], tail: number) {
-  const tools = msgs.flatMap(m => m.tools)
-  const activity: number[] = []
-  const wakes: number[] = []
-  let origin: number | undefined
-  for (const m of msgs) {
-    if (m.role === 'fork') continue
-    if (m.role === 'user') {
-      if (origin === undefined && !m.agent) origin = m.at
-      else if (m.at) wakes.push(m.at)
-      continue
-    }
-    if (m.at) activity.push(m.at)
-    for (const t of m.tools) { if (t.at) activity.push(t.at); if (t.doneAt) activity.push(t.doneAt) }
-  }
-  const start = origin ?? steps[0]?.tool.at ?? tail
-  // Idle: from the last activity before a wake to the wake, unless a tool call was still running
-  // across it (a message can arrive mid-build) or the quiet was too short to be anything but thought.
+// Active time: a child woken after finishing waited idle, so the stretch from its last activity to
+// the wake is cut, unless a call was running across it or the quiet was too short to be more than
+// thought. Tool time counts overlapping calls once; a background call is the tools' only until its
+// result says it went on running.
+function timeline(calls: Call[], wakes: number[], activity: number[], origin: number | undefined, tail: number) {
+  const start = origin ?? calls[0]?.at ?? tail
   const gaps: [number, number][] = []
   for (const w of wakes) {
     let last = -Infinity
     for (const t of activity) if (t <= w && t > last) last = t
-    const running = tools.some(t => t.at !== undefined && t.at < w && (t.doneAt ?? Infinity) > w)
+    const running = calls.some(c => c.at !== undefined && c.at < w && (c.doneAt ?? Infinity) > w)
     if (last > -Infinity && !running && w - last >= IDLE_MIN_MS) gaps.push([last, w])
   }
-  const idleBefore = (t: number) => gaps.reduce((n, [g0, g1]) => n + Math.max(0, Math.min(t, g1) - g0), 0)
-  const act = (t: number) => Math.max(0, t - start - idleBefore(t))
-  // Each step's real interval: from the previous call's end to its own end, kept monotonic because
-  // parallel calls in one message share a start.
-  const bounds: number[] = []
-  steps.forEach((s, i) => {
-    const prev = steps[i - 1]?.tool
-    const b = i === 0 ? start : (prev?.doneAt ?? prev?.at ?? start)
-    bounds.push(Math.min(tail, Math.max(bounds[i - 1] ?? start, b)))
-  })
-  steps.forEach((s, i) => {
-    const x = bounds[i]!, y = bounds[i + 1] ?? tail
-    let cursor = x
-    let first = true
-    for (const [g0, g1] of gaps) {
-      if (g1 <= x || g0 >= y) continue
-      // The stretch before this step's first wait is the previous step's closing work.
-      const target = first && i > 0 ? steps[i - 1]! : s
-      if (g0 > cursor) target.parts.push({ from: act(cursor), to: act(g0) })
-      cursor = Math.max(cursor, g1)
-      first = false
-    }
-    if (y > cursor) s.parts.push({ from: act(cursor), to: act(y) })
-  })
-  for (const s of steps) s.wall = s.parts.reduce((n, p) => n + p.to - p.from, 0)
-  return { span: act(tail), idle: idleBefore(tail), wakes: wakes.filter(w => w > start && w < tail).map(act), toolMs: toolTime(steps, tail) }
-}
-
-// How long tool calls were running: overlapping ones counted once, an open one to the last entry.
-// The rest of the active time is the model.
-function toolTime(steps: Step[], end: number): number {
-  const calls = steps.map(s => s.tool).filter(t => t.at !== undefined).sort((a, b) => a.at! - b.at!)
-  let ms = 0, covered = -Infinity
-  for (const t of calls) {
-    const to = t.doneAt ?? end
-    if (to > covered) { ms += to - Math.max(t.at!, covered); covered = to }
+  const idle = gaps.reduce((n, [g0, g1]) => n + Math.max(0, Math.min(tail, g1) - g0), 0)
+  let toolMs = 0, covered = -Infinity
+  for (const c of calls.filter(c => c.at !== undefined).sort((a, b) => a.at! - b.at!)) {
+    const to = c.doneAt ?? tail
+    if (to > covered) { toolMs += to - Math.max(c.at!, covered); covered = to }
   }
-  return ms
+  return { span: Math.max(0, tail - start - idle), idle, toolMs }
 }
 
-// What the status call should not have to infer: failures, repeats, long waits. Counted, so an
-// orange note rests on numbers rather than on the cheap model's impression of a long log.
-function countedFacts(steps: Step[]): string {
-  const facts: string[] = []
-  const failed = steps.filter(s => s.tool.isError)
-  if (failed.length) facts.push(`${failed.length} of ${steps.length} steps failed.`)
-  const byCmd = new Map<string, number[]>()
-  for (const s of failed) {
-    const k = stepLabel(s.tool, 60)
-    byCmd.set(k, [...(byCmd.get(k) ?? []), s.n])
+/** One shell call as a run: open until its result, or for a background call its notice. An error
+ *  with no exit never ran, so it is not a run. A run fails on a nonzero exit, else on its error
+ *  flag, which is all a harness without exit codes gives. */
+export interface Run { id: string; at?: number; open: boolean; failed: boolean; exit?: number; ms?: number; outcome?: string; first: string; last: string }
+
+function runOf(c: Call, readOutput?: (file: string) => string | undefined): Run | undefined {
+  if (c.refused) return undefined
+  const open = c.result === undefined || (!!c.background && c.endAt === undefined)
+  const end = c.background ? c.endAt : c.doneAt
+  const failed = !open && (c.exit !== undefined ? c.exit !== 0 : c.background ? c.outcome === 'failed' : c.isError)
+  const text = c.background ? (c.output && !open ? readOutput?.(c.output) ?? '' : '') : c.result ?? ''
+  return {
+    id: c.id, at: c.at, open, failed, exit: c.exit, outcome: c.background ? c.outcome : undefined,
+    ms: c.at !== undefined && end !== undefined ? end - c.at : undefined, ...ends(text),
   }
-  for (const [k, ns] of byCmd) if (ns.length > 1) facts.push(`${k} failed ${ns.length} times (steps ${ns.join(', ')}).`)
-  const recent = steps.slice(-20).filter(s => s.tool.isError).length
-  if (recent >= 4) facts.push(`${recent} of the last 20 steps failed.`)
-  for (const s of steps) if (s.wall >= LONG_STEP_MS) {
-    // A step owns the thinking that led to its call, so a quick call can carry minutes of model time.
-    const ran = ranMs(s.tool)
-    const where = ran !== undefined && ran < s.wall / 2 ? `: the call ran ${mins(ran)}, the rest was the model before it` : ''
-    facts.push(`Step ${s.n} (${stepLabel(s.tool, 60)}) took ${mins(s.wall)}${where}.`)
+}
+
+// The first and last lines a command printed: a runner's verdict often comes first and a log path
+// last. A bare exit line the harness put on top is not output.
+function ends(text: string): { first: string; last: string } {
+  const lines = stripAnsi(text).split('\n').map(l => l.trim()).filter(Boolean)
+  if (/^exit(?: code)?:? \d+$/i.test(lines[0] ?? '')) lines.shift()
+  return { first: clip(lines[0] ?? '', 120), last: lines.length > 1 ? clip(lines.at(-1)!, 120) : '' }
+}
+
+/** Shell calls grouped by their exact text, preamble stripped: each group's runs and failures, its
+ *  latest run, and how many of its last closed runs failed in a row. Newest group first. */
+export interface CommandGroup { cmd: string; runs: number; failed: number; streak: number; latest: Run }
+export interface Commands { runs: number; failed: number; groups: CommandGroup[] }
+
+export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined): Commands {
+  const groups = new Map<string, Run[]>()
+  for (const c of d.calls) {
+    const cmd = commandOf(c)
+    const run = cmd && runOf(c, readOutput)
+    if (!run) continue
+    const key = stripBoiler(cmd).trim()
+    groups.set(key, [...groups.get(key) ?? [], run])
   }
-  const total = steps.reduce((n, s) => n + s.wall, 0)
-  if (total) facts.push(`${mins(total)} in all over ${steps.length} steps.`)
-  return facts.join('\n')
-}
-
-/** The status call for the transcript as it stands, once every parent message is planned (the rows
- *  come from every plan). Undefined until then. Its key is a hash of the payload, computed alike in
- *  the browser and on the server, so a status either one judged fits the other. */
-export function statusJob(d: Digest, plans: Map<string, Plan>, finished: boolean) {
-  const all = [d.brief, ...d.followups].map(t => plans.get(t))
-  if (all.some(p => !p)) return undefined
-  const payload = { subtasks: all.flatMap(p => p!.subtasks), log: d.log, facts: d.facts, finished }
-  return { key: hashText(JSON.stringify(payload)), payload, steps: d.steps.length, followups: d.followups.length }
-}
-
-// cyrb53: a fast 53-bit string hash, synchronous in the browser where SubtleCrypto is not. A key,
-// not a secret.
-function hashText(s: string): string {
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    h1 = Math.imul(h1 ^ c, 2654435761)
-    h2 = Math.imul(h2 ^ c, 1597334677)
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
-}
-
-/** Every parent message's subtasks in order (a follow-up under its own header), then off-brief work,
- *  then their time: every step gets exactly one owner, so the timeline partitions the whole run. A
- *  row that reaches done is frozen by its subtask, so a later call's variance can't regress or reword
- *  it while it is read. */
-export function statusLines(d: Digest, plans: Map<string, Plan>, status: Status | undefined, frozen: Map<string, Row>): Line[] {
-  const out: Line[] = []
-  let id = 0
-  ;[d.brief, ...d.followups].forEach((text, mi) => {
-    const plan = plans.get(text)
-    if (mi > 0) out.push({ kind: 'group', request: plan?.request ?? '', idx: mi })
-    for (const title of plan?.subtasks ?? []) {
-      id++
-      const frozenKey = d.brief + '\n' + title
-      let row = status?.rows.find(r => r.id === id)
-      if (row?.status === 'done' && !frozen.has(frozenKey)) frozen.set(frozenKey, row)
-      row = frozen.get(frozenKey) ?? row
-      const steps = row?.steps ?? []
-      out.push({ kind: 'row', num: id, title, status: row?.status ?? '', did: row?.did ?? '', note: row?.note ?? '', steps, cite: row?.evidence?.length ? row.evidence : steps, ms: 0, spans: [] })
-    }
-  })
-  for (const o of status?.offBrief ?? [])
-    out.push({ kind: 'row', title: o.what, status: 'off', did: '', note: o.note, steps: o.steps, cite: o.steps, ms: 0, spans: [] })
-  placeTime(out, d)
-  return out
-}
-
-// Each step's owner is the first row that cites it. A step no row cites carries forward from the
-// step before it (the agent is still on that task until the log shows it move), and steps before the
-// first citation go to the first cited row. An assumption, but it makes the bars add up to the run.
-function placeTime(lines: Line[], d: Digest) {
-  const rows = lines.filter((l): l is Extract<Line, { kind: 'row' }> => l.kind === 'row')
-  const owner: (typeof rows[number] | undefined)[] = d.steps.map(s => rows.find(r => inRanges(s.n, r.steps)))
-  const firstOwned = owner.find(Boolean)
-  if (!firstOwned) return
-  let carry = firstOwned
-  for (let i = 0; i < owner.length; i++) owner[i] = carry = owner[i] ?? carry
-  d.steps.forEach((s, i) => {
-    const r = owner[i]!
-    r.ms += s.wall
-    for (const p of s.parts) {
-      const last = r.spans.at(-1)
-      // Touching stretches of one row draw as one segment.
-      if (last && Math.abs(last.to - p.from) < 1000) last.to = Math.max(last.to, p.to)
-      else r.spans.push({ ...p })
-    }
-  })
-}
-
-/** The closing facts, in the order a delegator acts on them. Tests and where the time went are
- *  counted from the transcript; the finding and the decision are the status call's, and only while
- *  that call has judged the parent's latest message: after it, what it said may already be answered,
- *  and a stale "needs a decision" invites deciding twice. Until then Now names the follow-up being
- *  worked on, from its plan. A slot with nothing to say is left out. */
-export function statusFacts(d: Digest, judged: Judged | null | undefined, plans: Map<string, Plan>, busy: boolean): Fact[] {
-  const t = d.tests
-  const current = judged && judged.followups === d.followups.length
-  const latest = d.followups.length ? plans.get(d.followups.at(-1)!)?.request : undefined
-  const now = current ? judged.data.now
-    : latest ? `Working on the latest follow-up: ${latest}`
-    : busy ? '…' : ''
-  return ([
-    ['Now', now],
-    ['Tests', t ? `${t.state}${t.line ? `, ${t.line}` : ''}${t.ms !== undefined ? `, took ${mins(t.ms)}` : ''} (step ${t.n})` : '', t ? `tests-${t.state}` : undefined],
-    ['Time', d.span && d.steps.length ? `${mins(d.toolMs)} in tools, ${mins(Math.max(0, d.span - d.toolMs))} in the model${d.idle ? `, ${mins(d.idle)} stopped` : ''}` : ''],
-    ['Needs a decision', current ? judged.data.decision : '', 'warn'],
-  ] as Fact[]).filter(([, v]) => v)
+  const all = [...groups].map(([cmd, runs]) => {
+    let streak = 0
+    for (const r of runs.filter(r => !r.open).reverse()) { if (!r.failed) break; streak++ }
+    return { cmd: clip(cmd, 100), runs: runs.length, failed: runs.filter(r => r.failed).length, streak, latest: runs.at(-1)! }
+  }).sort((a, b) => (b.latest.at ?? 0) - (a.latest.at ?? 0))
+  return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), groups: all }
 }
 
 // Input fields that carry what an edit tool writes. With a path field beside one, the call wrote
 // that file: Write, Edit, MultiEdit, NotebookEdit, and patcher tools, named by shape, not by tool.
 const WRITE_FIELDS = ['content', 'diff', 'new_string', 'new_source', 'edits']
 
-/** The files the child changed, in the order it first touched them: every successful edit-tool call,
- *  every file a patch's headers name, and what `git rm` and `git mv` delete or move. A write a script
- *  makes is not seen (TB-Agent-Children.md measures how much that misses). Paths outside the project
- *  are dropped, the rest shown relative to it. */
-export function editedFiles(d: Digest, cwd: string): Edited[] {
+/** The files the child changed, in the order it first touched them, with every write and read by
+ *  time. A write is a successful edit-tool call, a file a patch's headers name, or what `git rm` and
+ *  `git mv` delete or move; a read is a read-tool call on the path. A write a script makes is not
+ *  seen (TB-Agent-Children.md measures how much that misses). Paths outside the project are dropped,
+ *  the rest shown relative to it. */
+export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes: Touch[]; reads: Touch[] } {
   const out = new Map<string, Edited>()
+  const writes: Touch[] = [], reads: Touch[] = []
   const rel = (p: string) => {
     const n = p.trim().replace(/^["']|["']$/g, '').replace(/\\/g, '/').replace(/^\/([a-zA-Z])\//, '$1:/')
     const r = displayPath(n, cwd).replace(/^\.\//, '')
     return !r || /^([a-zA-Z]:)?\//.test(r) ? undefined : r
   }
-  const touch = (p: string, how: Omit<Edited, 'path'> = {}) => {
-    const path = rel(p)
-    if (!path) return
-    const e = out.get(path) ?? { path }
-    e.deleted = how.deleted
-    if (how.from) e.from = how.from
-    out.set(path, e)
-  }
-  const move = (from: string, to: string) => {
-    const was = rel(from)
-    const prior = was ? out.get(was) : undefined
-    if (was) out.delete(was)
-    touch(to, { from: prior?.from ?? was })
-  }
-  for (const { tool: t } of d.steps) {
-    if (t.isError) continue
-    const i = t.input ?? {}
+  for (const c of d.calls) {
+    if (c.isError || c.result === undefined) continue
+    const at = c.doneAt ?? c.at ?? 0
+    const touch = (p: string, how: Omit<Edited, 'path'> = {}) => {
+      const path = rel(p)
+      if (!path) return
+      const e = out.get(path) ?? { path }
+      e.deleted = how.deleted
+      if (how.from) e.from = how.from
+      out.set(path, e)
+      writes.push({ path, at })
+    }
+    const move = (from: string, to: string) => {
+      const was = rel(from)
+      const prior = was ? out.get(was) : undefined
+      if (was) { out.delete(was); writes.push({ path: was, at }) }
+      touch(to, { from: prior?.from ?? was })
+    }
+    const i = c.input ?? {}
     // A patch names its own files; a patcher's bare hunks leave that to the path field. A command is
     // not a patch, whatever its heredoc holds.
     let headed = false
@@ -415,12 +203,17 @@ export function editedFiles(d: Digest, cwd: string): Edited[] {
       }
     }
     const path = asStr(i.file_path) ?? asStr(i.filePath) ?? asStr(i.path)
-    if (!headed && path && WRITE_FIELDS.some(k => k in i)) touch(path)
-    const cmd = commandOf(t)
+    const writing = WRITE_FIELDS.some(k => k in i)
+    if (!headed && path && writing) touch(path)
+    const readPath = asStr(i.file_path) ?? asStr(i.filePath)
+    if (readPath && !writing && !headed) { const p = rel(readPath); if (p) reads.push({ path: p, at }) }
+    const cmd = commandOf(c)
     if (cmd) for (const g of gitMoves(cmd)) g.to ? move(g.from, g.to) : touch(g.from, { deleted: true })
   }
-  return [...out.values()]
+  return { edited: [...out.values()], writes, reads }
 }
+
+export const editedFiles = (d: Digest, cwd: string) => fileTouches(d, cwd).edited
 
 // `git rm` and `git mv` in a shell command, as deletes and moves. Their arguments are paths, so they
 // read exactly, unlike a sed or a script. `--cached` untracks and leaves the file, so it is skipped.
@@ -440,52 +233,176 @@ function gitMoves(cmd: string): { from: string; to?: string }[] {
   return out
 }
 
-/** The report as plain text for the orchestrating agent, in the view's order, stamped with the time
- *  of the last transcript entry it covers: each request and its rows, the files it edited, then the
- *  closing facts. No step numbers, which mean nothing outside the view. A running child also says
- *  how long it has been quiet, or how long its open call has run: slow and stuck read alike without. */
-export function statusText(r: { d: Digest; lines: Line[]; facts: Fact[]; edited: Edited[]; plans: Map<string, Plan>; name: string; working: boolean; now: number }): string {
-  const { d } = r
-  const state = r.working ? `running, step ${d.steps.length}${quiet(d, r.now)}` : `finished after ${d.steps.length} steps`
-  const out = [`Sub-agent "${r.name}": ${state}, ${mins(d.span)} active${d.lastAt ? `, as of ${clock(d.lastAt)}` : ''}.`]
-  out.push('', `Request: ${d.brief ? r.plans.get(d.brief)?.request ?? '(not summarized yet)' : NO_BRIEF}`)
-  for (const l of r.lines) {
-    if (l.kind === 'group') { out.push('', `Follow-up: ${l.request || '(not summarized yet)'}`); continue }
-    const time = l.ms ? ` (${mins(l.ms)})` : ''
-    out.push(`- ${l.title}: ${statusLabel(l.status || 'pending')}.${l.did ? ` ${l.did}` : ''}${time}`)
-    if (l.note) out.push(`  Note: ${l.note}`)
+/** One agent's writes and reads, for the session's shared files. */
+export interface AgentFiles { id: string; writes: Touch[]; reads: Touch[] }
+/** A blind write: `by` wrote the file after `over` did, with no read of it in between. An agent's own
+ *  write counts as its read, as CC's own tools record it. */
+export interface Blind { path: string; by: string; over: string; at: number; overAt: number }
+export interface Shared { writers: Map<string, { id: string; at: number }[]>; blind: Blind[] }
+
+export function sharedFiles(agents: AgentFiles[]): Shared {
+  const byPath = new Map<string, { id: string; at: number }[]>()
+  for (const a of agents) for (const w of a.writes) byPath.set(w.path, [...byPath.get(w.path) ?? [], { id: a.id, at: w.at }])
+  const writers = new Map<string, { id: string; at: number }[]>()
+  const blind = new Map<string, Blind>()
+  for (const [path, list] of byPath) {
+    list.sort((x, y) => x.at - y.at)
+    const latest = new Map<string, number>()
+    for (const w of list) latest.set(w.id, w.at)
+    writers.set(path, [...latest].map(([id, at]) => ({ id, at })).sort((x, y) => x.at - y.at))
+    list.forEach((w, i) => {
+      const prev = list.slice(0, i).reverse().find(x => x.id !== w.id)
+      if (!prev) return
+      const a = agents.find(x => x.id === w.id)!
+      const seen = [...a.reads, ...a.writes].some(t => t.path === path && t.at > prev.at && t.at < w.at)
+      if (!seen) blind.set(`${path}\n${w.id}\n${prev.id}`, { path, by: w.id, over: prev.id, at: w.at, overAt: prev.at })
+    })
   }
-  if (r.edited.length) out.push('', 'Edited:', ...r.edited.map(editedLine))
-  if (r.facts.length) out.push('')
-  for (const [label, value] of r.facts) out.push(`${label}: ${value}`)
+  return { writers, blind: [...blind.values()] }
+}
+
+/** What `status <agent>` and the view show. Times are epoch ms; the text adds the clock. */
+export interface StatusReport {
+  id: string; name: string
+  state: 'running' | 'finished' | 'stopped' | 'failing'
+  asOf: number; activeMs: number; idleMs: number; toolMs: number
+  // `short` is the call in the agent's own words where it gave some (CC's Bash `description`), for
+  // the overview; `label` is the call itself.
+  open: { id: string; label: string; short: string; at?: number; background: boolean; interrupted: boolean }[]
+  commands: Commands
+  files: (Edited & { also: { name: string; at: number }[]; blind: string[] })[]
+  handbacks: number[]
+}
+
+/** The report for one child. `live` is whether its session's process is alive: a call left open by a
+ *  process that has since died reads as interrupted. */
+export function agentReport(c: ChildRow, d: Digest, edited: Edited[], shared: Shared, names: Map<string, string>, live: boolean,
+  readOutput?: (file: string) => string | undefined): StatusReport {
+  const name = (id: string) => `"${names.get(id) ?? id}"`
+  const open = d.calls
+    .filter(x => !x.refused && (x.result === undefined || (x.background && x.endAt === undefined)))
+    .map(x => ({ id: x.id, label: label(x), short: clip(asStr(x.input?.description) ?? '', 80) || label(x), at: x.at, background: !!x.background,
+      interrupted: !live || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince) }))
+  return {
+    id: c.id, name: childName(c),
+    state: c.state === 'stopped' ? 'stopped' : c.failing ? 'failing' : c.state === 'running' ? 'running' : 'finished',
+    asOf: d.lastAt, activeMs: d.span, idleMs: d.idle, toolMs: d.toolMs,
+    open,
+    commands: commandsOf(d, readOutput),
+    files: edited.map(e => ({
+      ...e,
+      also: (shared.writers.get(e.path) ?? []).filter(w => w.id !== c.id).map(w => ({ name: names.get(w.id) ?? w.id, at: w.at })),
+      blind: shared.blind.filter(b => b.path === e.path && (b.by === c.id || b.over === c.id)).map(b => b.by === c.id
+        ? `⚠ written at ${clock(b.at)} over ${name(b.over)}'s ${clock(b.overAt)} write without reading it`
+        : `⚠ ${name(b.by)} wrote over this agent's ${clock(b.overAt)} write at ${clock(b.at)} without reading it`),
+    })),
+    handbacks: d.turnEnds,
+  }
+}
+
+// Calls still running in a live process; the rest of `open` is interrupted.
+const liveOpen = (r: StatusReport) => r.open.filter(o => !o.interrupted)
+/** Running, or finished with a background call still going: either way, not done. */
+export const busy = (r: StatusReport) => r.state === 'running' || liveOpen(r).length > 0
+const maxStreak = (r: StatusReport) => Math.max(0, ...r.commands.groups.map(g => g.streak))
+
+// "running · 28m active, 1h 2m idle", or a finished agent's background call still going. The phrases
+// `background call running` and `failed N in a row` are a contract (TB-Agent-Children.md): a parent
+// may match them, so they keep their wording.
+// The digest's times run to the last entry; a running agent has been at it since, waiting on a call
+// or thinking, so its active time and that wait's share run to now.
+const sinceEntry = (r: StatusReport, now: number) => r.state === 'running' ? Math.max(0, now - r.asOf) : 0
+export const activeAt = (r: StatusReport, now: number) => r.activeMs + sinceEntry(r, now)
+
+export function stateLine(r: StatusReport, now: number): string {
+  const bg = liveOpen(r).filter(o => o.background)
+  const head = r.state === 'finished' && bg.length
+    ? `finished, background call running ${mins(now - (bg[0]!.at ?? now))}${bg.length > 1 ? ` (+${bg.length - 1} more)` : ''}`
+    : r.state
+  return `${head} · ${mins(activeAt(r, now))} active${r.idleMs ? `, ${mins(r.idleMs)} idle` : ''}`
+}
+
+export const openLine = (o: StatusReport['open'][number], now: number) => o.interrupted
+  ? `${o.label}: interrupted, its process has ended`
+  : `${o.label}, ${mins(now - (o.at ?? now))}${o.background ? ' (background)' : ''}`
+export const quietLine = (r: StatusReport, now: number) => `nothing open, last entry ${mins(now - r.asOf)} ago`
+
+function nowLines(r: StatusReport, now: number): string[] {
+  if (!r.open.length) return [`Now: ${quietLine(r, now)}`]
+  return r.open.length === 1 ? [`Now: ${openLine(r.open[0]!, now)}`] : ['Now:', ...r.open.map(o => `  ${openLine(o, now)}`)]
+}
+
+export function latestLine(g: CommandGroup, now: number): string {
+  const l = g.latest
+  const how = l.open ? `running ${mins(now - (l.at ?? now))}`
+    : l.outcome && l.outcome !== 'completed' && l.outcome !== 'failed' && l.exit === undefined ? l.outcome
+    : `exit ${l.exit ?? (l.failed ? 'error' : 0)}${l.ms !== undefined ? ` after ${mins(l.ms)}` : ''}`
+  return `latest: ${how}${g.streak >= 2 ? `, failed ${g.streak} in a row` : ''}`
+}
+
+/** One agent's report as plain text for the orchestrating agent, stamped with its last entry. */
+export function statusText(r: StatusReport, now: number): string {
+  const out = [`Sub-agent "${r.name}" (${r.id}): ${stateLine(r, now)}${r.asOf ? ` · as of ${clock(r.asOf)}` : ''}`, '']
+  out.push(...nowLines(r, now))
+  const c = r.commands
+  out.push(`Commands: ${c.runs ? `${c.runs} run, ${c.failed} failed` : 'none'}`)
+  for (const g of c.groups.slice(0, COMMANDS_SHOWN)) {
+    out.push(`  ${g.cmd}  ×${g.runs}${g.failed ? `, ${g.failed} failed` : ''}`, `    ${latestLine(g, now)}`)
+    const said = [g.latest.first, g.latest.last].filter(Boolean).map(s => `"${s}"`).join(' … ')
+    if (said) out.push(`    ${said}`)
+  }
+  if (c.groups.length > COMMANDS_SHOWN) out.push(`  +${c.groups.length - COMMANDS_SHOWN} older commands`)
+  out.push(`Files: ${r.files.length ? '' : 'none'}`.trimEnd())
+  for (const f of r.files) {
+    const also = f.also.length ? `  also ${alsoLine(f)}` : ''
+    out.push(`  ${editedLine(f)}${also}`, ...f.blind.map(b => `    ${b}`))
+  }
+  out.push(`Hand-backs: ${handbacksLine(r)}`)
+  if (r.activeMs) out.push(`Time: ${timeLine(r, now)}`)
   return out.join('\n')
 }
 
+export const handbacksLine = (r: StatusReport) => r.handbacks.length ? r.handbacks.map(clock).join(', ') : 'not yet'
+export function timeSplit(r: StatusReport, now: number): { tools: number; model: number } {
+  const tools = r.toolMs + (liveOpen(r).some(o => !o.background) ? sinceEntry(r, now) : 0)
+  return { tools, model: Math.max(0, activeAt(r, now) - tools) }
+}
+export const timeLine = (r: StatusReport, now: number) => { const t = timeSplit(r, now); return `${mins(t.tools)} in tools, ${mins(t.model)} in the model` }
+export const alsoLine = (f: StatusReport['files'][number]) => f.also.map(a => `"${a.name}" ${clock(a.at)}`).join(', ')
+export const COMMANDS_LISTED = COMMANDS_SHOWN
+
 export const editedLine = (e: Edited) => e.deleted ? `${e.path} (deleted)` : e.from ? `${e.path} (moved from ${e.from})` : e.path
 
-function quiet(d: Digest, now: number): string {
-  const open = [...d.steps].reverse().find(s => s.tool.result === undefined && s.tool.at)
-  if (open) return `, waiting ${mins(now - open.tool.at!)} on ${stepLabel(open.tool, 60)}`
-  return d.lastAt ? `, last activity ${mins(now - d.lastAt)} ago` : ''
-}
+/** A file the overview asks the parent to check before `git add`: since its last commit, a running
+ *  agent wrote it, or more than one agent did. `blind` names the agents in a blind write since then. */
+export interface CheckFile { path: string; writers: { id: string; name: string; running: boolean }[]; blind: string[] }
 
-/** The model's JSON, shaped defensively: a missing field is empty, never a crash in the view. */
-export function normalizeStatus(data: unknown): Status {
-  const o = (data ?? {}) as Partial<Status>
-  const ranges = (x: unknown) => Array.isArray(x)
-    ? x.filter(Array.isArray).map(r => [Number(r[0]), r[1] === undefined ? undefined : Number(r[1])] as [number, number?]).filter(r => r[0] > 0)
-    : []
-  return {
-    now: String(o.now ?? ''),
-    decision: String(o.decision ?? ''),
-    rows: (Array.isArray(o.rows) ? o.rows : []).map(r => ({ id: Number(r.id), status: String(r.status ?? ''), did: String(r.did ?? ''), note: String(r.note ?? ''), steps: ranges(r.steps), evidence: ranges(r.evidence) })),
-    offBrief: (Array.isArray(o.offBrief) ? o.offBrief : []).map(r => ({ what: String(r.what ?? ''), note: String(r.note ?? ''), steps: ranges(r.steps) })),
+/** The session's overview: whether anything is moving, the files to check, then a line for each agent
+ *  that still asks something of the parent: running, failing, or a writer of a file to check. The
+ *  rest fold into one count. A nested agent indents under the one that spawned it, when that one shows. */
+export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number): string {
+  const moving = agents.filter(busy).length
+  const newest = Math.max(0, ...agents.map(a => a.asOf))
+  const out = [moving
+    ? `Session ${sessionId}: ${moving} of ${agents.length} agents running.`
+    : `Session ${sessionId}: No agent running for ${mins(now - newest)} (${agents.length} agents).`]
+  if (files.length) {
+    out.push('', 'Files to check before git add:')
+    for (const f of files) out.push(`  ${f.path}  ${f.writers.map(w => `"${w.name}"${w.running ? ' (running)' : ''}`).join(', ')}${f.blind.length ? ' ⚠' : ''}`)
   }
-}
-
-/** A plan call's JSON, shaped defensively like a status. A subtask is a title, so a trailing period
- *  the model adds goes: the row puts its own punctuation after it. */
-export function normalizePlan(data: unknown): Plan {
-  const p = data as Partial<Plan> | undefined
-  return { request: String(p?.request ?? ''), subtasks: Array.isArray(p?.subtasks) ? p.subtasks.map(t => String(t).replace(/[.\s]+$/, '')) : [] }
+  out.push('', 'Agents:')
+  const listed = agents.filter(a => busy(a) || a.state === 'failing' || files.some(f => f.writers.some(w => w.id === a.id)))
+  const shown = new Set(listed.map(a => a.id))
+  for (const a of listed) {
+    const o = liveOpen(a)[0]
+    const doing = o ? (a.state === 'finished' && o.background ? `background call running ${mins(now - (o.at ?? now))}: ${o.short}` : `waiting ${mins(now - (o.at ?? now))} on ${o.short}`) : ''
+    const streak = maxStreak(a)
+    const marks = [doing, streak >= 2 ? `failed ${streak} in a row` : '', files.some(f => f.blind.includes(a.id)) ? '⚠' : ''].filter(Boolean)
+    const indent = a.parentId && shown.has(a.parentId) ? '  '.repeat(Math.max(0, a.depth - 1)) : ''
+    out.push(`  ${indent}${a.id}  ${a.state.padEnd(8)} ${`${mins(activeAt(a, now))} active`.padStart(10)}  ${a.name}${marks.length ? ` · ${marks.join(' · ')}` : ''}`)
+  }
+  const rest = agents.length - listed.length
+  if (rest) out.push(`  ${listed.length ? '+' : ''}${rest} ${agents.some(a => !shown.has(a.id) && a.state === 'stopped') ? 'finished or stopped' : 'finished'}, nothing to check`)
+  out.push('', 'Run `typebulb status <id>` for one agent\'s report.')
+  return out.join('\n')
 }

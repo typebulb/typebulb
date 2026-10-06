@@ -197,3 +197,27 @@ describe('a parallel tool call keeps every result', () => {
     expect(results.map(e => e.type === 'tool_result' && e.id)).toEqual(['t1', 't2'])
   })
 })
+
+// What a child's Status reads (TB-Agent-Children.md): a background call stays open until CC's notice
+// names it, an error with no exit never ran, and neither carrier of the notice renders.
+describe('apply gives the child Status its call outcomes', () => {
+  const a = new ClaudeAdapter()
+  const notice = '<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>t1</tool-use-id>\n<output-file>C:\tmp\b1.output</output-file>\n<status>failed</status>\n<summary>Background command "npm test" failed with exit code 2</summary>\n</task-notification>'
+  const result = (content: string, is_error = false) =>
+    ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content, is_error }] } }) as never
+
+  it('reads the notice from either carrier as the call\'s end, with its exit code', () => {
+    const done = { type: 'task_done', id: 't1', outcome: 'failed', exit: 2, output: 'C:\tmp\b1.output' }
+    expect(a.apply({ type: 'attachment', attachment: { type: 'queued_command', prompt: notice } } as never, 0).events).toEqual([done])
+    expect(a.apply({ type: 'user', isMeta: true, message: { content: notice } } as never, 0).events).toEqual([done])
+  })
+
+  it('marks a backgrounded result, a failed run\'s exit, and an error that never ran', () => {
+    const [bg] = a.apply(result('Command running in background with ID: b1. Output is being written to: x'), 0).events as never as { background?: boolean }[]
+    const [ran] = a.apply(result('Exit code 1\nFAIL src/a.test.ts', true), 0).events as never as { exit?: number; refused?: boolean }[]
+    const [blocked] = a.apply(result('<tool_use_error>Blocked: sleep 30 followed by: cat</tool_use_error>', true), 0).events as never as { exit?: number; refused?: boolean }[]
+    expect(bg!.background).toBe(true)
+    expect([ran!.exit, ran!.refused]).toEqual([1, undefined])
+    expect([blocked!.exit, blocked!.refused]).toEqual([undefined, true])
+  })
+})

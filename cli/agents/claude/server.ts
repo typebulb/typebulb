@@ -20,7 +20,7 @@ export const displayName = adapter.displayName
 // composerPasteRead (read-only, paste-dir-scoped) and summarizeTurn (render-only) ride along
 // composer-less: any mirror renders a paste-mention thumbnail it encounters in a transcript, and
 // Every prose-bearing turn can expose its local Summary tab.
-export const { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerPasteRead, summarizeTurn, childStatus, judgeChildStatus } = createMirror(adapter)
+export const { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerPasteRead, summarizeTurn, childStatus } = createMirror(adapter)
 
 export * from '../core/server/launcher.js'
 export * from '../core/server/git.js'

@@ -75,6 +75,9 @@ export interface ChildTranscript {
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself
   stopped: boolean           // the user killed it — the one terminal state only the harness knows
+  /** When the oldest live process for its session started, where the harness records it: a call
+   *  left open before then ran in a process now dead (TB-Agent-Children.md). */
+  liveSince?: number
   /** Whether the child is mid-turn, read from its own file (TB-Agent-Children.md): every wake writes
    *  there, however the harness delivered it. `undefined` when the file can't be read, which reads
    *  as finished. */
@@ -162,7 +165,16 @@ export type Event =
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
   // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.
-  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string; at?: number }
+  // `exit` is a shell call's exit code where the harness states one; `background` marks a result
+  // that only says the call went on running, so it stays open until its `task_done`, and `task` is
+  // the id the harness gave that run; `refused` an error from a call that never ran (blocked, denied).
+  | { type: 'tool_result'; id: string; content: string; isError: boolean; digest?: string; exit?: number; background?: boolean; task?: string; refused?: boolean; at?: number }
+  // A background call's end, named by its call `id` or its `task` (CC's task notification, or the
+  // agent stopping it), with the file its output went to. Never rendered: the child Status reads it
+  // to close the call (TB-Agent-Children.md).
+  | { type: 'task_done'; id?: string; task?: string; outcome: string; exit?: number; output?: string; at?: number }
+  // The agent ended its turn, which for a child delivers its report to the parent. Never rendered.
+  | { type: 'turn_end'; at?: number }
   | { type: 'cleared' }
   // `cost` is THIS entry's harness-computed spend (pi writes usage.cost.total into every assistant
   // entry; CC transcripts carry none) — the client sums it for the driverless session-cost display.
