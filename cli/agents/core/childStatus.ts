@@ -4,6 +4,7 @@
 // view and `typebulb status` print one report from one code path.
 import { childName, type Event, type ChildRow } from './events.js'
 import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
+import { statementReads } from './shellReads.js'
 
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
@@ -137,10 +138,9 @@ function ends(text: string): { first: string; last: string } {
 /** Shell calls grouped by their exact text, preamble stripped: each group's runs and failures, its
  *  latest run, how many of its last closed runs failed in a row, and what it does to others (`tags`).
  *  Newest group first. */
-export interface CommandGroup { cmd: string; runs: number; failed: number; streak: number; long: boolean; ms: number; tags: string[]; latest: Run }
-/** `reads` counts the runs of commands that only read, kept out of the groups and the failures.
- *  `last` is the newest finished run, so a view with nothing to list still says what it last did. */
-export interface Commands { runs: number; failed: number; reads: number; groups: CommandGroup[]; last?: { cmd: string; run: Run } }
+export interface CommandGroup { cmd: string; runs: number; open: number; failed: number; streak: number; long: boolean; ms: number; tags: string[]; latest: Run }
+/** `lookups` counts the runs of commands that only read, kept out of the groups and the failures. */
+export interface Commands { runs: number; failed: number; lookups: number; groups: CommandGroup[] }
 
 // A command that reaches past the agent's own work, worth a line however it ended: stopping a process
 // (another agent's server, a test tree), or a git write, which discards or publishes work.
@@ -214,13 +214,13 @@ export function commandLabel(cmd: string): string {
 
 export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined): Commands {
   const groups = new Map<string, Run[]>()
-  let reads = 0
+  let lookups = 0
   for (const c of d.calls) {
     const cmd = commandOf(c)
     const run = cmd && runOf(c, readOutput)
     if (!run) continue
     const key = stripBoiler(cmd).trim()
-    if (isRead(key)) { reads++; continue }
+    if (isRead(key)) { lookups++; continue }
     const tail = shellParts(key).at(-1)?.text.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
     if (run.exit === 1 && SEARCHES.has(tail)) run.failed = false
     groups.set(key, [...groups.get(key) ?? [], run])
@@ -231,18 +231,17 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
     const bare = masked(cmd)
     const tags = [KILLS.test(bare) ? 'stops a process' : '', GIT_WRITE.test(bare) ? 'git write' : ''].filter(Boolean)
     return {
-      cmd: clip(commandLabel(cmd), 100), runs: runs.length, failed: runs.filter(r => r.failed).length, streak,
+      cmd: clip(commandLabel(cmd), 100), runs: runs.length, open: runs.filter(r => r.open).length, failed: runs.filter(r => r.failed).length, streak,
       long: runs.some(r => (r.ms ?? 0) > LONG_RUN_MS), ms: runs.reduce((n, r) => n + (r.ms ?? 0), 0), tags, latest: runs.at(-1)!,
     }
   }).sort((a, b) => (b.latest.at ?? 0) - (a.latest.at ?? 0))
-  const closed = [...groups].flatMap(([cmd, runs]) => runs.filter(r => !r.open).map(run => ({ cmd: clip(commandLabel(cmd), 100), run })))
-  const last = closed.sort((a, b) => (b.run.at ?? 0) - (a.run.at ?? 0))[0]
-  return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), reads, groups: all, last }
+  return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), lookups, groups: all }
 }
 
-/** "12 run, 2 failed, 41 reads", the commands' one-line count. */
-export const commandsLine = (c: Commands) =>
-  [c.runs ? `${c.runs} run, ${c.failed} failed` : 'none', c.reads ? `${c.reads} ${c.reads === 1 ? 'read' : 'reads'}` : ''].filter(Boolean).join(', ')
+/** "12 run, 2 failed, 41 lookups", the commands' one-line count. "lookups", not "reads": Files read
+ *  is the read tool's. */
+export const commandsLine = (c: Commands) => [c.runs ? `${c.runs} run, ${c.failed} failed` : '', lookupsLine(c)].filter(Boolean).join(', ') || 'none'
+export const lookupsLine = (c: Commands) => c.lookups ? `${c.lookups} ${c.lookups === 1 ? 'lookup' : 'lookups'}` : ''
 
 // Input fields that carry what an edit tool writes. With a path field beside one, the call wrote
 // that file: Write, Edit, MultiEdit, NotebookEdit, and patcher tools, named by shape, not by tool.
@@ -250,17 +249,20 @@ const WRITE_FIELDS = ['content', 'diff', 'new_string', 'new_source', 'edits']
 
 /** The files the child changed, in the order it first touched them, with every write and read by
  *  time. A write is a successful edit-tool call, a file a patch's headers name, or what `git rm` and
- *  `git mv` delete or move; a read is a read-tool call on the path. A write a script makes is not
- *  seen (TB-Agent-Children.md measures how much that misses). Paths outside the project are dropped,
- *  the rest shown relative to it. */
-export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes: Touch[]; reads: Touch[] } {
+ *  `git mv` delete or move; a read is a read-tool call on the path, or a read row's `path` fields
+ *  (Pi's `read`, Codex's read-only script). `shellReads` are the files a shell statement read, which
+ *  Files read counts and the ⚠ does not. A write a script makes is not seen (TB-Agent-Children.md
+ *  measures how much that misses). A path inside the project is shown relative to it; a write outside
+ *  it is dropped, a read kept by its full path, since reviewing another project is still work. */
+export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes: Touch[]; reads: Touch[]; shellReads: Touch[] } {
   const out = new Map<string, Edited>()
-  const writes: Touch[] = [], reads: Touch[] = []
+  const writes: Touch[] = [], reads: Touch[] = [], shellReads: Touch[] = []
+  const norm = (p: string) => p.trim().replace(/^["']|["']$/g, '').replace(/\\/g, '/').replace(/^\/([a-zA-Z])\//, '$1:/')
   const rel = (p: string) => {
-    const n = p.trim().replace(/^["']|["']$/g, '').replace(/\\/g, '/').replace(/^\/([a-zA-Z])\//, '$1:/')
-    const r = displayPath(n, cwd).replace(/^\.\//, '')
+    const r = displayPath(norm(p), cwd).replace(/^\.\//, '')
     return !r || /^([a-zA-Z]:)?\//.test(r) ? undefined : r
   }
+  const seen = (p: string) => rel(p) ?? (norm(p) || undefined)
   for (const c of d.calls) {
     if (c.isError || c.result === undefined) continue
     const at = c.doneAt ?? c.at ?? 0
@@ -303,13 +305,22 @@ export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes:
     const writing = WRITE_FIELDS.some(k => k in i)
     if (!headed && path && writing) touch(path, {}, typeof i.content === 'string')
     const readPath = asStr(i.file_path) ?? asStr(i.filePath)
-    if (readPath && !writing && !headed) { const p = rel(readPath); if (p) reads.push({ path: p, at }) }
+    if (readPath && !writing && !headed) { const p = seen(readPath); if (p) reads.push({ path: p, at }) }
+    // Several calls in one script are numbered fields (`path`, `path (2)`), as are their commands.
+    const fields = (name: string) => Object.entries(i).filter(([k, v]) => typeof v === 'string' && (k === name || k.startsWith(`${name} (`))).map(([, v]) => v as string)
+    if (c.name === 'read') for (const v of fields('path')) { const p = seen(v); if (p) reads.push({ path: p, at }) }
+    const base = asStr(i.workdir)
+    for (const cmd of [...fields('command'), ...fields('cmd')]) for (const f of statementReads(cmd)) {
+      const p = seen(base && !/^([a-zA-Z]:)?[\\/]/.test(f) ? `${base}/${f}` : f)
+      if (p) shellReads.push({ path: p, at })
+    }
     const cmd = commandOf(c)
     if (cmd) for (const g of gitMoves(cmd)) g.to ? move(g.from, g.to) : touch(g.from, { deleted: true })
   }
-  return { edited: [...out.values()], writes, reads }
+  return { edited: [...out.values()], writes, reads, shellReads }
 }
 
+export type Touches = ReturnType<typeof fileTouches>
 export const editedFiles = (d: Digest, cwd: string) => fileTouches(d, cwd).edited
 
 // `git rm` and `git mv` in a shell command, as deletes and moves. Their arguments are paths, so they
@@ -367,14 +378,21 @@ export interface StatusReport {
   state: 'running' | 'finished' | 'stopped' | 'failing'
   asOf: number; activeMs: number; idleMs: number; toolMs: number
   // `short` is the call in the agent's own words where it gave some (CC's Bash `description`), for
-  // the overview; `label` is the call itself.
-  open: { id: string; label: string; short: string; at?: number; background: boolean; interrupted: boolean }[]
+  // the overview; `label` is the call itself. `said` is its latest output line so far, where a queued
+  // runner says why it waits.
+  open: { id: string; label: string; short: string; at?: number; background: boolean; interrupted: boolean; said: string }[]
   commands: Commands
   // Every file it wrote, `committed` once git no longer shows it changed and `ignored` where git
   // ignores it (scratch output, which no commit can lose): one agent's view names what it touched
   // (the overview is where only uncommitted files matter). `also` and `blind` count only writes since
   // the file's last commit.
   files: (Edited & { committed: boolean; ignored: boolean; also: { name: string; at: number }[]; blind: string[] })[]
+  // Every file it read, by a read tool or a shell statement, written ones too: CC reads before each
+  // edit, so leaving those out left almost nothing. Newest read last.
+  read: { path: string; times: number; at: number }[]
+  // While it runs with nothing open, its newest finished call of any tool, so the row a call held stays
+  // until the next call starts instead of blinking out between calls. Gone once it stops running.
+  latest?: { id: string; label: string; run: Run }
 }
 
 /** What git says of a path: whether it is still changed, and when it was last committed (0 for
@@ -384,20 +402,28 @@ export const NO_GIT: Settled = { uncommitted: () => true, ignored: () => false, 
 
 /** The report for one child. `live` is whether its session's process is alive: a call left open by a
  *  process that has since died reads as interrupted. */
-export function agentReport(c: ChildRow, d: Digest, edited: Edited[], shared: Shared, names: Map<string, string>, live: boolean,
+export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Shared, names: Map<string, string>, live: boolean,
   readOutput?: (file: string) => string | undefined, settled: Settled = NO_GIT): StatusReport {
   const name = (id: string) => `"${names.get(id) ?? id}"`
   const open = d.calls
     .filter(x => !x.refused && (x.result === undefined || (x.background && x.endAt === undefined)))
     .map(x => ({ id: x.id, label: label(x), short: clip(asStr(x.input?.description) ?? '', 80) || label(x), at: x.at, background: !!x.background,
-      interrupted: !live || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince) }))
+      interrupted: !live || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince), said: saidOf(runOf(x, readOutput)) }))
+  const read = new Map<string, { path: string; times: number; at: number }>()
+  for (const t of [...touches.reads, ...touches.shellReads].sort((x, y) => x.at - y.at)) {
+    const r = read.get(t.path) ?? { path: t.path, times: 0, at: 0 }
+    read.delete(t.path)
+    read.set(t.path, { ...r, times: r.times + 1, at: Math.max(r.at, t.at) })
+  }
+  const done = c.state === 'running' && !open.length ? d.calls.filter(x => !x.refused).at(-1) : undefined
+  const run = done && runOf(done)
   return {
     id: c.id, name: childName(c),
     state: c.state === 'stopped' ? 'stopped' : c.failing ? 'failing' : c.state === 'running' ? 'running' : 'finished',
     asOf: d.lastAt, activeMs: d.span, idleMs: d.idle, toolMs: d.toolMs,
     open,
     commands: markInterrupted(commandsOf(d, readOutput), open),
-    files: edited.map(e => {
+    files: touches.edited.map(e => {
       const since = settled.since(e.path)
       return {
         ...e,
@@ -409,6 +435,8 @@ export function agentReport(c: ChildRow, d: Digest, edited: Edited[], shared: Sh
           : `⚠ ${name(b.by)} wrote over this agent's ${clock(b.overAt)} write at ${clock(b.at)} without reading it`),
       }
     }),
+    read: [...read.values()].sort((x, y) => x.at - y.at),
+    latest: done && run ? { id: done.id, label: label(done), run } : undefined,
   }
 }
 
@@ -447,8 +475,9 @@ export const openLine = (o: StatusReport['open'][number], now: number) => o.inte
 export const quietLine = (r: StatusReport, now: number) => `nothing open, last entry ${mins(now - r.asOf)} ago`
 
 function nowLines(r: StatusReport, now: number): string[] {
-  if (!r.open.length) return [`Now: ${quietLine(r, now)}`]
-  return r.open.length === 1 ? [`Now: ${openLine(r.open[0]!, now)}`] : ['Now:', ...r.open.map(o => `  ${openLine(o, now)}`)]
+  if (!r.open.length) return [`Now: ${quietLine(r, now)}`, ...r.latest ? [`Latest: ${r.latest.label} · ${outcomeOf(r.latest.run)}${r.latest.run.ms !== undefined ? ` after ${mins(r.latest.run.ms)}` : ''}`] : []]
+  const said = (o: StatusReport['open'][number], pad: string) => o.said ? [`${pad}"${o.said}"`] : []
+  return r.open.length === 1 ? [`Now: ${openLine(r.open[0]!, now)}`, ...said(r.open[0]!, '  ')] : ['Now:', ...r.open.flatMap(o => [`  ${openLine(o, now)}`, ...said(o, '    ')])]
 }
 
 export function latestLine(g: CommandGroup, now: number): string {
@@ -464,7 +493,6 @@ export function statusText(r: StatusReport, now: number): string {
   const out = [`Sub-agent "${r.name}" (${r.id}): ${stateLine(r, now)}${r.asOf ? ` · as of ${clock(r.asOf)}` : ''}`, '']
   out.push(...nowLines(r, now))
   const c = r.commands
-  if (c.last) out.push(`Last run: ${lastRunLine(c)}`)
   out.push(`Commands: ${commandsLine(c)}`)
   for (const g of c.groups.filter(notable).slice(0, COMMANDS_SHOWN)) {
     const tags = tagsLine(g)
@@ -476,13 +504,15 @@ export function statusText(r: StatusReport, now: number): string {
   const more = c.groups.filter(notable).length - listed
   if (more) out.push(`  +${more} more like these`)
   const quiet = quietRuns(c)
-  if (quiet.runs) out.push(`  +${quiet.runs} other ${quiet.runs === 1 ? 'run' : 'runs'} passed (${mins(quiet.ms)} in all)`)
-  out.push(`Files: ${filesLine(r)}`)
+  if (quiet.runs) out.push(`  ${quietRunsLine(c)}`)
+  out.push(`Files written: ${filesLine(r)}`)
   for (const f of r.files) {
     const also = f.also.length ? `  also ${alsoLine(f)}` : ''
     out.push(`  ${editedLine(f)}${f.ignored ? ' (ignored)' : f.committed ? ' (committed)' : ''}${also}`, ...f.blind.map(b => `    ${b}`))
   }
   if (r.activeMs) out.push(`Time: ${timeLine(r, now)}`)
+  // Last, as the least a delegator acts on.
+  out.push(`Files read: ${r.read.length || 'none'}`, ...r.read.map(f => `  ${readLine(f)}`))
   return out.join('\n')
 }
 
@@ -499,24 +529,30 @@ export const alsoLine = (f: StatusReport['files'][number]) => f.also.map(a => `"
 export const COMMANDS_LISTED = COMMANDS_SHOWN
 
 /** A command worth its own line (TB-Agent-Children.md, from a day of one parent's real decisions): it
- *  failed, is still running, took long, was run three or more times, or reaches past the agent's own
- *  work. The rest is the agent doing its work, and folds into a count. */
-export const notable = (g: CommandGroup) => g.failed > 0 || g.latest.open || g.long || g.runs >= 3 || g.tags.length > 0
-/** The runs folded into the count, and their time together. */
+ *  failed, took long, was run three or more times, or reaches past the agent's own work. The rest is
+ *  the agent doing its work, and folds into a count. Running is not a reason: Now shows what is open,
+ *  and listing it here too showed one command twice, then neither once it finished. */
+export const notable = (g: CommandGroup) => g.failed > 0 || g.long || g.runs >= 3 || g.tags.length > 0
+/** The finished runs folded into the count, and their time together: one still open has not passed. */
 export const quietRuns = (c: Commands) => {
   const q = c.groups.filter(g => !notable(g))
-  return { runs: q.reduce((n, g) => n + g.runs, 0), ms: q.reduce((n, g) => n + g.ms, 0) }
+  return { runs: q.reduce((n, g) => n + g.runs - g.open, 0), ms: q.reduce((n, g) => n + g.ms, 0) }
+}
+/** "18 other runs passed, 3m in all": a plain count, no "+", which read as a control to expand.
+ *  `other` drops where nothing is listed above it. */
+export const quietRunsLine = (c: Commands, other = true) => {
+  const q = quietRuns(c)
+  return `${q.runs}${other ? ' other' : ''} ${q.runs === 1 ? 'run' : 'runs'} passed, ${mins(q.ms)} in all`
 }
 const tagsLine = (g: CommandGroup) => [...g.tags, g.long ? `over ${mins(LONG_RUN_MS)}` : ''].filter(Boolean).join(', ')
 export const groupTags = tagsLine
-export const lastRunLine = (c: Commands) => {
-  const l = c.last
-  if (!l) return ''
-  const how = l.run.outcome && l.run.outcome !== 'completed' && l.run.outcome !== 'failed' && l.run.exit === undefined ? l.run.outcome : `exit ${l.run.exit ?? (l.run.failed ? 'error' : 0)}`
-  return `${l.cmd} · ${how}${l.run.ms !== undefined ? ` after ${mins(l.run.ms)}` : ''}`
-}
+const saidOf = (r?: Run) => r ? r.last || r.first : ''
+/** How a finished call ended: its exit, a background notice's outcome where it gave none, else ok or error. */
+export const outcomeOf = (r: Run) => r.outcome && r.outcome !== 'completed' && r.outcome !== 'failed' && r.exit === undefined ? r.outcome
+  : r.exit !== undefined ? `exit ${r.exit}` : r.failed ? 'error' : 'ok'
 
 export const editedLine = (e: Edited) => e.deleted ? `${e.path} (deleted)` : e.from ? `${e.path} (moved from ${e.from})` : e.path
+export const readLine = (f: StatusReport['read'][number]) => f.times > 1 ? `${f.path} ×${f.times}` : f.path
 
 /** A file the overview asks the parent to check before `git add`: since its last commit, a running
  *  agent wrote it, or more than one agent did. `blind` names the agents in a blind write since then. */

@@ -1886,25 +1886,22 @@ a.agent-name:hover { text-decoration: underline; }
    above, minus its row shape and cursor — this one is a label, not a toggle. */
 .no-prose { color: var(--muted); font-size: .85rem; font-style: italic; padding: .15rem 0; }
 
-/* A child's Status view (childStatusView.ts): header, figures, the Now callout, then commands and
-   files as tables. Pills carry outcomes in the roles' own colours; anything wrong is --warn amber. */
+/* A child's Status view (childStatusView.ts): a header, then Now, commands and files as tables, every
+   heading and row on one left edge. Pills carry outcomes in the roles' own colours; anything wrong is
+   --warn amber. */
 .cs-header { padding: 1.2rem 0 .2rem; }
-.cs-title { display: flex; align-items: center; gap: .6rem; font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
-.cs-title .children-dot { width: 10px; height: 10px; }
-.cs-subtitle { color: var(--muted); margin-top: .2rem; padding-left: calc(10px + .6rem); }
-/* Now: what it is waiting on, set apart by an accent rule; amber when a call was interrupted. */
-.cs-now { display: flex; gap: .9rem; align-items: baseline; margin-top: 1rem; padding: .6rem .9rem; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.cs-now.quiet { border-left-color: var(--border); background: var(--veil); color: var(--muted); }
-.cs-now.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
-.cs-now-label { font-weight: 600; color: var(--fg); flex: none; }
-.cs-now-rows { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
-.cs-now-row { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
-.cs-section { margin-top: 1.6rem; }
+.cs-title { font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
+.cs-subtitle { color: var(--muted); margin-top: .2rem; }
+/* The agents menu's state dot, in front of the state it colours. */
+.cs-subtitle .children-dot { display: inline-block; vertical-align: middle; margin-right: .45rem; }
+/* The groups' spacing is the container's gap alone: a section margin on top of .messages' gap doubled it. */
+.child-status { gap: 1.25rem; }
 .cs-h { font-weight: 600; margin-bottom: .4rem; }
 .cs-count { color: var(--muted); font-weight: 400; margin-left: .6rem; }
-.cs-more { color: var(--muted); padding: .4rem .5rem; }
-/* Under the tables, centred: a failed read, then the view's actions. */
-.child-status-foot { display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 0 1.75rem; }
+.cs-more { color: var(--muted); padding: .4rem 0; }
+/* Under the tables, centred: a failed read, then the view's actions. .messages' own bottom padding
+   clears the overlaid statusbar; this adds only a little air between the actions and its pills. */
+.child-status-foot { display: flex; flex-direction: column; align-items: center; gap: .6rem; padding: 1rem 0 .75rem; }
 .child-status-actions { display: flex; align-items: baseline; gap: 1.4rem; }
 .child-status-actions a { cursor: pointer; color: var(--accent); }
 .child-status-actions a:hover { text-decoration: underline; }
@@ -1913,13 +1910,18 @@ a.agent-name:hover { text-decoration: underline; }
 .child-status-note.err { color: var(--err); }
 /* Two-line items: the command or file, its outcome at the line's end; beneath, muted, what it said or
    who else wrote it. Text wraps rather than cutting off, since the cut part is the part that explains. */
-.cs-list { border-top: 1px solid var(--border); }
+/* A list bleeds out by its rows' padding, so row text sits on the headings' edge and a hover still has room. */
+.cs-list { border-top: 1px solid var(--border); margin-left: -.4rem; margin-right: -.4rem; }
 .cs-item { padding: .5rem .4rem; border-bottom: 1px solid var(--border); }
 .cs-item:hover { background: var(--veil); }
 .cs-item-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .8rem; }
 .cs-item-main > .cs-mono { flex: 1 1 20rem; min-width: 0; overflow-wrap: anywhere; }
 .cs-item-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .5rem; }
 .cs-item-sub { margin-top: .2rem; padding-left: 1rem; color: var(--muted); overflow-wrap: anywhere; }
+/* File tables, written and read: one compact line a file and no rule between rows; a written file's
+   who-else line still sits beneath it. */
+.cs-files { border-top: none; }
+.cs-files .cs-item { padding: .15rem .4rem; border-bottom: none; }
 .cs-mono { font: .9rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .cs-dim { color: var(--muted); }
 .cs-bad { color: var(--warn); }

@@ -41,6 +41,7 @@ const call = (id: string, name: string, input: Record<string, unknown>, at = 0):
   ({ type: 'assistant', text: '', thinking: '', tools: [{ id, name, input }], live: false, at })
 const result = (id: string, content: string, at = 0, more: Partial<Extract<Event, { type: 'tool_result' }>> = {}): Event =>
   ({ type: 'tool_result', id, content, isError: false, at, ...more })
+const nofiles = { edited: [], writes: [], reads: [], shellReads: [] }
 
 describe('editedFiles', () => {
   it('lists edit-tool writes, patch headers and git moves inside the project, and skips failed calls', () => {
@@ -109,7 +110,7 @@ describe('sharedFiles', () => {
     const shared = sharedFiles([{ id: 'A', ...ta }, { id: 'B', ...tb }])
     const names = new Map([['A', 'audit'], ['B', 'baseline']])
     expect(shared.blind.map(x => [x.by, x.over])).toEqual([['B', 'A']])
-    const text = statusText(agentReport(row('A', 'audit'), a, ta.edited, shared, names, true), 30 * min)
+    const text = statusText(agentReport(row('A', 'audit'), a, ta, shared, names, true), 30 * min)
     expect(text).toMatch(/docs\/T\.md {2}also "baseline"/)
     expect(text).toMatch(/⚠ "baseline" wrote over this agent's/)
   })
@@ -131,9 +132,47 @@ describe('statusText', () => {
   it('counts a running agent\'s open wait as active and as tool time', () => {
     const d = childDigest([brief, call('a', 'Bash', { command: 'need -- vitest' }, min)])
     const row = { id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'running' as const }
-    const text = statusText(agentReport(row, d, [], { writers: new Map(), blind: [] }, new Map(), true), 11 * min)
+    const text = statusText(agentReport(row, d, nofiles, { writers: new Map(), blind: [] }, new Map(), true), 11 * min)
     expect(text).toMatch(/running · 11m active/)
     expect(text).toMatch(/Time: 10m in tools, 1m in the model/)
+  })
+
+  // Shown only while open, a quick call's row blinked out between calls. While the agent runs, its
+  // latest call holds the row until the next; once it finishes, the call leaves Now.
+  it('keeps a running agent\'s latest call in Now between calls, and drops it once the agent finishes', () => {
+    const d = childDigest([brief, call('a', 'mcp__smith__step', { description: 'close the doorway' }, min), result('a', 'ok', min + 1000)])
+    const report = (state: 'running' | 'done') => agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state }, d, nofiles,
+      { writers: new Map(), blind: [] }, new Map(), true)
+    expect(statusText(report('running'), 2 * min)).toMatch(/\nLatest: .*close the doorway · ok after 1s\n/)
+    expect(statusText(report('done'), 2 * min)).not.toMatch(/Latest:/)
+  })
+
+  // Files read lists every file it read, written ones too: CC reads before each edit, so leaving those
+  // out showed one file for an agent that read sixteen. Repeats count, and the newest read is last.
+  it('lists every file read, newest last, after everything else', () => {
+    const d = childDigest([brief,
+      call('a', 'Read', { file_path: 'C:/p/a.ts' }), result('a', '', min),
+      call('b', 'Read', { file_path: 'C:/p/b.ts' }), result('b', '', 2 * min),
+      call('c', 'Read', { file_path: 'C:/p/a.ts' }), result('c', '', 3 * min),
+      call('e', 'Read', { file_path: 'C:/p/e.ts' }), result('e', '', 4 * min),
+      call('w', 'Edit', { file_path: 'C:/p/e.ts', old_string: 'x', new_string: 'y' }), result('w', '', 5 * min)])
+    const row = { id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'done' as const }
+    const text = statusText(agentReport(row, d, fileTouches(d, 'C:/p'), { writers: new Map(), blind: [] }, new Map(), true), 6 * min)
+    expect(text).toMatch(/Files written: 1 \(1 uncommitted\)\n {2}e\.ts\n/)
+    expect(text.split('Files read: 3\n')[1]).toBe('  b.ts\n  a.ts ×2\n  e.ts')
+  })
+
+  // Codex has no read tool: it reads through its shell, often capturing a file to slice it, and a
+  // read-only script arrives as a read row. Files read showed none for its largest agents, and none
+  // for one that reviewed another project's files.
+  it('counts files read through the shell and read rows, outside the project by full path', () => {
+    const d = childDigest([brief,
+      call('a', 'exec', { command: '$lines = Get-Content -LiteralPath docs/T.md -Encoding UTF8; $lines[0..74]; rg -n x src', workdir: 'C:\\p' }), result('a', '', min),
+      call('b', 'read', { path: 'README.md', 'path (2)': 'src/a.ts' }), result('b', '', 2 * min),
+      call('c', 'exec', { command: 'cat *.md', 'command (2)': 'sed -n 1,40p src/b.ts' }), result('c', '', 3 * min),
+      call('d', 'exec', { command: "$p = 'C:\\other\\Spec.md'; $lines = Get-Content -LiteralPath $p; $lines[0..9]" }), result('d', '', 4 * min)])
+    expect(agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'done' }, d, fileTouches(d, 'C:/p'),
+      { writers: new Map(), blind: [] }, new Map(), true).read.map(f => f.path)).toEqual(['docs/T.md', 'README.md', 'src/a.ts', 'src/b.ts', 'C:/other/Spec.md'])
   })
 })
 
@@ -145,9 +184,9 @@ describe('overviewText', () => {
     const busyD = childDigest([brief, call('a', 'Bash', { command: 'date +%T; npm run need -- check 2>&1 | tail -30', description: 'Run the follow check' }, min)])
     const idleD = childDigest([brief])
     const agents = [
-      { ...agentReport(row('runner', 'running'), busyD, [], none, new Map(), true), depth: 1 },
-      { ...agentReport(row('done1', 'done'), idleD, [], none, new Map(), true), depth: 1 },
-      { ...agentReport(row('done2', 'done'), idleD, [], none, new Map(), true), depth: 1 },
+      { ...agentReport(row('runner', 'running'), busyD, nofiles, none, new Map(), true), depth: 1 },
+      { ...agentReport(row('done1', 'done'), idleD, nofiles, none, new Map(), true), depth: 1 },
+      { ...agentReport(row('done2', 'done'), idleD, nofiles, none, new Map(), true), depth: 1 },
     ]
     const text = overviewText('s', agents, [], 3 * min)
     expect(text).toMatch(/runner .* waiting 2m on Run the follow check/)
@@ -205,6 +244,17 @@ describe('notable commands', () => {
     expect(quietRuns(c).runs).toBe(2)                     // the check, and the grep that matched nothing
     expect(c.failed).toBe(1)
   })
+
+  // Listed for being open, a command showed in Now and Commands at once, then in neither when it
+  // finished. Now alone shows what is open, with its latest output line, and an open run has not passed.
+  it('leaves an open command to Now, with its output line, and out of the passed count', () => {
+    const d = childDigest([brief, call('a', 'Bash', { command: 'need -- vitest' }), result('a', 'Command running in background', 0, { background: true, output: 'out.log' })])
+    const c = commandsOf(d)
+    expect([c.groups.filter(notable).length, quietRuns(c).runs]).toEqual([0, 0])
+    const r = agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'running' }, d, nofiles,
+      { writers: new Map(), blind: [] }, new Map(), true, () => 'start\n#39 still queued 220.1 s')
+    expect(statusText(r, min)).toMatch(/Now: need -- vitest, 1m \(background\)\n {2}"#39 still queued 220\.1 s"/)
+  })
 })
 
 describe('babysitEvents', () => {
@@ -212,7 +262,7 @@ describe('babysitEvents', () => {
   // once while it lasts, and its texts keep the overview's fixed phrases.
   const none = { writers: new Map(), blind: [] }
   const agent = (id: string, state: 'running' | 'done', events: Event[]) =>
-    agentReport({ id, label: id, file: '', mtime: 0, depth: 1, stopped: false, state }, childDigest([brief, ...events]), [], none, new Map(), true)
+    agentReport({ id, label: id, file: '', mtime: 0, depth: 1, stopped: false, state }, childDigest([brief, ...events]), nofiles, none, new Map(), true)
 
   it('names an idle stall, a deadlock of waits, and a background call left running', () => {
     const idle = babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min)

@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import { readHead, readTail } from '../../core/server/sessions.js'
+import { readPaths } from '../../core/shellReads.js'
 import { loadedThreads, startToolTurn } from './appServer.js'
 import type { ChildTranscript, Event, SessionFile, Thread, TokenCounts } from '../../core/events.js'
 
@@ -203,61 +204,6 @@ function patchDigest(diff: string): string {
     else if (l.startsWith('-') && !l.startsWith('---')) del++
   }
   return `+${add} −${del}`
-}
-
-const READ_CMDS = /^(Get-Content|gc|cat|type|nl|bat|sed|head|tail)$/i
-const PATH_FLAGS = /^-(Path|LiteralPath)$/i
-const VALUE_FLAGS = /^-(Encoding|TotalCount|Head|Tail|ReadCount|Delimiter)$/i   // a flag that takes the next token
-const SLICE_STAGES = /^(sed -n|head|tail|Select-Object|select)(\s|$)/i          // pipe stages that only cut lines (`\b` would pass Select-String)
-
-// The paths a command reads whole, one per statement — undefined unless EVERY statement is such a read.
-function readPaths(command: string): string[] | undefined {
-  const stmts = splitStatements(command)
-  const paths = stmts.map(readPath)
-  return stmts.length && paths.every((p): p is string => p !== undefined) ? paths : undefined
-}
-
-// The one file a statement reads whole — `Get-Content [-Raw] [-Encoding x] p`, `cat p`, `nl -ba p`,
-// `sed -n 1,80p p` — optionally piped into a slicer (`| sed -n …`, `| Select-Object -First n`).
-// undefined for anything else: a pipe into Select-String is a search, two paths are a batch of two.
-function readPath(stmt: string): string | undefined {
-  const [head, ...stages] = stmt.split('|')
-  if (!stages.every(s => SLICE_STAGES.test(s.trim()))) return undefined
-  const toks = shellTokens(head)
-  if (!READ_CMDS.test(toks[0] ?? '')) return undefined
-  const paths: string[] = []
-  for (let i = 1; i < toks.length; i++) {
-    const t = toks[i]
-    if (PATH_FLAGS.test(t)) { if (i + 1 < toks.length) paths.push(toks[++i]); continue }
-    if (VALUE_FLAGS.test(t)) { i++; continue }
-    if (t.startsWith('-') || /^\d+(,\d+)?p?$/.test(t)) continue          // a switch, a count, a sed range
-    paths.push(t)
-  }
-  return paths.length === 1 ? paths[0] : undefined
-}
-
-// A command's statements: split on `;`, newlines, `&&`, `||` outside quotes (a `|` pipe stays inside
-// its statement). Shell quotes, not JS ones — no backslash escapes (`'C:\Code\'` is one string).
-function splitStatements(cmd: string): string[] {
-  const out: string[] = []
-  let start = 0
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i]
-    if (c === '"' || c === "'") { const e = cmd.indexOf(c, i + 1); if (e < 0) break; i = e; continue }
-    const two = cmd.slice(i, i + 2)
-    if (c === ';' || c === '\n' || two === '&&' || two === '||') {
-      out.push(cmd.slice(start, i))
-      if (two === '&&' || two === '||') i++
-      start = i + 1
-    }
-  }
-  out.push(cmd.slice(start))
-  return out.map(s => s.trim()).filter(Boolean)
-}
-
-// Whitespace-split shell tokens, a quoted run one token with its quotes dropped.
-function shellTokens(s: string): string[] {
-  return (s.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map(t => /^(['"])(.*)\1$/.exec(t)?.[2] ?? t)
 }
 
 type ExecCall = { fn: string; arg: unknown }   // the parsed literal, or its raw source text

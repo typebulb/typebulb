@@ -84,7 +84,7 @@ export async function sessionStatus<E>(adapter: AgentAdapter<E>, cwd: string, s:
   const shared = sharedFiles(kids.map((c, i) => ({ id: c.id, writes: touches[i]!.writes, reads: touches[i]!.reads })))
   const settled = await gitSettled(cwd, Math.min(Infinity, ...[...shared.writers.values()].flat().map(w => w.at)), [...shared.writers.keys()])
   const names = new Map(kids.map(c => [c.id, childName(c)]))
-  const reports = kids.map((c, i) => ({ ...agentReport(c, digestOf(adapter, c.file), touches[i]!.edited, shared, names, s.live, readOutput, settled), depth: c.depth, parentId: c.parentId }))
+  const reports = kids.map((c, i) => ({ ...agentReport(c, digestOf(adapter, c.file), touches[i]!, shared, names, s.live, readOutput, settled), depth: c.depth, parentId: c.parentId }))
   return { reports, files: checkFiles(reports, shared, settled) }
 }
 
