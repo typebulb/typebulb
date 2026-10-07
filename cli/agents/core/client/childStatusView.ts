@@ -145,10 +145,10 @@ export class ChildStatusView extends Component {
   }
 
   // How a finished run ended, coloured: a failure red, an exit or a plain ok green, a notice's other
-  // outcome (stopped, killed) neutral.
+  // outcome (stopped, killed) or an exit a pipe hid neutral.
   #endPill(l: Run) {
     const text = outcomeOf(l)
-    return span({ class: ['cs-pill', l.failed ? 'bad' : text === 'ok' || text.startsWith('exit') ? 'ok' : ''] }, text)
+    return span({ class: ['cs-pill', l.failed ? 'bad' : !l.hidden && (text === 'ok' || text.startsWith('exit')) ? 'ok' : ''] }, text)
   }
 
   // The commands worth a line, each group's latest run citing its call (a click returns to the

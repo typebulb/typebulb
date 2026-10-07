@@ -74,6 +74,17 @@ export function isRead(cmd: string): boolean {
 const SEARCHES = new Set(['grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string'])
 export const endsInSearch = (cmd: string) => SEARCHES.has(shellTokens(shellParts(cmd).at(-1)?.text ?? '')[0]?.toLowerCase() ?? '')
 
+// The filters an agent pipes output into to shorten it. A pipeline exits with its last stage, so
+// after one of these the command's own exit is gone, unless `set -o pipefail` came first. PowerShell
+// keeps a native command's exit through its pipeline, so its cmdlets are not here.
+const FILTERS = new Set(['tail', 'head', 'grep', 'egrep', 'fgrep', 'rg', 'sed', 'awk', 'sort', 'uniq', 'wc', 'cut', 'tr', 'tee', 'cat', 'less', 'findstr'])
+/** Whether the line's exit is a filter's rather than its command's: its last statement pipes into one. */
+export function exitHidden(cmd: string): boolean {
+  if (/\bset\s+-\w*o\s+pipefail\b/.test(masked(cmd))) return false
+  const stages = shellParts(shellParts(cmd, false).at(-1)?.text ?? '')
+  return stages.length > 1 && FILTERS.has(shellTokens(stages.at(-1)!.text)[0]?.toLowerCase() ?? '')
+}
+
 // A heredoc's body is the text a command writes, not commands: `cat > s.js <<'EOF' … EOF; node s.js`.
 const HEREDOC = /<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?\n\s*\2\b/g
 

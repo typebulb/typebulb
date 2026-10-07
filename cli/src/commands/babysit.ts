@@ -54,7 +54,7 @@ export async function runBabysit(mode: string | undefined): Promise<void> {
   while (Date.now() < deadline) {
     if (adapter.sessionEnded?.(sessionId, cwd)) end(3, 'The session this babysits has ended.')
     const { reports } = await sessionStatus(adapter, cwd, sessionChildren(adapter, cwd, sessionId))
-    const events = babysitEvents(reports, Date.now())
+    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId))
     const fresh = [...events].filter(([key]) => !fired.includes(key))
     // A condition that has cleared leaves the list, so its return fires again.
     if (!fresh.length) { fired = [...events.keys()]; save(fired) }

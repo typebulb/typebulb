@@ -4,7 +4,7 @@
 // view and `typebulb status` print one report from one code path.
 import { childName, childShownState, type Event, type ChildRow } from './events.js'
 import { asStr, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
-import { masked, preamble, isRead, endsInSearch, commandLabel, gitMoves, statementReads } from './shell.js'
+import { masked, preamble, isRead, endsInSearch, exitHidden, commandLabel, gitMoves, statementReads } from './shell.js'
 
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
@@ -113,9 +113,10 @@ function timeline(calls: Call[], wakes: number[], activity: number[], origin: nu
 
 /** One shell call as a run: open until its result, or for a background call its notice. An error
  *  with no exit never ran, so it is not a run. A run fails on a nonzero exit, else on its error
- *  flag, which is all a harness without exit codes gives. */
+ *  flag, which is all a harness without exit codes gives. `hidden` marks a run that did not fail
+ *  only because a filter it was piped into gave the exit (`| tail`), so nobody knows how it ended. */
 // `interrupted` is the report's to set: a run left open by a process that has since died.
-export interface Run { id: string; at?: number; open: boolean; interrupted?: boolean; failed: boolean; exit?: number; ms?: number; outcome?: string; first: string; last: string }
+export interface Run { id: string; at?: number; open: boolean; interrupted?: boolean; failed: boolean; hidden?: boolean; exit?: number; ms?: number; outcome?: string; first: string; last: string }
 
 // A call is open until its result, or for a background call its notice.
 const isOpen = (c: Call) => c.result === undefined || (!!c.background && c.endAt === undefined)
@@ -127,12 +128,15 @@ function runOf(c: Call, readOutput?: (file: string) => string | undefined): Run 
   if (neverRan(c)) return undefined
   const open = isOpen(c)
   const end = c.background ? c.endAt : c.doneAt
-  const failed = !open && (c.exit !== undefined ? c.exit !== 0 : c.background ? c.outcome === 'failed' : c.isError)
+  const cmd = commandOf(c)
+  // A search ending the line exits 1 when it matched nothing, which is not a failure.
+  const failed = !open && (c.exit !== undefined ? c.exit !== 0 && !(c.exit === 1 && !!cmd && endsInSearch(preamble(cmd).rest))
+    : c.background ? c.outcome === 'failed' : c.isError)
   // A background run's output is its file, read while it runs too: an open call's latest line is often
   // the one that says why it is slow (`#39 still queued 220.1 s`).
   const text = c.background ? (c.output ? readOutput?.(c.output) ?? '' : '') : c.result ?? ''
   return {
-    id: c.id, at: c.at, open, failed, exit: c.exit, outcome: c.background ? c.outcome : undefined,
+    id: c.id, at: c.at, open, failed, hidden: !open && !failed && !!cmd && exitHidden(cmd) || undefined, exit: c.exit, outcome: c.background ? c.outcome : undefined,
     ms: c.at !== undefined && end !== undefined ? end - c.at : undefined, ...ends(text),
   }
 }
@@ -149,14 +153,15 @@ function ends(text: string): { first: string; last: string } {
 /** Shell calls grouped by their exact text, preamble stripped: each group's runs and failures, its
  *  latest run, how many of its last closed runs failed in a row, and what it does to others (`tags`).
  *  Newest group first. */
-export interface CommandGroup { cmd: string; runs: number; open: number; failed: number; streak: number; long: boolean; ms: number; tags: string[]; latest: Run }
+export interface CommandGroup { cmd: string; runs: number; open: number; failed: number; hidden: number; streak: number; long: boolean; ms: number; tags: string[]; latest: Run }
 /** `lookups` counts the runs of commands that only read, kept out of the groups and the failures. */
 export interface Commands { runs: number; failed: number; lookups: number; groups: CommandGroup[] }
 
 // A command that reaches past the agent's own work, worth a line however it ended: stopping a process
 // (another agent's server, a test tree), or a git write, which discards or publishes work.
 const KILLS = /(^|[\s;|&(])(kill|pkill|killall|taskkill|stop-process)\b/i
-const GIT_WRITE = /\bgit\s+(-C\s+\S+\s+)?(commit|stash|checkout|reset|push|clean|restore|rebase|merge|cherry-pick|revert)\b/
+// The verb ends at a space or the line, so `merge-base`, a read, is not `merge`.
+const GIT_WRITE = /\bgit\s+(-C\s+\S+\s+)?(commit|stash|checkout|reset|push|clean|restore|rebase|merge|cherry-pick|revert)(?![\w-])/
 
 export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined): Commands {
   const groups = new Map<string, Run[]>()
@@ -167,16 +172,17 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
     if (!run) continue
     const key = stripBoiler(cmd).trim()
     if (isRead(key)) { lookups++; continue }
-    if (run.exit === 1 && endsInSearch(key)) run.failed = false
     groups.set(key, [...groups.get(key) ?? [], run])
   }
   const all = [...groups].map(([cmd, runs]) => {
+    // A run whose exit a pipe hid says nothing either way, so it neither extends nor breaks a streak.
     let streak = 0
-    for (const r of runs.filter(r => !r.open).reverse()) { if (!r.failed) break; streak++ }
+    for (const r of runs.filter(r => !r.open && !r.hidden).reverse()) { if (!r.failed) break; streak++ }
     const bare = masked(cmd)
     const tags = [KILLS.test(bare) ? 'stops a process' : '', GIT_WRITE.test(bare) ? 'git write' : ''].filter(Boolean)
     return {
-      cmd: clip(commandLabel(cmd), 100), runs: runs.length, open: runs.filter(r => r.open).length, failed: runs.filter(r => r.failed).length, streak,
+      cmd: clip(commandLabel(cmd), 100), runs: runs.length, open: runs.filter(r => r.open).length, failed: runs.filter(r => r.failed).length,
+      hidden: runs.filter(r => r.hidden).length, streak,
       long: runs.some(r => (r.ms ?? 0) > LONG_RUN_MS), ms: runs.reduce((n, r) => n + (r.ms ?? 0), 0), tags, latest: runs.at(-1)!,
     }
   }).sort((a, b) => (b.latest.at ?? 0) - (a.latest.at ?? 0))
@@ -499,22 +505,28 @@ export const commandsShown = (c: Commands) => {
   return { shown: all.slice(0, COMMANDS_SHOWN), more: Math.max(0, all.length - COMMANDS_SHOWN) }
 }
 export const moreLine = (more: number) => `+${more} more like these`
-/** The finished runs folded into the count, and their time together: one still open has not passed. */
+/** The finished runs folded into the count, how many of them a pipe hid the exit of, and their time
+ *  together: one still open has not passed. */
 export const quietRuns = (c: Commands) => {
   const q = c.groups.filter(g => !notable(g))
-  return { runs: q.reduce((n, g) => n + g.runs - g.open, 0), ms: q.reduce((n, g) => n + g.ms, 0) }
+  return { runs: q.reduce((n, g) => n + g.runs - g.open, 0), hidden: q.reduce((n, g) => n + g.hidden, 0), ms: q.reduce((n, g) => n + g.ms, 0) }
 }
-/** "18 other runs passed, 3m in all": a plain count, no "+", which read as a control to expand.
- *  `other` drops where nothing is listed above it. */
+/** "18 other runs passed, 7 with their exit hidden by a pipe, 3m in all": a plain count, no "+",
+ *  which read as a control to expand. `other` drops where nothing is listed above it. */
 export const quietRunsLine = (c: Commands, other = true) => {
-  const q = quietRuns(c)
-  return `${q.runs}${other ? ' other' : ''} ${q.runs === 1 ? 'run' : 'runs'} passed, ${mins(q.ms)} in all`
+  const q = quietRuns(c), passed = q.runs - q.hidden, o = other ? ' other' : ''
+  const noun = (n: number) => n === 1 ? 'run' : 'runs'
+  const hid = `with ${q.hidden === 1 ? 'its' : 'their'} exit hidden by a pipe`
+  const head = passed ? `${passed}${o} ${noun(passed)} passed${q.hidden ? `, ${q.hidden} ${hid}` : ''}` : `${q.hidden}${o} ${noun(q.hidden)} ${hid}`
+  return `${head}, ${mins(q.ms)} in all`
 }
 export const groupTags = (g: CommandGroup) => [...g.tags, g.long ? `over ${mins(LONG_RUN_MS)}` : ''].filter(Boolean).join(', ')
 const saidOf = (r?: Run) => r ? r.last || r.first : ''
 /** How a finished call ended: its exit, a background notice's outcome where it gave none, else ok or
- *  error. Never an exit the transcript does not state: a harness without exit codes gives only the flag. */
-export const outcomeOf = (r: Run) => r.outcome && r.outcome !== 'completed' && r.outcome !== 'failed' && r.exit === undefined ? r.outcome
+ *  error. Never an exit the transcript does not state: a harness without exit codes gives only the
+ *  flag, and a filter's exit is not the command's. */
+export const outcomeOf = (r: Run) => r.hidden ? 'exit hidden'
+  : r.outcome && r.outcome !== 'completed' && r.outcome !== 'failed' && r.exit === undefined ? r.outcome
   : r.exit !== undefined ? `exit ${r.exit}` : r.failed ? 'error' : 'ok'
 
 export const editedLine = (e: Edited) => e.deleted ? `${e.path} (deleted)` : e.from ? `${e.path} (moved from ${e.from})` : e.path
@@ -569,11 +581,12 @@ const WAITING_ALERT_MS = 2 * 60_000
 /** The conditions that need a parent's attention now, each keyed so that it fires once while it
  *  lasts and again if it clears and comes back: a key carries no minutes, only what it is about. The
  *  texts keep the overview's fixed phrases, which a parent may match. */
-export function babysitEvents(agents: StatusReport[], now: number): Map<string, string> {
+export function babysitEvents(agents: StatusReport[], now: number, parentBusy = false): Map<string, string> {
   const out = new Map<string, string>()
   const name = (id: string) => `"${agents.find(a => a.id === id)?.name ?? id}"`
   const newest = Math.max(0, ...agents.map(a => a.asOf))
-  if (agents.length && !agents.some(busy) && now - newest >= IDLE_ALERT_MS)
+  // A parent mid-turn is working, not stalled: waking it would only end the babysit between fan-outs.
+  if (agents.length && !parentBusy && !agents.some(busy) && now - newest >= IDLE_ALERT_MS)
     out.set('idle', `No agent running for ${mins(now - newest)} (${agents.length} agents).`)
   for (const a of agents) {
     if (a.state === 'finished')

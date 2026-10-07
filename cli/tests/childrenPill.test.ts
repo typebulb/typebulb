@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { byAncestry } from '../agents/core/order.js'
-import { childDigest, editedFiles, commandsOf, notable, quietRuns, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
+import { childDigest, editedFiles, commandsOf, notable, quietRuns, quietRunsLine, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
 import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
 import type { Event } from '../agents/core/events.js'
@@ -289,6 +289,11 @@ describe('notable commands', () => {
     expect(c.groups.filter(notable).map(g => g.cmd).sort()).toEqual(['Stop-Process -Id 35072', 'node probe.js', 'npm run need -- vitest x'])
     expect(quietRuns(c).runs).toBe(2)                     // the check, and the grep that matched nothing
     expect(c.failed).toBe(1)
+    // Piped into a filter, a run exits with the filter, so it has not passed, nor broken a streak.
+    const piped = commandsOf(childDigest([brief, ...run('p', 'need -- vitest x 2>&1 | tail -5'), ...run('q', 'set -o pipefail; need -- check | tail -5')]))
+    expect(piped.groups.map(g => [g.cmd.includes('check'), !!g.latest.hidden]).sort()).toEqual([[false, true], [true, false]])
+    expect(quietRunsLine(piped)).toBe('1 other run passed, 1 with its exit hidden by a pipe, 0s in all')
+    expect(commandsOf(childDigest([brief, ...run('m', 'git merge-base --is-ancestor a b && echo yes')])).groups[0]!.tags).toEqual([])
   })
 
   // Listed for being open, a command showed in Now and Commands at once, then in neither when it
@@ -314,6 +319,8 @@ describe('babysitEvents', () => {
     const idle = babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min)
     expect([...idle.keys()]).toEqual(['idle'])
     expect(idle.get('idle')).toMatch(/^No agent running for 6m/)
+    // A parent mid-turn is working, not stalled.
+    expect(babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min, true).size).toBe(0)
 
     const waits = babysitEvents(['a', 'b'].map(id => agent(id, 'running', [call(`${id}1`, 'Bash', { command: 'npm run need -- check' }, 0)])), 3 * min)
     expect(waits.get('waiting')).toMatch(/^2 agents waiting on calls at once/)
