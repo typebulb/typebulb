@@ -2,12 +2,13 @@
 // digest is a function of the transcript alone; the report adds what the file can't say (its state,
 // the session's other agents), and the text adds the clock. Pure and harness-neutral, so the mirror's
 // view and `typebulb status` print one report from one code path.
-import { childName, type Event, type ChildRow } from './events.js'
-import { asStr, basename, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
-import { statementReads } from './shellReads.js'
+import { childName, childShownState, type Event, type ChildRow } from './events.js'
+import { asStr, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
+import { masked, preamble, isRead, endsInSearch, commandLabel, gitMoves, statementReads } from './shell.js'
 
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
+const READ_SHOWN = 30          // newest reads kept; past it the list was a scroll (380 for one agent)
 const LONG_RUN_MS = 3 * 60_000 // a run longer than this is listed, whatever it is
 
 /** One tool call as the transcript records it. A background call's `doneAt` is the result saying it
@@ -27,10 +28,9 @@ export interface Edited { path: string; deleted?: boolean; from?: string }
 interface Touch { path: string; at: number; whole?: boolean }
 
 const clip = (s: string, n: number) => { s = stripAnsi(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
-// Shell preamble that says nothing about the command.
-const stripBoiler = (s: string) => s.replace(/^(\s*(cd\s+\S+|export\s+PATH=\S+)\s*(;|&&)\s*)+/, '')
+const stripBoiler = (s: string) => preamble(s).rest
 const commandOf = (c: Call) => asStr(c.input?.command) ?? asStr(c.input?.cmd)
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+export const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 const label = (c: Call) => {
   const cmd = commandOf(c)
   if (cmd) return clip(commandLabel(stripBoiler(cmd).trim()), 100)
@@ -43,10 +43,13 @@ const label = (c: Call) => {
 export function childDigest(events: Event[]) {
   let calls: Call[] = [], byId = new Map<string, Call>(), byTask = new Map<string, Call>()
   let wakes: number[] = [], activity: number[] = [], turnEnds: number[] = []
+  // Each text block's first line, with the calls made before it: none after the last one makes it
+  // the closing text, a finished agent's report.
+  let narration: { text: string; calls: number }[] = []
   let origin: number | undefined, ended = false, lastAt = 0
   for (const e of events) {
     if (e.type === 'cleared') {
-      calls = []; byId = new Map(); byTask = new Map(); wakes = []; activity = []; turnEnds = []; origin = undefined; ended = false
+      calls = []; byId = new Map(); byTask = new Map(); wakes = []; activity = []; turnEnds = []; narration = []; origin = undefined; ended = false
       continue
     }
     const at = 'at' in e ? e.at : undefined
@@ -57,6 +60,8 @@ export function childDigest(events: Event[]) {
       ended = false
     } else if (e.type === 'assistant') {
       if (at !== undefined) activity.push(at)
+      const first = e.error ? undefined : e.text.split('\n').find(l => l.trim())
+      if (first) narration.push({ text: clip(first, 200), calls: calls.length })
       for (const t of e.tools) {
         const c: Call = { id: t.id, name: t.name, input: t.input, at, isError: false }
         calls.push(c)
@@ -81,7 +86,7 @@ export function childDigest(events: Event[]) {
       ended = true
     }
   }
-  return { calls, turnEnds, lastAt, ...timeline(calls, wakes, activity, origin, lastAt) }
+  return { calls, turnEnds, narration, lastAt, ...timeline(calls, wakes, activity, origin, lastAt) }
 }
 
 // Active time: a child woken after finishing waited idle, so the stretch from its last activity to
@@ -112,9 +117,15 @@ function timeline(calls: Call[], wakes: number[], activity: number[], origin: nu
 // `interrupted` is the report's to set: a run left open by a process that has since died.
 export interface Run { id: string; at?: number; open: boolean; interrupted?: boolean; failed: boolean; exit?: number; ms?: number; outcome?: string; first: string; last: string }
 
+// A call is open until its result, or for a background call its notice.
+const isOpen = (c: Call) => c.result === undefined || (!!c.background && c.endAt === undefined)
+// A shell call that errored with no exit never ran (blocked, denied). Any other tool's error did run:
+// a failed Edit is the agent's latest act, not nothing.
+const neverRan = (c: Call) => !!c.refused && commandOf(c) !== undefined
+
 function runOf(c: Call, readOutput?: (file: string) => string | undefined): Run | undefined {
-  if (c.refused) return undefined
-  const open = c.result === undefined || (!!c.background && c.endAt === undefined)
+  if (neverRan(c)) return undefined
+  const open = isOpen(c)
   const end = c.background ? c.endAt : c.doneAt
   const failed = !open && (c.exit !== undefined ? c.exit !== 0 : c.background ? c.outcome === 'failed' : c.isError)
   // A background run's output is its file, read while it runs too: an open call's latest line is often
@@ -146,71 +157,6 @@ export interface Commands { runs: number; failed: number; lookups: number; group
 // (another agent's server, a test tree), or a git write, which discards or publishes work.
 const KILLS = /(^|[\s;|&(])(kill|pkill|killall|taskkill|stop-process)\b/i
 const GIT_WRITE = /\bgit\s+(-C\s+\S+\s+)?(commit|stash|checkout|reset|push|clean|restore|rebase|merge|cherry-pick|revert)\b/
-// A search that matched nothing exits 1, and at the end of a pipeline that exit is the line's.
-const SEARCHES = new Set(['grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string'])
-
-// A command that only reads tells a delegator nothing about stuck, failing or risky, so it folds into
-// a count. Read only when every part of the line is: each part separated by `;`, `&&`, `||`, `|` or a
-// newline, after its shell keywords and variable assignments, starts with a read-only tool used in a
-// read-only form, and nothing is redirected into a file. A grep that matches nothing exits 1, so a
-// read's exit is not a failure either.
-const READ_TOOLS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'cat', 'head', 'tail', 'less', 'ls', 'wc', 'find', 'date',
-  'echo', 'printf', 'pwd', 'which', 'sort', 'uniq', 'cut', 'tr', 'awk', 'jq', 'stat', 'file', 'diff', 'basename', 'dirname',
-  'realpath', 'cd', 'pushd', 'popd', 'export', 'set', 'true', 'test', '[', 'seq', 'ps', 'tasklist', 'time', 'select-string', 'test-path', 'measure-object',
-  'select-object', 'where-object', 'sort-object', 'format-table', 'format-list', 'write-output', 'write-host'])
-const READ_GIT = new Set(['log', 'status', 'diff', 'show', 'blame', 'rev-parse', 'ls-files', 'grep', 'branch', 'remote'])
-// typebulb's own inspection commands, which an agent runs on itself (`typebulb status`).
-const READ_TYPEBULB = new Set(['status', 'logs', 'get', 'models', 'slug', 'predict'])
-const SHELL_WORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', '(', ')'])
-// Quoted text is a pattern or a message, never a separator or a redirect (`grep "a\|b"` is one part),
-// so it is masked, length kept, before either is looked for.
-const masked = (s: string) => s.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, m => '_'.repeat(m.length))
-
-// The line's parts in their own text, each with where it starts.
-function shellParts(cmd: string): { text: string; at: number }[] {
-  const out: { text: string; at: number }[] = []
-  let from = 0
-  for (const m of masked(cmd).matchAll(/&&|\|\||[;|\n]/g)) { out.push({ text: cmd.slice(from, m.index), at: from }); from = m.index! + m[0].length }
-  out.push({ text: cmd.slice(from), at: from })
-  return out.filter(p => p.text.trim())
-}
-
-function partIsRead(part: string): boolean {
-  if (/>|\btee\b/.test(masked(part).replace(/\d?>&\d|\d?>\s*(\/dev\/null|\$null|NUL)\b/gi, ''))) return false
-  let words: string[] = part.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? []
-  // `x=$(grep …)` names its command after the `$(`, which isRead checks on its own.
-  while (words.length && (SHELL_WORDS.has(words[0]!) || /^\w+=/.test(words[0]!))) words = /^\w+=\$\(/.test(words[0]!) ? [] : words.slice(1)
-  if (!words.length) return true
-  let [tool, ...args] = [words[0]!.replace(/^["'(]+/, '').toLowerCase(), ...words.slice(1)]
-  if (tool === 'npx') { args = args.filter(a => !a.startsWith('-')); tool = (args.shift() ?? '').replace(/@.*$/, '').toLowerCase() }
-  if (tool === 'for') return true                         // `for x in …`: the list, not a command
-  if (tool === 'typebulb') return READ_TYPEBULB.has(args.find(a => !a.startsWith('-')) ?? '')
-  if (tool === 'git') return READ_GIT.has(args.find((a, i) => !a.startsWith('-') && !/^-[Cc]$/.test(args[i - 1] ?? '')) ?? '')
-  if (tool === 'sed') return !args.some(a => /^-[a-z]*i|^--in-place/.test(a))
-  if (tool === 'find') return !args.some(a => /^-(delete|exec|execdir|ok)$/.test(a))
-  return READ_TOOLS.has(tool) || /^get-/.test(tool)
-}
-
-export function isRead(cmd: string): boolean {
-  // A command substitution runs a command of its own, quoted or not.
-  const subs = [...cmd.matchAll(/\$\(|`/g)].map(m => cmd.slice(m.index! + m[0].length))
-  return shellParts(cmd).every(p => partIsRead(p.text)) && subs.every(s => partIsRead(shellParts(s)[0]?.text ?? ''))
-}
-
-// A heredoc's body is the text a command writes, not commands: `cat > s.js <<'EOF' … EOF; node s.js`.
-const HEREDOC = /<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?\n\s*\2\b/g
-
-/** A command named from its first part that does more than read: `cat x; git apply y` reads as
- *  `…git apply y`, since a row clipped at its reads hid the command that mattered. */
-export function commandLabel(cmd: string): string {
-  cmd = cmd.replace(HEREDOC, (_m, q: string, tag: string, rest: string) => `<<${q}${tag}${q}${rest} … ${tag}`)
-  const parts = shellParts(cmd)
-  let i = parts.findIndex(p => !partIsRead(p.text))
-  // A loop's or an if's body is named from the loop or the if: `until grep -q x; do sleep 5; done`.
-  if (/^\s*(do|then|else|elif)\b/.test(parts[i]?.text ?? '')) while (i > 0 && !/^\s*(while|until|for|if)\b/.test(parts[i]!.text)) i--
-  const at = parts[i]?.at ?? 0
-  return at ? `…${cmd.slice(at).trim()}` : cmd
-}
 
 export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined): Commands {
   const groups = new Map<string, Run[]>()
@@ -221,8 +167,7 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
     if (!run) continue
     const key = stripBoiler(cmd).trim()
     if (isRead(key)) { lookups++; continue }
-    const tail = shellParts(key).at(-1)?.text.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
-    if (run.exit === 1 && SEARCHES.has(tail)) run.failed = false
+    if (run.exit === 1 && endsInSearch(key)) run.failed = false
     groups.set(key, [...groups.get(key) ?? [], run])
   }
   const all = [...groups].map(([cmd, runs]) => {
@@ -247,13 +192,29 @@ export const lookupsLine = (c: Commands) => c.lookups ? `${c.lookups} ${c.lookup
 // that file: Write, Edit, MultiEdit, NotebookEdit, and patcher tools, named by shape, not by tool.
 const WRITE_FIELDS = ['content', 'diff', 'new_string', 'new_source', 'edits']
 
+const isAbs = (p: string) => /^([a-zA-Z]:)?\//.test(p)
+// Normalized pieces joined from the last absolute one, `.` and `..` folded. Undefined where a piece
+// it needs is a variable, `~` or `-`, a directory the text does not give.
+function resolve(pieces: string[]): string | undefined {
+  const ps = pieces.filter(Boolean)
+  const used = ps.slice(Math.max(0, ps.map(isAbs).lastIndexOf(true)))
+  if (used.some(p => p.includes('$') || /^~|^-$/.test(p))) return undefined
+  const out: string[] = []
+  for (const s of used.join('/').split('/')) {
+    if (s === '..' && out.length && !/^(\.\.|[a-zA-Z]:)?$/.test(out.at(-1)!)) out.pop()
+    else if (s !== '.' && (s || !out.length)) out.push(s)
+  }
+  return out.join('/')
+}
+
 /** The files the child changed, in the order it first touched them, with every write and read by
  *  time. A write is a successful edit-tool call, a file a patch's headers name, or what `git rm` and
  *  `git mv` delete or move; a read is a read-tool call on the path, or a read row's `path` fields
  *  (Pi's `read`, Codex's read-only script). `shellReads` are the files a shell statement read, which
  *  Files read counts and the ⚠ does not. A write a script makes is not seen (TB-Agent-Children.md
  *  measures how much that misses). A path inside the project is shown relative to it; a write outside
- *  it is dropped, a read kept by its full path, since reviewing another project is still work. */
+ *  it is dropped, a read kept by its full path, since reviewing another project is still work. A
+ *  shell path is relative to the command's leading `cd`, else the call's `workdir`, else the project. */
 export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes: Touch[]; reads: Touch[]; shellReads: Touch[] } {
   const out = new Map<string, Edited>()
   const writes: Touch[] = [], reads: Touch[] = [], shellReads: Touch[] = []
@@ -310,36 +271,29 @@ export function fileTouches(d: Digest, cwd: string): { edited: Edited[]; writes:
     const fields = (name: string) => Object.entries(i).filter(([k, v]) => typeof v === 'string' && (k === name || k.startsWith(`${name} (`))).map(([, v]) => v as string)
     if (c.name === 'read') for (const v of fields('path')) { const p = seen(v); if (p) reads.push({ path: p, at }) }
     const base = asStr(i.workdir)
-    for (const cmd of [...fields('command'), ...fields('cmd')]) for (const f of statementReads(cmd)) {
-      const p = seen(base && !/^([a-zA-Z]:)?[\\/]/.test(f) ? `${base}/${f}` : f)
-      if (p) shellReads.push({ path: p, at })
+    const shell = (cmd: string) => {
+      const { dirs, rest } = preamble(cmd)
+      return { rest, at: (f: string) => resolve([cwd, base ?? '', ...dirs, f].map(norm)) }
+    }
+    for (const cmd of [...fields('command'), ...fields('cmd')]) {
+      const s = shell(cmd)
+      for (const f of statementReads(s.rest)) { const r = s.at(f), p = r && seen(r); if (p) shellReads.push({ path: p, at }) }
     }
     const cmd = commandOf(c)
-    if (cmd) for (const g of gitMoves(cmd)) g.to ? move(g.from, g.to) : touch(g.from, { deleted: true })
+    if (cmd) {
+      const s = shell(cmd)
+      for (const g of gitMoves(s.rest)) {
+        const from = s.at(g.from), to = g.to && s.at(g.to)
+        if (from && to) move(from, to)
+        else if (from && !g.to) touch(from, { deleted: true })
+      }
+    }
   }
   return { edited: [...out.values()], writes, reads, shellReads }
 }
 
 export type Touches = ReturnType<typeof fileTouches>
 export const editedFiles = (d: Digest, cwd: string) => fileTouches(d, cwd).edited
-
-// `git rm` and `git mv` in a shell command, as deletes and moves. Their arguments are paths, so they
-// read exactly, unlike a sed or a script. `--cached` untracks and leaves the file, so it is skipped.
-function gitMoves(cmd: string): { from: string; to?: string }[] {
-  const out: { from: string; to?: string }[] = []
-  for (const part of cmd.split(/&&|\|\||[;|\n]/)) {
-    const tokens: string[] = part.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? []
-    const at = tokens.indexOf('git')
-    const verb = tokens[at + 1]
-    if (at < 0 || (verb !== 'rm' && verb !== 'mv') || tokens.includes('--cached')) continue
-    const args = tokens.slice(at + 2).filter(a => !a.startsWith('-')).map(a => a.replace(/^["']|["']$/g, ''))
-    if (verb === 'rm') { for (const a of args) out.push({ from: a }); continue }
-    const to = args.pop()
-    if (!to) continue
-    for (const from of args) out.push({ from, to: args.length > 1 ? `${to.replace(/\/+$/, '')}/${basename(from)}` : to })
-  }
-  return out
-}
 
 /** One agent's writes and reads, for the session's shared files. */
 export interface AgentFiles { id: string; writes: Touch[]; reads: Touch[] }
@@ -390,6 +344,8 @@ export interface StatusReport {
   // Every file it read, by a read tool or a shell statement, written ones too: CC reads before each
   // edit, so leaving those out left almost nothing. Newest read last.
   read: { path: string; times: number; at: number }[]
+  // The first line of each text block it wrote, newest last, without a finished agent's report.
+  narration: string[]
   // While it runs with nothing open, its newest finished call of any tool, so the row a call held stays
   // until the next call starts instead of blinking out between calls. Gone once it stops running.
   latest?: { id: string; label: string; run: Run }
@@ -406,7 +362,7 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
   readOutput?: (file: string) => string | undefined, settled: Settled = NO_GIT): StatusReport {
   const name = (id: string) => `"${names.get(id) ?? id}"`
   const open = d.calls
-    .filter(x => !x.refused && (x.result === undefined || (x.background && x.endAt === undefined)))
+    .filter(x => !neverRan(x) && isOpen(x))
     .map(x => ({ id: x.id, label: label(x), short: clip(asStr(x.input?.description) ?? '', 80) || label(x), at: x.at, background: !!x.background,
       interrupted: !live || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince), said: saidOf(runOf(x, readOutput)) }))
   const read = new Map<string, { path: string; times: number; at: number }>()
@@ -415,11 +371,13 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
     read.delete(t.path)
     read.set(t.path, { ...r, times: r.times + 1, at: Math.max(r.at, t.at) })
   }
-  const done = c.state === 'running' && !open.length ? d.calls.filter(x => !x.refused).at(-1) : undefined
+  const done = c.state === 'running' && !open.length ? d.calls.filter(x => !neverRan(x)).at(-1) : undefined
   const run = done && runOf(done)
+  const shown = childShownState(c), state = shown === 'done' ? 'finished' : shown
+  const report = state === 'finished' && d.narration.at(-1)?.calls === d.calls.length
   return {
     id: c.id, name: childName(c),
-    state: c.state === 'stopped' ? 'stopped' : c.failing ? 'failing' : c.state === 'running' ? 'running' : 'finished',
+    state,
     asOf: d.lastAt, activeMs: d.span, idleMs: d.idle, toolMs: d.toolMs,
     open,
     commands: markInterrupted(commandsOf(d, readOutput), open),
@@ -436,6 +394,7 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
       }
     }),
     read: [...read.values()].sort((x, y) => x.at - y.at),
+    narration: (report ? d.narration.slice(0, -1) : d.narration).map(p => p.text),
     latest: done && run ? { id: done.id, label: label(done), run } : undefined,
   }
 }
@@ -453,26 +412,29 @@ const liveOpen = (r: StatusReport) => r.open.filter(o => !o.interrupted)
 export const busy = (r: StatusReport) => r.state === 'running' || liveOpen(r).length > 0
 const maxStreak = (r: StatusReport) => Math.max(0, ...r.commands.groups.map(g => g.streak))
 
-// "running · 28m active, 1h 2m idle", or a finished agent's background call still going. The phrases
-// `background call running` and `failed N in a row` are a contract (TB-Agent-Children.md): a parent
-// may match them, so they keep their wording.
 // The digest's times run to the last entry; a running agent has been at it since, waiting on a call
 // or thinking, so its active time and that wait's share run to now.
 const sinceEntry = (r: StatusReport, now: number) => r.state === 'running' ? Math.max(0, now - r.asOf) : 0
 export const activeAt = (r: StatusReport, now: number) => r.activeMs + sinceEntry(r, now)
 
-export function stateLine(r: StatusReport, now: number): string {
-  const bg = liveOpen(r).filter(o => o.background)
-  const head = r.state === 'finished' && bg.length
-    ? `finished, background call running ${mins(now - (bg[0]!.at ?? now))}${bg.length > 1 ? ` (+${bg.length - 1} more)` : ''}`
-    : r.state
-  return `${head} · ${mins(activeAt(r, now))} active${r.idleMs ? `, ${mins(r.idleMs)} idle` : ''}`
+// A finished agent with background calls still going leads with them: "finished" alone misreads. The
+// phrases `background call running` and `failed N in a row` are a contract (TB-Agent-Children.md): a
+// parent may match them, so they keep their wording.
+function stateWord(r: StatusReport, now: number): string {
+  const bg = r.state === 'finished' ? liveOpen(r).filter(o => o.background) : []
+  return bg.length ? `finished, background call running ${mins(now - (bg[0]!.at ?? now))}${bg.length > 1 ? ` (+${bg.length - 1} more)` : ''}` : r.state
 }
+/** Where it stands, its active time, and any idle time outside it: the text joins them, the view
+ *  sets each in a tile. */
+export const stateParts = (r: StatusReport, now: number) =>
+  ({ state: stateWord(r, now), active: `${mins(activeAt(r, now))} active`, idle: r.idleMs ? `${mins(r.idleMs)} idle` : '' })
+/** "running · 28m active · 1h 2m idle". */
+export const stateLine = (r: StatusReport, now: number) => { const p = stateParts(r, now); return [p.state, p.active, p.idle].filter(Boolean).join(' · ') }
 
-export const openLine = (o: StatusReport['open'][number], now: number) => o.interrupted
+const openLine = (o: StatusReport['open'][number], now: number) => o.interrupted
   ? `${o.label}: interrupted, its process has ended`
   : `${o.label}, ${mins(now - (o.at ?? now))}${o.background ? ' (background)' : ''}`
-export const quietLine = (r: StatusReport, now: number) => `nothing open, last entry ${mins(now - r.asOf)} ago`
+const quietLine = (r: StatusReport, now: number) => `nothing open, last entry ${mins(now - r.asOf)} ago`
 
 function nowLines(r: StatusReport, now: number): string[] {
   if (!r.open.length) return [`Now: ${quietLine(r, now)}`, ...r.latest ? [`Latest: ${r.latest.label} · ${outcomeOf(r.latest.run)}${r.latest.run.ms !== undefined ? ` after ${mins(r.latest.run.ms)}` : ''}`] : []]
@@ -480,11 +442,10 @@ function nowLines(r: StatusReport, now: number): string[] {
   return r.open.length === 1 ? [`Now: ${openLine(r.open[0]!, now)}`, ...said(r.open[0]!, '  ')] : ['Now:', ...r.open.flatMap(o => [`  ${openLine(o, now)}`, ...said(o, '    ')])]
 }
 
-export function latestLine(g: CommandGroup, now: number): string {
+function latestLine(g: CommandGroup, now: number): string {
   const l = g.latest
   const how = l.interrupted ? 'interrupted' : l.open ? `running ${mins(now - (l.at ?? now))}`
-    : l.outcome && l.outcome !== 'completed' && l.outcome !== 'failed' && l.exit === undefined ? l.outcome
-    : `exit ${l.exit ?? (l.failed ? 'error' : 0)}${l.ms !== undefined ? ` after ${mins(l.ms)}` : ''}`
+    : `${outcomeOf(l)}${l.ms !== undefined ? ` after ${mins(l.ms)}` : ''}`
   return `latest: ${how}${g.streak >= 2 ? `, failed ${g.streak} in a row` : ''}`
 }
 
@@ -494,25 +455,25 @@ export function statusText(r: StatusReport, now: number): string {
   out.push(...nowLines(r, now))
   const c = r.commands
   out.push(`Commands: ${commandsLine(c)}`)
-  for (const g of c.groups.filter(notable).slice(0, COMMANDS_SHOWN)) {
-    const tags = tagsLine(g)
+  const { shown: listed, more } = commandsShown(c)
+  for (const g of listed) {
+    const tags = groupTags(g)
     out.push(`  ${g.cmd}  ×${g.runs}${g.failed ? `, ${g.failed} failed` : ''}${tags ? ` · ${tags}` : ''}`, `    ${latestLine(g, now)}`)
     const said = [g.latest.first, g.latest.last].filter(Boolean).map(s => `"${s}"`).join(' … ')
     if (said) out.push(`    ${said}`)
   }
-  const listed = Math.min(COMMANDS_SHOWN, c.groups.filter(notable).length)
-  const more = c.groups.filter(notable).length - listed
-  if (more) out.push(`  +${more} more like these`)
-  const quiet = quietRuns(c)
-  if (quiet.runs) out.push(`  ${quietRunsLine(c)}`)
+  if (more) out.push(`  ${moreLine(more)}`)
+  if (quietRuns(c).runs) out.push(`  ${quietRunsLine(c)}`)
+  if (r.activeMs) out.push(`Time: ${timeLine(r, now)}`)
+  if (r.narration.length) out.push('Narration:', ...r.narration.map(p => `  ${p}`))
   out.push(`Files written: ${filesLine(r)}`)
   for (const f of r.files) {
     const also = f.also.length ? `  also ${alsoLine(f)}` : ''
     out.push(`  ${editedLine(f)}${f.ignored ? ' (ignored)' : f.committed ? ' (committed)' : ''}${also}`, ...f.blind.map(b => `    ${b}`))
   }
-  if (r.activeMs) out.push(`Time: ${timeLine(r, now)}`)
   // Last, as the least a delegator acts on.
-  out.push(`Files read: ${r.read.length || 'none'}`, ...r.read.map(f => `  ${readLine(f)}`))
+  const { shown, earlier } = readShown(r)
+  out.push(`Files read: ${r.read.length || 'none'}`, ...(earlier ? [`  +${earlier} earlier`] : []), ...shown.map(f => `  ${readLine(f)}`))
   return out.join('\n')
 }
 
@@ -524,15 +485,20 @@ export function timeSplit(r: StatusReport, now: number): { tools: number; model:
   const tools = r.toolMs + (liveOpen(r).some(o => !o.background) ? sinceEntry(r, now) : 0)
   return { tools, model: Math.max(0, activeAt(r, now) - tools) }
 }
-export const timeLine = (r: StatusReport, now: number) => { const t = timeSplit(r, now); return `${mins(t.tools)} in tools, ${mins(t.model)} in the model` }
-export const alsoLine = (f: StatusReport['files'][number]) => f.also.map(a => `"${a.name}" ${clock(a.at)}`).join(', ')
-export const COMMANDS_LISTED = COMMANDS_SHOWN
+const timeLine = (r: StatusReport, now: number) => { const t = timeSplit(r, now); return `${mins(t.tools)} in tools, ${mins(t.model)} in the model` }
+const alsoLine = (f: StatusReport['files'][number]) => f.also.map(a => `"${a.name}" ${clock(a.at)}`).join(', ')
 
 /** A command worth its own line (TB-Agent-Children.md, from a day of one parent's real decisions): it
  *  failed, took long, was run three or more times, or reaches past the agent's own work. The rest is
  *  the agent doing its work, and folds into a count. Running is not a reason: Now shows what is open,
  *  and listing it here too showed one command twice, then neither once it finished. */
 export const notable = (g: CommandGroup) => g.failed > 0 || g.long || g.runs >= 3 || g.tags.length > 0
+/** The commands listed, at most COMMANDS_SHOWN, and how many more notable ones fold into a line. */
+export const commandsShown = (c: Commands) => {
+  const all = c.groups.filter(notable)
+  return { shown: all.slice(0, COMMANDS_SHOWN), more: Math.max(0, all.length - COMMANDS_SHOWN) }
+}
+export const moreLine = (more: number) => `+${more} more like these`
 /** The finished runs folded into the count, and their time together: one still open has not passed. */
 export const quietRuns = (c: Commands) => {
   const q = c.groups.filter(g => !notable(g))
@@ -544,23 +510,26 @@ export const quietRunsLine = (c: Commands, other = true) => {
   const q = quietRuns(c)
   return `${q.runs}${other ? ' other' : ''} ${q.runs === 1 ? 'run' : 'runs'} passed, ${mins(q.ms)} in all`
 }
-const tagsLine = (g: CommandGroup) => [...g.tags, g.long ? `over ${mins(LONG_RUN_MS)}` : ''].filter(Boolean).join(', ')
-export const groupTags = tagsLine
+export const groupTags = (g: CommandGroup) => [...g.tags, g.long ? `over ${mins(LONG_RUN_MS)}` : ''].filter(Boolean).join(', ')
 const saidOf = (r?: Run) => r ? r.last || r.first : ''
-/** How a finished call ended: its exit, a background notice's outcome where it gave none, else ok or error. */
+/** How a finished call ended: its exit, a background notice's outcome where it gave none, else ok or
+ *  error. Never an exit the transcript does not state: a harness without exit codes gives only the flag. */
 export const outcomeOf = (r: Run) => r.outcome && r.outcome !== 'completed' && r.outcome !== 'failed' && r.exit === undefined ? r.outcome
   : r.exit !== undefined ? `exit ${r.exit}` : r.failed ? 'error' : 'ok'
 
 export const editedLine = (e: Edited) => e.deleted ? `${e.path} (deleted)` : e.from ? `${e.path} (moved from ${e.from})` : e.path
-export const readLine = (f: StatusReport['read'][number]) => f.times > 1 ? `${f.path} ×${f.times}` : f.path
+const readLine = (f: StatusReport['read'][number]) => f.times > 1 ? `${f.path} ×${f.times}` : f.path
+/** The newest reads, where its attention is now, and how many earlier ones fold into a count. */
+export const readShown = (r: StatusReport) => ({ shown: r.read.slice(-READ_SHOWN), earlier: Math.max(0, r.read.length - READ_SHOWN) })
 
 /** A file the overview asks the parent to check before `git add`: since its last commit, a running
- *  agent wrote it, or more than one agent did. `blind` names the agents in a blind write since then. */
-export interface CheckFile { path: string; writers: { id: string; name: string; running: boolean }[]; blind: string[] }
+ *  or stopped agent wrote it, or more than one agent did. `blind` names the agents in a blind write
+ *  since then. */
+export interface CheckFile { path: string; writers: { id: string; name: string; running: boolean; stopped: boolean }[]; blind: string[] }
 
 /** The session's overview: whether anything is moving, the files to check, then a line for each agent
- *  that still asks something of the parent: running, failing, or a writer of a file to check. The
- *  rest fold into one count. A nested agent indents under the one that spawned it, when that one shows. */
+ *  that still asks something of the parent: running, failing, or a writer of a file to check. The rest
+ *  fold into one count, stops named apart. A nested agent indents under the one that spawned it, when that one shows. */
 export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number): string {
   const moving = agents.filter(busy).length
   const newest = Math.max(0, ...agents.map(a => a.asOf))
@@ -569,24 +538,24 @@ export function overviewText(sessionId: string, agents: (StatusReport & { depth:
     : `Session ${sessionId}: No agent running for ${mins(now - newest)} (${agents.length} agents).`]
   if (files.length) {
     out.push('', 'Files to check before git add:')
-    for (const f of files) out.push(`  ${f.path}  ${f.writers.map(w => `"${w.name}"${w.running ? ' (running)' : ''}`).join(', ')}${f.blind.length ? ' ⚠' : ''}`)
+    for (const f of files) out.push(`  ${f.path}  ${f.writers.map(w => `"${w.name}"${w.running ? ' (running)' : w.stopped ? ' (stopped)' : ''}`).join(', ')}${f.blind.length ? ' ⚠' : ''}`)
   }
   out.push('', 'Agents:')
   const listed = agents.filter(a => busy(a) || a.state === 'failing' || files.some(f => f.writers.some(w => w.id === a.id)))
   const shown = new Set(listed.map(a => a.id))
   for (const a of listed) {
     const o = liveOpen(a)[0]
-    // A finished agent with background calls still going leads with them: "finished" alone misreads.
     const bg = a.state === 'finished' ? liveOpen(a).filter(x => x.background) : []
-    const state = bg.length ? `finished, background call running ${mins(now - (bg[0]!.at ?? now))}${bg.length > 1 ? ` (+${bg.length - 1} more)` : ''}` : a.state.padEnd(8)
+    const state = stateWord(a, now).padEnd(8)
     const doing = bg.length ? bg[0]!.short : o ? `waiting ${mins(now - (o.at ?? now))} on ${o.short}` : ''
     const streak = maxStreak(a)
     const marks = [doing, streak >= 2 ? `failed ${streak} in a row` : '', files.some(f => f.blind.includes(a.id)) ? '⚠' : ''].filter(Boolean)
     const indent = a.parentId && shown.has(a.parentId) ? '  '.repeat(Math.max(0, a.depth - 1)) : ''
     out.push(`  ${indent}${a.id}  ${state} ${`${mins(activeAt(a, now))} active`.padStart(10)}  ${a.name}${marks.length ? ` · ${marks.join(' · ')}` : ''}`)
   }
-  const rest = agents.length - listed.length
-  if (rest) out.push(`  ${listed.length ? '+' : ''}${rest} ${agents.some(a => !shown.has(a.id) && a.state === 'stopped') ? 'finished or stopped' : 'finished'}, nothing to check`)
+  const rest = agents.filter(a => !shown.has(a.id)), stopped = rest.filter(a => a.state === 'stopped').length
+  const fold = [rest.length - stopped ? `${rest.length - stopped} finished` : '', stopped ? `${stopped} stopped` : ''].filter(Boolean).join(', ')
+  if (rest.length) out.push(`  ${listed.length ? '+' : ''}${fold}, nothing to check`)
   out.push('', 'Run `typebulb status <id>` for one agent\'s report, or `typebulb babysit` in the background to be woken when an agent needs attention.')
   return out.join('\n')
 }

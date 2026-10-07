@@ -23,6 +23,12 @@
   // the one thing they cannot see for themselves.
   const say = text => { if (el.isConnected) why.textContent = text }
   let retried = false
+  const refetch = src => setTimeout(() => {
+    const again = document.createElement('script')
+    again.type = 'module'
+    again.src = src.split('?')[0] + '?retry=' + Date.now()   // past a cached bad response
+    document.body.appendChild(again)
+  }, 1000)
   // A module script's FETCH failure fires on the element and never bubbles to window, hence capture.
   // Untreated it is invisible: the page shimmers on over a bundle that is never coming.
   addEventListener('error', e => {
@@ -33,12 +39,12 @@
       // re-appending the script rather than reloading the page cannot loop and cannot cost the page.
       if (retried) { say("The agent mirror didn't finish loading. Reload to retry."); return }
       retried = true
-      setTimeout(() => {
-        const again = document.createElement('script')
-        again.type = 'module'
-        again.src = script.src.split('?')[0] + '?retry=' + Date.now()   // past a cached bad response
-        document.body.appendChild(again)
-      }, 1000)
+      refetch(script.src)
+    } else if (e.error instanceof SyntaxError && el.isConnected && !retried) {
+      // A bundle fetched mid-rewrite parses as half a file: the same transient, so the same one retry.
+      const bundle = document.querySelector('script[type=module][src]')
+      if (bundle) { retried = true; refetch(bundle.src); return }
+      say('The agent mirror stopped: ' + e.message)
     } else if (e.message) {
       say('The agent mirror stopped: ' + e.message)
     }

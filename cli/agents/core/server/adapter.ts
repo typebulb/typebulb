@@ -145,6 +145,12 @@ export abstract class AgentAdapter<E = unknown> {
    */
   callerSessionId?(cwd: string): string | undefined
   /**
+   * The project folder a session is filed under, where the harness records it, so a caller whose
+   * shell has `cd`'d into a subdirectory still finds its own session's children. Optional: absent or
+   * undefined, the cwd answers.
+   */
+  sessionCwd?(sessionId: string): string | undefined
+  /**
    * The adapter a one-shot read of another file uses (a child's Status, TB-Agent-Children.md). An
    * adapter whose `idOf`/`apply` keep per-drain state returns a fresh instance, or the read would
    * interleave with the live drain's; a stateless one is its own.

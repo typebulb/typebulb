@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { capText, firstLineDigest, plural } from '../../core/server/text.js'
 import { AgentAdapter } from '../../core/server/adapter.js'
 import { readHead, readTail } from '../../core/server/sessions.js'
-import { readPaths } from '../../core/shellReads.js'
+import { readPaths } from '../../core/shell.js'
 import { loadedThreads, startToolTurn } from './appServer.js'
 import type { ChildTranscript, Event, SessionFile, Thread, TokenCounts } from '../../core/events.js'
 

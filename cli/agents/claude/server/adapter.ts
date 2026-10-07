@@ -120,7 +120,7 @@ function listChildren(root: string, cwd: string, sessionId: string): ChildTransc
       spawnId: meta.toolUseId,
       parentId: meta.parentAgentId,
       depth: meta.spawnDepth ?? 1,
-      stopped: !!meta.stoppedByUser,
+      stopped: !!meta.stoppedByUser || !!tail.stopped,
     })
   }
   return out
@@ -137,7 +137,7 @@ const DEFAULT_AGENT_TYPE = 'general-purpose'
 // listing an idle child costs its stat and nothing more. The window widens when one line fills it,
 // which would otherwise hide the leaf, or when it holds no response to read the figure from.
 const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
-interface TailFacts { tokens?: number; model?: string; effort?: string; running?: boolean; failing?: boolean }
+interface TailFacts { tokens?: number; model?: string; effort?: string; running?: boolean; failing?: boolean; stopped?: boolean }
 const childTails = new Map<string, TailFacts & { size: number; mtime: number }>()
 function childTail(file: string, size: number, mtime: number): TailFacts {
   const hit = childTails.get(file)
@@ -171,6 +171,7 @@ function childTail(file: string, size: number, mtime: number): TailFacts {
       effort: reply?.effort ?? hit?.effort,
       running: chainWorking(entries),
       failing: !!last?.isApiErrorMessage,
+      stopped: interruptedLeaf(entries),
     }
     if (facts.tokens === undefined && tail.partial) continue
     break
@@ -227,6 +228,16 @@ function chainWorking(entries: JsonlEntry[]): boolean {
   return toolUseIds.some(id => id && !resolved.has(id))
 }
 
+// CC ends a stopped agent's file on its interrupt marker, whoever stopped it; `stoppedByUser` marks
+// only the user's stop, not the parent's TaskStop. A wake lands after the marker.
+function interruptedLeaf(entries: JsonlEntry[]): boolean {
+  let leaf: JsonlEntry | undefined
+  for (const e of entries) if (e.type === 'user' || e.type === 'assistant') leaf = e
+  const c = leaf?.type === 'user' && !isToolResult(leaf) ? leaf.message?.content : undefined
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text ?? '').join('') : ''
+  return /^\[Request interrupted by user\b/.test(text.trim())
+}
+
 // The leaf answers the child's own SubagentHandback call: the report is delivered and the turn over.
 function isHandbackResult(leaf: JsonlEntry, entries: JsonlEntry[]): boolean {
   const c = leaf.message?.content
@@ -276,17 +287,16 @@ const INTERNAL_PATTERNS = [
   /^<local-command-stdout\b/i,
   /^<local-command-stderr\b/i,
 ]
+// A turn *is* a synthetic envelope only when it BEGINS with a marker: a brief or report that quotes
+// one mid-text is real prose (532 of 534 user-turn markers on disk open the text, 2026-10-07).
 function isInternal(text: string): boolean {
   const t = text.trim()
-  return !!t && INTERNAL_PATTERNS.some(p => p.test(t))
+  return !!t && INTERNAL_PATTERNS.some(p => p.exec(t)?.index === 0)
 }
 
-// For an assistant TEXT block: drop it only when the block *is* a synthetic envelope (it BEGINS with a
-// marker), never when real prose merely quotes a marker mid-text. ('' counts as synthetic.)
+// For an assistant TEXT block; '' counts as synthetic.
 function isSyntheticAssistantText(text: string): boolean {
-  const t = text.trim()
-  if (!t) return true
-  return INTERNAL_PATTERNS.some(p => { const m = p.exec(t); return !!m && m.index === 0 })
+  return !text.trim() || isInternal(text)
 }
 
 // IDE-injected context the editor integration splices into the user's text block — strip the tag spans
@@ -519,7 +529,7 @@ function readPreview(file: string): string {
 
 // CC's own pid-session store — one record per *running* CC process, removed on clean exit. A session
 // is live iff a record names it and that pid is alive.
-interface SessionRecord { sessionId?: string; pid?: number; startedAt?: number; status?: string }
+interface SessionRecord { sessionId?: string; pid?: number; startedAt?: number; status?: string; cwd?: string }
 function liveRecords(root: string): SessionRecord[] {
   const dir = join(root, 'sessions')
   let names: string[]
@@ -576,6 +586,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   listChildren(cwd: string, sessionId: string) { return listChildren(this.root, cwd, sessionId) }
   // CC exports its session id to every shell it runs.
   callerSessionId() { return process.env.CLAUDE_CODE_SESSION_ID || undefined }
+  sessionCwd(sessionId: string) { return liveRecords(this.root).find(r => r.sessionId === sessionId)?.cwd }
 
   parseEntry(line: string): JsonlEntry | null {
     try { return JSON.parse(line) as JsonlEntry } catch { return null }

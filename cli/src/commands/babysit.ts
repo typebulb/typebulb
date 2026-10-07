@@ -1,12 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { loadEnv } from '../env.js'
-import { agentAdapterFactories } from '../agentViewer/registry.js'
-import { detectCallerHarness } from '../agentViewer/resolve.js'
 import { typebulbHome } from '../serve/paths.js'
-import { sessionToWatch, sessionChildren, sessionStatus } from '../../agents/core/server/childReport.js'
+import { isAlive } from '../serve/serverRegistry.js'
+import { callerScope, sessionToWatch, sessionChildren, sessionStatus } from '../../agents/core/server/childReport.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
-import type { AgentAdapter } from '../../agents/core/server/adapter.js'
+import { childAdapters } from './status.js'
 
 const POLL_MS = 10_000
 // Housekeeping, as `wait`'s cap is: an orphan whose parent is gone should not watch for ever.
@@ -31,16 +30,13 @@ const TOOL = 'typebulb_babysit'
  */
 export async function runBabysit(mode: string | undefined): Promise<void> {
   loadEnv(mode)
-  const cwd = process.cwd()
-  const factories = agentAdapterFactories()
-  const caller = detectCallerHarness()
-  const adapters = (caller ? [caller] : Object.keys(factories)).map(n => factories[n]!() as AgentAdapter).filter(a => a.listChildren)
+  const { caller, adapters } = childAdapters()
   // A harness that starts turns must know whose: never the newest session as a stand-in.
-  const target = adapters.map(adapter => ({ adapter, sessionId: adapter.wake ? adapter.callerSessionId?.(cwd) : sessionToWatch(adapter, cwd) })).find(t => t.sessionId)
+  const target = adapters.map(adapter => ({ adapter, ...(adapter.wake ? callerScope : sessionToWatch)(adapter, process.cwd()) })).find(t => t.sessionId)
   if (!target?.sessionId) return fail(!adapters.length ? `Babysitting sub-agents isn't supported for ${caller} sessions.`
     : adapters.some(a => a.wake) ? "Can't babysit: your own session couldn't be identified in this project, and a wake goes to no other."
     : 'No session to babysit in this project.')
-  const { adapter, sessionId } = target
+  const { adapter, sessionId, cwd } = target
   if (adapter.wake) {
     const route = await adapter.wakeRoute!(sessionId)
     if (route.error) return fail(`Can't babysit: ${route.error}.`)
@@ -96,17 +92,24 @@ function end(code: number, message?: string): never {
   process.exit(code)
 }
 
-// One babysit per session, so two cannot consume each other's events. A lock whose process is gone
-// is stale and taken over; the lock goes when this process exits, however it exits.
+// One babysit per session, so two cannot consume each other's events. The lock is created
+// exclusively, so two starting at once cannot both take it; one whose process is gone is stale and
+// taken over. It goes when this process exits, however it exits. A filesystem that refuses the lock
+// leaves babysit watching unlocked, as before.
 function takeLock(file: string): boolean {
-  try {
-    const pid = Number(readFileSync(file, 'utf8'))
-    if (pid && pid !== process.pid) { process.kill(pid, 0); return false }
-  } catch {}
-  try {
-    mkdirSync(join(file, '..'), { recursive: true })
-    writeFileSync(file, String(process.pid))
-    process.on('exit', () => { try { if (Number(readFileSync(file, 'utf8')) === process.pid) rmSync(file) } catch {} })
-  } catch {}
-  return true
+  try { mkdirSync(join(file, '..'), { recursive: true }) } catch {}
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      writeFileSync(file, String(process.pid), { flag: 'wx' })
+      process.on('exit', () => { try { if (Number(readFileSync(file, 'utf8')) === process.pid) rmSync(file) } catch {} })
+      return true
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') return true
+      let pid = 0
+      try { pid = Number(readFileSync(file, 'utf8')) } catch {}
+      if (pid && pid !== process.pid && isAlive(pid)) return false
+      try { rmSync(file) } catch {}
+    }
+  }
+  return false
 }

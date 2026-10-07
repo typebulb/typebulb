@@ -74,7 +74,7 @@ export interface ChildTranscript {
   spawnId?: string           // the parent tool call that spawned it (CC: toolUseId)
   parentId?: string          // the child that spawned it, above depth 1
   depth: number              // 1 = spawned by the session itself
-  stopped: boolean           // the user killed it — the one terminal state only the harness knows
+  stopped: boolean           // the user or its parent stopped it
   /** When the oldest live process for its session started, where the harness records it: a call
    *  left open before then ran in a process now dead (TB-Agent-Children.md). */
   liveSince?: number
@@ -94,6 +94,9 @@ export interface ChildRow extends ChildTranscript { state: 'running' | 'done' | 
 /** A child's display name, wherever one is shown or sent: its description, else its type, else
  *  "agent" — `kind` is omitted where it would say only that (TB-Agent-Children.md). */
 export const childName = (c: { label: string; kind?: string }) => c.label || c.kind || 'agent'
+
+/** What a child's dot and row say: failing outranks running or done, a stop outranks failing. */
+export const childShownState = (c: ChildRow) => c.failing && c.state !== 'stopped' ? 'failing' as const : c.state
 
 /** The tooltip on every way into a child's transcript. */
 export const childOpenTip = (c: { kind?: string }) => `Open this ${c.kind ? `${c.kind} ` : ''}agent's transcript`

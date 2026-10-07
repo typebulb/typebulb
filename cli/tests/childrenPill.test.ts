@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { byAncestry } from '../agents/core/order.js'
-import { childDigest, editedFiles, commandsOf, notable, quietRuns, babysitEvents, isRead, commandLabel, fileTouches, sharedFiles, agentReport, statusText, overviewText } from '../agents/core/childStatus.js'
+import { childDigest, editedFiles, commandsOf, notable, quietRuns, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
+import { isRead, commandLabel } from '../agents/core/shell.js'
+import { checkFiles } from '../agents/core/server/childReport.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
@@ -145,6 +147,12 @@ describe('statusText', () => {
       { writers: new Map(), blind: [] }, new Map(), true)
     expect(statusText(report('running'), 2 * min)).toMatch(/\nLatest: .*close the doorway · ok after 1s\n/)
     expect(statusText(report('done'), 2 * min)).not.toMatch(/Latest:/)
+    // A failed edit ran, so it holds the row; only a shell call that errored without an exit never ran.
+    const edit = childDigest([brief, call('e', 'Edit', { file_path: 'C:/p/a.ts', old_string: 'x', new_string: 'y' }, min),
+      result('e', 'String to replace not found', min + 1000, { isError: true, refused: true })])
+    const text = statusText(agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'running' }, edit, nofiles,
+      { writers: new Map(), blind: [] }, new Map(), true), 2 * min)
+    expect(text).toMatch(/\nLatest: Edit.* · error after 1s\n/)
   })
 
   // Files read lists every file it read, written ones too: CC reads before each edit, so leaving those
@@ -160,6 +168,10 @@ describe('statusText', () => {
     const text = statusText(agentReport(row, d, fileTouches(d, 'C:/p'), { writers: new Map(), blind: [] }, new Map(), true), 6 * min)
     expect(text).toMatch(/Files written: 1 \(1 uncommitted\)\n {2}e\.ts\n/)
     expect(text.split('Files read: 3\n')[1]).toBe('  b.ts\n  a.ts ×2\n  e.ts')
+    // Past 30 the earliest fold into a count; the newest, where its attention is now, stay.
+    const many = childDigest([brief, ...Array.from({ length: 32 }, (_, i) => [call(`r${i}`, 'Read', { file_path: `C:/p/f${i}.ts` }), result(`r${i}`, '', min)]).flat()])
+    const long = statusText(agentReport(row, many, fileTouches(many, 'C:/p'), { writers: new Map(), blind: [] }, new Map(), true), 6 * min)
+    expect(long).toMatch(/Files read: 32\n {2}\+2 earlier\n {2}f2\.ts\n/)
   })
 
   // Codex has no read tool: it reads through its shell, often capturing a file to slice it, and a
@@ -173,6 +185,27 @@ describe('statusText', () => {
       call('d', 'exec', { command: "$p = 'C:\\other\\Spec.md'; $lines = Get-Content -LiteralPath $p; $lines[0..9]" }), result('d', '', 4 * min)])
     expect(agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state: 'done' }, d, fileTouches(d, 'C:/p'),
       { writers: new Map(), blind: [] }, new Map(), true).read.map(f => f.path)).toEqual(['docs/T.md', 'README.md', 'src/a.ts', 'src/b.ts', 'C:/other/Spec.md'])
+  })
+
+  // `head -c 8 msu-paisley/plans.pdf` after a `cd` was listed as if the path were the project's.
+  it('resolves a shell path against a leading cd, for reads and git writes alike', () => {
+    const d = childDigest([brief,
+      call('a', 'Bash', { command: 'cd "C:/p/tests/scratch"; head -c 8 msu/plans.pdf' }), result('a', '', min),
+      call('b', 'PowerShell', { command: 'Set-Location C:\\other; Get-Content ..\\q\\a.md' }), result('b', '', 2 * min),
+      call('c', 'Bash', { command: 'cd docs && git rm -q old.md' }), result('c', '', 3 * min)])
+    const t = fileTouches(d, 'C:/p')
+    expect([t.shellReads.map(r => r.path), t.edited]).toEqual([['tests/scratch/msu/plans.pdf', 'C:/q/a.md'], [{ path: 'docs/old.md', deleted: true }]])
+  })
+
+  // The agent's own words, one line each. A finished agent's closing text is its report, not narration.
+  it('lists its narration by first line, without a finished agent\'s report', () => {
+    const say = (text: string, at: number): Event => ({ type: 'assistant', text, thinking: '', tools: [], live: false, at })
+    const d = childDigest([brief, say('Reading the plans.\nThen the specs.', min), call('a', 'Bash', { command: 'npm test' }, min), result('a', 'ok', min),
+      say('All done.\nDetails follow.', 2 * min)])
+    const text = (state: 'running' | 'done') => statusText(agentReport({ id: 'x', label: 'x', file: '', mtime: 0, depth: 1, stopped: false, state }, d, nofiles,
+      { writers: new Map(), blind: [] }, new Map(), true), 3 * min)
+    expect(text('running')).toMatch(/\nNarration:\n {2}Reading the plans\.\n {2}All done\.\nFiles written/)
+    expect(text('done')).toMatch(/\nNarration:\n {2}Reading the plans\.\nFiles written/)
   })
 })
 
@@ -192,6 +225,19 @@ describe('overviewText', () => {
     expect(text).toMatch(/runner .* waiting 2m on Run the follow check/)
     expect(text).not.toMatch(/done1/)
     expect(text).toMatch(/\+2 finished, nothing to check/)
+  })
+
+  // Cut off mid-work, a stopped agent may have left an edit half done, like a running one. One that
+  // left nothing folds into the count, named as a stop.
+  it('lists a stopped agent with uncommitted writes, and folds one without', () => {
+    const d = childDigest([brief, call('w', 'Edit', { file_path: 'C:/p/a.ts', old_string: 'x', new_string: 'y' }), result('w', '', min)])
+    const t = fileTouches(d, 'C:/p'), shared = sharedFiles([{ id: 'cut', ...t }])
+    const r = { ...agentReport({ id: 'cut', label: 'cut', file: '', mtime: 0, depth: 1, stopped: true, state: 'stopped' }, d, t, shared, new Map(), true), depth: 1 }
+    const old = { ...agentReport({ id: 'old', label: 'old', file: '', mtime: 0, depth: 1, stopped: true, state: 'stopped' }, childDigest([brief]), nofiles, shared, new Map(), true), depth: 1 }
+    const text = overviewText('s', [r, old], checkFiles([r, old], shared, NO_GIT), 3 * min)
+    expect(text).toMatch(/\n {2}a\.ts {2}"cut" \(stopped\)\n/)
+    expect(text).toMatch(/\n {2}cut {2}stopped/)
+    expect(text).toMatch(/\n {2}\+1 stopped, nothing to check/)
   })
 })
 

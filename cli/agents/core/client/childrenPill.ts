@@ -4,7 +4,7 @@ import { ChildStatusView } from './childStatusView.js'
 import { busyPill, closeChip } from './ui.js'
 import { formatTokens } from './util.js'
 import { formatDuration } from '../format.js'
-import { childName } from '../events.js'
+import { childName, childShownState } from '../events.js'
 import { byAncestry } from '../order.js'
 import type { ChildRow } from './types.js'
 
@@ -203,7 +203,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         onMouseEnter: () => { if (this.highlighted !== i) { this.highlighted = i; this.update() } },
         onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id) },
       },
-      span({ class: ['children-dot', c.failing && c.state !== 'stopped' ? 'failing' : c.state] }),
+      span({ class: ['children-dot', childShownState(c)] }),
       span({ class: ['children-label', c.state === 'running' ? 'shimmer-text shimmer-slow' : ''] },
         childName(c)),
       // The description leads every row, so its type sits with the model, after it.

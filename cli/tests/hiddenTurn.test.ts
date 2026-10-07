@@ -175,6 +175,23 @@ describe('listChildren reads a child ended by its hand-back as done', () => {
   })
 })
 
+// A parent's TaskStop sets no `stoppedByUser`: the child's own file ends on CC's interrupt marker.
+describe('listChildren reads a child ended by an interrupt as stopped', () => {
+  const { root, kids } = subagents()
+  const kid = join(kids, 'agent-kid.jsonl')
+  const line = (e: unknown) => JSON.stringify(e) + '\n'
+  writeFileSync(kid,
+    line({ type: 'user', message: { content: 'Collect the sets.' } }) +
+    line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } }))
+  const stopped = () => new ClaudeAdapter(root).listChildren(cwd, 'sess')[0]?.stopped
+
+  it('is stopped while the marker is its leaf, and not once a wake lands after it', () => {
+    expect(stopped()).toBe(true)
+    appendFileSync(kid, line({ type: 'user', message: { content: 'Carry on.' } }))
+    expect(stopped()).toBe(false)
+  })
+})
+
 // CC parents each parallel call's result on its own call, so the file is a graph and a walk from the
 // leaf passes through one branch. The linker chains a message's entries in the order written.
 describe('a parallel tool call keeps every result', () => {

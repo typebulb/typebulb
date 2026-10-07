@@ -815,8 +815,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   async function childStatus(id: string) {
     const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
     const live = sessionLive()
-    const { reports } = await sessionStatus(adapter, state.cwd, { sessionId: state.sessionId, live, children: kids.map(c => ({ ...c, state: childState(c, live) })) })
-    const report = reports.find(r => r.id === id)
+    const { reports: [report] } = await sessionStatus(adapter, state.cwd, { sessionId: state.sessionId, live, children: kids.map(c => ({ ...c, state: childState(c, live) })) }, id)
     return report ? { ok: true, report } : { ok: false, error: 'child not found' }
   }
 

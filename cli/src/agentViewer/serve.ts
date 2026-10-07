@@ -1,4 +1,4 @@
-import { readFileSync, copyFileSync, existsSync } from 'fs'
+import { readFileSync, copyFileSync, existsSync, writeFileSync, renameSync, rmSync } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 import { EventEmitter } from 'events'
@@ -132,14 +132,27 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   if (args.watch && devSource) console.log('  Watching for changes...\n')
   async function rebuildClient(): Promise<void> {
     const esbuild = await import('esbuild')
-    await esbuild.build({
+    // Every mirror on this repo's dist rebuilds the same file, so write it atomically: a page that
+    // reloads mid-write otherwise parses half a bundle ("Unexpected token").
+    const { outputFiles } = await esbuild.build({
       entryPoints: [path.join(agentClientDir, 'index.ts')],
       bundle: true,
       platform: 'browser',
       format: 'esm',
       outfile: path.join(assetDir, 'client.js'),
+      write: false,
       // No minify in dev — faster rebuilds; the browser reloads when the build finishes.
     })
+    const out = path.join(assetDir, 'client.js'), tmp = `${out}.${process.pid}.tmp`
+    writeFileSync(tmp, outputFiles[0]!.contents)
+    // Windows refuses a replace while another mirror's rename or a scanner holds the file: retry
+    // briefly, and never leave the temp file behind.
+    for (let tries = 1; ; tries++) {
+      try { renameSync(tmp, out); break } catch (e) {
+        if (tries === 10) { rmSync(tmp, { force: true }); throw e }
+        await new Promise(r => setTimeout(r, 50))
+      }
+    }
     for (const asset of ['styles.css', 'index.html', 'typebulb.png', 'typebulb-inv.png']) {
       copyFileSync(path.join(sharedClientDir, asset), path.join(assetDir, asset))
     }

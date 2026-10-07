@@ -33,6 +33,9 @@ describe('cleanUserText', () => {
 
   it('keeps a message that merely quotes an envelope tag mid-prose', () => {
     expect(cleanUserText('why does <system-reminder> appear in my logs?')).toBe('why does <system-reminder> appear in my logs?')
+    // A sub-agent's brief quoting an interrupt marker is still the brief; the marker alone is noise.
+    expect(cleanUserText('The file ends on `[Request interrupted by user for tool use]`.')).not.toBe('')
+    expect(cleanUserText('[Request interrupted by user for tool use]')).toBe('')
   })
 
   it('strips IDE context spans but keeps what the user typed', () => {

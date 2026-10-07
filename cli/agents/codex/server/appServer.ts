@@ -56,7 +56,13 @@ class Connection {
     this.#ready = new Promise((res, rej) => { opened = res; failed = rej })
     // The proxy's own words are the diagnostic: a socket the sandbox denies reads as an OS error there.
     proc.stderr!.on('data', (d: Buffer) => { this.#stderr += d })
-    proc.stdout!.on('data', (d: Buffer) => this.#read(d, opened))
+    proc.stdout!.on('data', (d: Buffer) => this.#read(d, opened, failed))
+    // A spawn that fails (codex moved or gone) never exits, it errors; unheard, that error crashes.
+    proc.on('error', e => {
+      failed(new Error(`could not reach the Codex app server socket: ${e.message}`))
+      for (const r of this.#pending.values()) r({ error: { message: 'connection closed' } })
+    })
+    proc.stdin!.on('error', () => {})   // a write after the proxy died: its exit or error above says why
     proc.on('exit', () => {
       const why = this.#stderr.trim().split('\n').filter(l => l.trim()).join(' ').slice(0, 300)
       failed(new Error(`could not reach the Codex app server socket${why ? `: ${why}` : ''}`))
@@ -64,11 +70,14 @@ class Connection {
     })
     proc.stdin!.write(`GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`)
   }
-  #read(d: Buffer, opened: () => void) {
+  #read(d: Buffer, opened: () => void, failed: (e: Error) => void) {
     this.#raw = Buffer.concat([this.#raw, d])
     if (!this.#open) {
       const end = this.#raw.indexOf('\r\n\r\n')
       if (end < 0) return
+      // Only a 101 is an open socket; any other answer is the server's reason, said as it gave it.
+      const status = this.#raw.subarray(0, end).toString().split('\r\n')[0] ?? ''
+      if (!/^HTTP\/1\.[01] 101\b/.test(status)) { failed(new Error(`the Codex app server refused the connection: ${status}`)); this.proc.kill(); return }
       this.#open = true
       this.#raw = this.#raw.subarray(end + 4)
       opened()
@@ -93,8 +102,8 @@ class Connection {
     await this.#ready
     const id = this.#next++
     const reply = await new Promise<{ result?: unknown; error?: { message?: string } }>((res, rej) => {
-      this.#pending.set(id, res)
-      setTimeout(() => rej(new Error(`no reply to ${method}`)), TIMEOUT_MS)
+      const timer = setTimeout(() => { this.#pending.delete(id); rej(new Error(`no reply to ${method}`)) }, TIMEOUT_MS)
+      this.#pending.set(id, m => { clearTimeout(timer); res(m) })
       this.proc.stdin!.write(frame(JSON.stringify({ jsonrpc: '2.0', id, method, params })))
     })
     if (reply.error) throw new Error(reply.error.message ?? `${method} failed`)
