@@ -9,7 +9,9 @@ import { masked, preamble, isRead, endsInSearch, exitHidden, commandLabel, gitMo
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
 const READ_SHOWN = 30          // newest reads kept; past it the list was a scroll (380 for one agent)
-const LONG_RUN_MS = 3 * 60_000 // a run longer than this is listed, whatever it is
+/** When a call is slow: listed, and a wake once agents wait on it. The project's own pace, which the
+ *  agent sets with `--slow`; this is the default. */
+export const DEFAULT_SLOW_MS = 3 * 60_000
 
 /** One tool call as the transcript records it. A background call's `doneAt` is the result saying it
  *  went on running; its end is `endAt`, from the harness's notice. */
@@ -153,7 +155,7 @@ function ends(text: string): { first: string; last: string } {
 /** Shell calls grouped by their exact text, preamble stripped: each group's runs and failures, its
  *  latest run, how many of its last closed runs failed in a row, and what it does to others (`tags`).
  *  Newest group first. */
-export interface CommandGroup { cmd: string; runs: number; open: number; failed: number; hidden: number; streak: number; long: boolean; ms: number; tags: string[]; latest: Run }
+export interface CommandGroup { cmd: string; runs: number; open: number; failed: number; hidden: number; streak: number; long: string; ms: number; tags: string[]; latest: Run }
 /** `lookups` counts the runs of commands that only read, kept out of the groups and the failures. */
 export interface Commands { runs: number; failed: number; lookups: number; groups: CommandGroup[] }
 
@@ -163,7 +165,7 @@ const KILLS = /(^|[\s;|&(])(kill|pkill|killall|taskkill|stop-process)\b/i
 // The verb ends at a space or the line, so `merge-base`, a read, is not `merge`.
 const GIT_WRITE = /\bgit\s+(-C\s+\S+\s+)?(commit|stash|checkout|reset|push|clean|restore|rebase|merge|cherry-pick|revert)(?![\w-])/
 
-export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined): Commands {
+export function commandsOf(d: Digest, readOutput?: (file: string) => string | undefined, slowMs = DEFAULT_SLOW_MS): Commands {
   const groups = new Map<string, Run[]>()
   let lookups = 0
   for (const c of d.calls) {
@@ -183,7 +185,7 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
     return {
       cmd: clip(commandLabel(cmd), 100), runs: runs.length, open: runs.filter(r => r.open).length, failed: runs.filter(r => r.failed).length,
       hidden: runs.filter(r => r.hidden).length, streak,
-      long: runs.some(r => (r.ms ?? 0) > LONG_RUN_MS), ms: runs.reduce((n, r) => n + (r.ms ?? 0), 0), tags, latest: runs.at(-1)!,
+      long: runs.some(r => (r.ms ?? 0) > slowMs) ? `over ${slowMs % 60_000 ? `${Math.round(slowMs / 1000)}s` : mins(slowMs)}` : '', ms: runs.reduce((n, r) => n + (r.ms ?? 0), 0), tags, latest: runs.at(-1)!,
     }
   }).sort((a, b) => (b.latest.at ?? 0) - (a.latest.at ?? 0))
   return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), lookups, groups: all }
@@ -365,7 +367,7 @@ export const NO_GIT: Settled = { uncommitted: () => true, ignored: () => false, 
 /** The report for one child. `live` is whether its session's process is alive: a call left open by a
  *  process that has since died reads as interrupted. */
 export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Shared, names: Map<string, string>, live: boolean,
-  readOutput?: (file: string) => string | undefined, settled: Settled = NO_GIT): StatusReport {
+  readOutput?: (file: string) => string | undefined, settled: Settled = NO_GIT, slowMs = DEFAULT_SLOW_MS): StatusReport {
   const name = (id: string) => `"${names.get(id) ?? id}"`
   const open = d.calls
     .filter(x => !neverRan(x) && isOpen(x))
@@ -386,7 +388,7 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
     state,
     asOf: d.lastAt, activeMs: d.span, idleMs: d.idle, toolMs: d.toolMs,
     open,
-    commands: markInterrupted(commandsOf(d, readOutput), open),
+    commands: markInterrupted(commandsOf(d, readOutput, slowMs), open),
     files: touches.edited.map(e => {
       const since = settled.since(e.path)
       return {
@@ -498,7 +500,7 @@ const alsoLine = (f: StatusReport['files'][number]) => f.also.map(a => `"${a.nam
  *  failed, took long, was run three or more times, or reaches past the agent's own work. The rest is
  *  the agent doing its work, and folds into a count. Running is not a reason: Now shows what is open,
  *  and listing it here too showed one command twice, then neither once it finished. */
-export const notable = (g: CommandGroup) => g.failed > 0 || g.long || g.runs >= 3 || g.tags.length > 0
+export const notable = (g: CommandGroup) => g.failed > 0 || !!g.long || g.runs >= 3 || g.tags.length > 0
 /** The commands listed, at most COMMANDS_SHOWN, and how many more notable ones fold into a line. */
 export const commandsShown = (c: Commands) => {
   const all = c.groups.filter(notable)
@@ -520,7 +522,7 @@ export const quietRunsLine = (c: Commands, other = true) => {
   const head = passed ? `${passed}${o} ${noun(passed)} passed${q.hidden ? `, ${q.hidden} ${hid}` : ''}` : `${q.hidden}${o} ${noun(q.hidden)} ${hid}`
   return `${head}, ${mins(q.ms)} in all`
 }
-export const groupTags = (g: CommandGroup) => [...g.tags, g.long ? `over ${mins(LONG_RUN_MS)}` : ''].filter(Boolean).join(', ')
+export const groupTags = (g: CommandGroup) => [...g.tags, g.long].filter(Boolean).join(', ')
 const saidOf = (r?: Run) => r ? r.last || r.first : ''
 /** How a finished call ended: its exit, a background notice's outcome where it gave none, else ok or
  *  error. Never an exit the transcript does not state: a harness without exit codes gives only the
@@ -572,16 +574,14 @@ export function overviewText(sessionId: string, agents: (StatusReport & { depth:
   return out.join('\n')
 }
 
-// What wakes a parent (`typebulb babysit`, TB-Agent-Children.md): the overview's own facts, past a
-// line no healthy session crosses. Fixed until a project needs others.
+// What wakes a parent (`typebulb babysit`, TB-Agent-Children.md): the overview's own facts, past the
+// session's slow limit, or a stall. A stall has no project pace: nothing is running anywhere.
 const IDLE_ALERT_MS = 5 * 60_000
-const BACKGROUND_ALERT_MS = 10 * 60_000
-const WAITING_ALERT_MS = 2 * 60_000
 
 /** The conditions that need a parent's attention now, each keyed so that it fires once while it
  *  lasts and again if it clears and comes back: a key carries no minutes, only what it is about. The
  *  texts keep the overview's fixed phrases, which a parent may match. */
-export function babysitEvents(agents: StatusReport[], now: number, parentBusy = false): Map<string, string> {
+export function babysitEvents(agents: StatusReport[], now: number, parentBusy = false, slowMs = DEFAULT_SLOW_MS): Map<string, string> {
   const out = new Map<string, string>()
   const name = (id: string) => `"${agents.find(a => a.id === id)?.name ?? id}"`
   const newest = Math.max(0, ...agents.map(a => a.asOf))
@@ -590,12 +590,12 @@ export function babysitEvents(agents: StatusReport[], now: number, parentBusy = 
     out.set('idle', `No agent running for ${mins(now - newest)} (${agents.length} agents).`)
   for (const a of agents) {
     if (a.state === 'finished')
-      for (const o of liveOpen(a).filter(o => o.background && now - (o.at ?? now) >= BACKGROUND_ALERT_MS))
+      for (const o of liveOpen(a).filter(o => o.background && now - (o.at ?? now) >= slowMs))
         out.set(`background:${o.id}`, `${name(a.id)}: finished, background call running ${mins(now - (o.at ?? now))}: ${o.short}`)
     for (const g of a.commands.groups.filter(g => g.streak >= 2))
       out.set(`streak:${a.id}:${g.cmd}`, `${name(a.id)}: failed ${g.streak} in a row: ${g.cmd}`)
   }
-  const waiting = agents.flatMap(a => liveOpen(a).filter(o => !o.background && now - (o.at ?? now) >= WAITING_ALERT_MS).map(o => ({ a, ms: now - (o.at ?? now) })))
+  const waiting = agents.flatMap(a => liveOpen(a).filter(o => !o.background && now - (o.at ?? now) >= slowMs).map(o => ({ a, ms: now - (o.at ?? now) })))
   if (new Set(waiting.map(w => w.a.id)).size >= 2)
     out.set('waiting', `${new Set(waiting.map(w => w.a.id)).size} agents waiting on calls at once: ${waiting.map(w => `${name(w.a.id)} ${mins(w.ms)}`).join(', ')}`)
   return out

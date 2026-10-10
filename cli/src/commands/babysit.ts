@@ -3,7 +3,7 @@ import { join } from 'path'
 import { loadEnv } from '../env.js'
 import { typebulbHome } from '../serve/paths.js'
 import { isAlive } from '../serve/serverRegistry.js'
-import { callerScope, sessionToWatch, sessionChildren, sessionStatus } from '../../agents/core/server/childReport.js'
+import { callerScope, sessionToWatch, sessionChildren, sessionStatus, sessionSlowMs } from '../../agents/core/server/childReport.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
 import { childAdapters } from './status.js'
 
@@ -16,7 +16,8 @@ const TOOL = 'typebulb_babysit'
  * `typebulb babysit` — watch the calling session's sub-agents and stay silent until one needs the
  * parent (TB-Agent-Children.md): an idle stall, a background call outliving its agent, a failure
  * streak, several agents waiting at once. Then print what, one line each, and exit 0, which run in
- * the background is the parent's wake-up; it handles that and runs it again. A condition fires once
+ * the background is the parent's wake-up; it handles that and runs it again. A `slowMs` set is kept for
+ * the session, and each poll reads it afresh, so a later `status --slow` applies. A condition fires once
  * while it lasts and again if it clears and comes back: what has fired is kept per session, so a
  * re-armed babysit resumes rather than repeating itself.
  *
@@ -28,7 +29,7 @@ const TOOL = 'typebulb_babysit'
  * Exit 0: delivered. 1: cannot babysit here (or one already is). 2: gave up after the cap. 3: the
  * session has ended, so nobody is left to wake. 4: an event was found but its wake was refused.
  */
-export async function runBabysit(mode: string | undefined): Promise<void> {
+export async function runBabysit(mode: string | undefined, slowMs?: number): Promise<void> {
   loadEnv(mode)
   const { caller, adapters } = childAdapters()
   // A harness that starts turns must know whose: never the newest session as a stand-in.
@@ -37,6 +38,7 @@ export async function runBabysit(mode: string | undefined): Promise<void> {
     : adapters.some(a => a.wake) ? "Can't babysit: your own session couldn't be identified in this project, and a wake goes to no other."
     : 'No session to babysit in this project.')
   const { adapter, sessionId, cwd } = target
+  sessionSlowMs(sessionId, slowMs)
   if (adapter.wake) {
     const route = await adapter.wakeRoute!(sessionId)
     if (route.error) return fail(`Can't babysit: ${route.error}.`)
@@ -54,7 +56,7 @@ export async function runBabysit(mode: string | undefined): Promise<void> {
   while (Date.now() < deadline) {
     if (adapter.sessionEnded?.(sessionId, cwd)) end(3, 'The session this babysits has ended.')
     const { reports } = await sessionStatus(adapter, cwd, sessionChildren(adapter, cwd, sessionId))
-    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId))
+    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId), sessionSlowMs(sessionId))
     const fresh = [...events].filter(([key]) => !fired.includes(key))
     // A condition that has cleared leaves the list, so its return fires again.
     if (!fresh.length) { fired = [...events.keys()]; save(fired) }

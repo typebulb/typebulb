@@ -1,7 +1,7 @@
 import { loadEnv } from '../env.js'
 import { agentAdapterFactories } from '../agentViewer/registry.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
-import { sessionsWithChildren, sessionChildren, callerScope, matchChildren, sessionStatus, type SessionChildren } from '../../agents/core/server/childReport.js'
+import { sessionsWithChildren, sessionChildren, callerScope, matchChildren, sessionStatus, sessionSlowMs, type SessionChildren } from '../../agents/core/server/childReport.js'
 import { statusText, overviewText } from '../../agents/core/childStatus.js'
 import { childName, childShownState, type ChildRow } from '../../agents/core/events.js'
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
@@ -17,9 +17,10 @@ export function childAdapters(): { caller: string | undefined; adapters: AgentAd
 /**
  * `typebulb status [agent]` — where a session's sub-agents stand, for the orchestrating agent that
  * spawned them (TB-Agent-Children.md): facts counted from their transcripts, no model call, so it
- * answers at once. Bare, the session's overview; named, one agent's report.
+ * answers at once. Bare, the session's overview; named, one agent's report. A `slowMs` set is kept for
+ * the caller's own session, never another it happens to report on; outside one, for the session reported.
  */
-export async function runStatus(query: string | undefined, mode: string | undefined): Promise<void> {
+export async function runStatus(query: string | undefined, mode: string | undefined, slowMs?: number): Promise<void> {
   loadEnv(mode)
   const { caller, adapters: able } = childAdapters()
   if (!able.length) {
@@ -33,7 +34,8 @@ export async function runStatus(query: string | undefined, mode: string | undefi
     if (!query) {
       // The caller's own session, never another's for want of agents in it; outside one, the newest.
       const s = own ? sessionChildren(adapter, cwd, own) : sessionsWithChildren(adapter, cwd).next().value
-      if (!s?.children.length) { if (own) { console.log('No sub-agents in this session yet.'); return } continue }
+      if (!s?.children.length) { if (own) { sessionSlowMs(own, slowMs); console.log('No sub-agents in this session yet.'); return } continue }
+      sessionSlowMs(own ?? s.sessionId, slowMs)
       const { reports, files } = await sessionStatus(adapter, cwd, s)
       console.log(overviewText(s.sessionId, reports, files, Date.now()))
       return
@@ -48,6 +50,7 @@ export async function runStatus(query: string | undefined, mode: string | undefi
         process.exitCode = 1
         return
       }
+      sessionSlowMs(own ?? s.sessionId, slowMs)
       console.log(statusText((await sessionStatus(adapter, cwd, s, hits[0]!.id)).reports[0]!, Date.now()))
       return
     }

@@ -108,7 +108,7 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'babysit') {
-    await runBabysit(args.mode)
+    await runBabysit(args.mode, args.slowMs)
     return
   }
   if (args.subcommand === 'send') {
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   }
   if (args.subcommand === 'status') {
     // Reads the harness's transcripts, not a bulb, so no file resolution.
-    await runStatus(args.statusQuery, args.mode)
+    await runStatus(args.statusQuery, args.mode, args.slowMs)
     return
   }
   if (args.subcommand === 'pull') {

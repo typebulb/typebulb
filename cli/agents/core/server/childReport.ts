@@ -1,10 +1,12 @@
-import { openSync, readSync, closeSync, fstatSync, statSync } from 'fs'
+import { openSync, readSync, closeSync, fstatSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import type { AgentAdapter } from './adapter.js'
 import { git } from './git.js'
 import { readTranscript, sessionLive, childState } from './transcript.js'
 import { childName, type ChildRow, type ChildTranscript } from '../events.js'
 import { orderByDescending, byAncestry } from '../order.js'
-import { childDigest, fileTouches, sharedFiles, agentReport, busy, NO_GIT, type Digest, type Touches, type StatusReport, type Shared, type CheckFile, type Settled } from '../childStatus.js'
+import { childDigest, fileTouches, sharedFiles, agentReport, busy, NO_GIT, DEFAULT_SLOW_MS, type Digest, type Touches, type StatusReport, type Shared, type CheckFile, type Settled } from '../childStatus.js'
+import { typebulbHome } from '../../../src/servers.js'
 
 // A session's child Status reports (TB-Agent-Children.md), for `typebulb status` and the mirror's
 // view alike: every child's transcript digested, its files set against its siblings', no model call.
@@ -60,6 +62,16 @@ export function matchChildren(s: SessionChildren, query: string): ChildRow[] {
   return exact.length ? exact : s.children.filter(c => c.id.toLowerCase().startsWith(q) || childName(c).toLowerCase().includes(q))
 }
 
+/** A session's slow limit: what its agent last set with `--slow`, else the default. Kept per session,
+ *  so a later bare call and the mirror's view use it too. */
+export function sessionSlowMs(sessionId: string, set?: number): number {
+  const file = join(typebulbHome(), 'slow', sessionId)
+  if (set) try { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, String(set)) } catch {}
+  let kept = 0
+  try { kept = Number(readFileSync(file, 'utf8')) } catch {}
+  return set || kept || DEFAULT_SLOW_MS
+}
+
 // A digest and its file touches are a function of the file, so they hold until it changes: an idle
 // child costs a stat. Only the session last reported is kept, so a long-lived mirror holds one
 // session's agents rather than every one it has shown (86 of takeoff's held 59 MB).
@@ -94,6 +106,7 @@ function readOutput(file: string): string | undefined {
  *  share with it, but one view's refresh no longer builds every sibling's report. */
 export async function sessionStatus<E>(adapter: AgentAdapter<E>, cwd: string, s: SessionChildren, only?: string): Promise<{ reports: (StatusReport & { depth: number; parentId?: string })[]; files: CheckFile[] }> {
   const kids = byAncestry([...s.children].sort((a, b) => (a.started ?? a.mtime) - (b.started ?? b.mtime)))
+  const slowMs = sessionSlowMs(s.sessionId)
   const got = kids.map(c => digestOf(adapter, c.file, cwd))
   const files = new Set(kids.map(c => c.file))
   for (const f of digests.keys()) if (!files.has(f)) digests.delete(f)
@@ -101,7 +114,7 @@ export async function sessionStatus<E>(adapter: AgentAdapter<E>, cwd: string, s:
   const settled = await gitSettled(cwd, Math.min(Infinity, ...[...shared.writers.values()].flat().map(w => w.at)), [...shared.writers.keys()])
   const names = new Map(kids.map(c => [c.id, childName(c)]))
   const reports = kids.flatMap((c, i) => only && c.id !== only ? []
-    : [{ ...agentReport(c, got[i]!.d, got[i]!.touches, shared, names, s.live, readOutput, settled), depth: c.depth, parentId: c.parentId }])
+    : [{ ...agentReport(c, got[i]!.d, got[i]!.touches, shared, names, s.live, readOutput, settled, slowMs), depth: c.depth, parentId: c.parentId }])
   return { reports, files: only ? [] : checkFiles(reports, shared, settled) }
 }
 

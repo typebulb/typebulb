@@ -88,6 +88,9 @@ export interface CliArgs {
    *  process's exit cannot wake (Codex; TB-Agent-Codex.md § Waking through the app server). Opt-in,
    *  because the foreground recipe already returns the line as its result. */
   wake?: boolean
+  /** `status`/`babysit --slow <dur>`: when a call counts as slow for this session, kept for later
+   *  calls and the mirror's view (TB-Agent-Children.md). */
+  slowMs?: number
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
    *  bulb and mirror across all projects — the housekeeping verb for the orphan pile. */
@@ -106,6 +109,13 @@ function tryParse<T>(fn: () => T): T {
     console.error(e instanceof Error ? e.message : String(e))
     process.exit(1)
   }
+}
+
+/** `90s`, `8m`, `1.5h`; a bare number is minutes. Undefined when it is none of these. */
+function durationMs(v: string | undefined): number | undefined {
+  const m = /^(\d+(?:\.\d+)?)([smh]?)$/.exec(v ?? '')
+  const ms = m ? Number(m[1]) * { s: 1000, m: 60_000, h: 3_600_000, '': 60_000 }[m[2] as 's' | 'm' | 'h' | ''] : 0
+  return ms > 0 ? ms : undefined
 }
 
 export function parseArgs(args: string[]): CliArgs {
@@ -222,6 +232,13 @@ export function parseArgs(args: string[]): CliArgs {
         process.exit(1)
       }
       result.timeoutSec = t
+    } else if (arg === '--slow') {
+      const ms = durationMs(args[++i])
+      if (ms === undefined) {
+        console.error(`Invalid --slow value: ${args[i]} (a duration, e.g. 90s, 8m, 1h)`)
+        process.exit(1)
+      }
+      result.slowMs = ms
     } else if (arg === '--wait' || arg.startsWith('--wait=')) {
       // `send --wait` (default window) or `send --wait=<ms>`. Attached-value form only, so it
       // never swallows the message positional.
@@ -443,6 +460,7 @@ Usage:
                                  at once), then print it and exit.
                                  Run it in the background; the exit is your
                                  wake-up. Run it again after handling it.
+                                 Both take --slow (below).
 
 Options:
   -f, --follow                Stream new log output until interrupted (logs)
@@ -458,6 +476,9 @@ Options:
                               changed since your last sync (push)
   --timeout <sec>             Give up after this long; exit 2 — bounds only a
                               manual (foreground) bulb wait, default 1800 (wait)
+  --slow <dur>                When a call is slow: listed in Status, and a wake
+                              once agents wait on it (default 3m). Kept for the
+                              session, the mirror's view included (status, babysit)
   --wait[=ms]                 For 'send': bound the whole exchange — retry while
                               no page is connected (a hot reload's gap), then
                               hold for the handlers' replies (default 5000).

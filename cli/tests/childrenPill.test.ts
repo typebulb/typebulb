@@ -328,4 +328,14 @@ describe('babysitEvents', () => {
     const bg = babysitEvents([agent('a', 'done', [call('b1', 'Bash', { command: 'sleep 900' }, 0), result('b1', 'Command running in background', 0, { background: true })])], 11 * min)
     expect(bg.get('background:b1')).toMatch(/finished, background call running 11m/)
   })
+
+  // A project whose suite takes 6 minutes sets its own slow limit; two agents running it don't wake.
+  it('waits past the slow limit the agent set', () => {
+    const waits = ['a', 'b'].map(id => agent(id, 'running', [call(`${id}1`, 'Bash', { command: 'npm run need -- check' }, 0)]))
+    expect(babysitEvents(waits, 3 * min, false, 8 * min).size).toBe(0)
+    expect(babysitEvents(waits, 9 * min, false, 8 * min).has('waiting')).toBe(true)
+    // A limit off the minute says so: 90s floored to "over 1m" would misstate it.
+    const slow = childDigest([brief, call('t', 'Bash', { command: 'npm test' }, 0), result('t', 'ok', 2 * min)])
+    expect(commandsOf(slow, undefined, 90_000).groups[0]!.long).toBe('over 90s')
+  })
 })
