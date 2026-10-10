@@ -19,7 +19,8 @@ import { consumeStreamText, type ResolvedAIProvider } from 'typebulb/ai'
 import { resolveLocalProvider, sendTbAi } from '../../../src/servers.js'
 
 const CHEAP_MODELS: [string, string][] = [
-  ['openrouter', 'openai/gpt-6-luna'],
+  ['openrouter', 'anthropic/claude-haiku-5.5'],
+  ['anthropic', 'claude-haiku-5-5'],
   ['openai', 'gpt-6-luna'],
 ]
 
