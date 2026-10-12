@@ -9,7 +9,7 @@ import { masked, preamble, isRead, endsInSearch, exitHidden, commandLabel, gitMo
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
 const READ_SHOWN = 30          // newest reads kept; past it the list was a scroll (380 for one agent)
-/** When a call is slow: listed, and a wake once agents wait on it. The project's own pace, which the
+/** When a call is slow: listed, and a wake once one runs past it. The project's own pace, which the
  *  agent sets with `--slow`; this is the default. */
 export const DEFAULT_SLOW_MS = 3 * 60_000
 
@@ -574,8 +574,8 @@ export function overviewText(sessionId: string, agents: (StatusReport & { depth:
   return out.join('\n')
 }
 
-// What wakes a parent (`typebulb babysit`, TB-Agent-Children.md): the overview's own facts, past the
-// session's slow limit, or a stall. A stall has no project pace: nothing is running anywhere.
+// What wakes a parent (`typebulb babysit`, TB-Agent-Children.md): the overview's own facts, a call past
+// the session's slow limit, or a stall. A stall has no project pace: nothing is running anywhere.
 const IDLE_ALERT_MS = 5 * 60_000
 
 /** The conditions that need a parent's attention now, each keyed so that it fires once while it
@@ -589,14 +589,13 @@ export function babysitEvents(agents: StatusReport[], now: number, parentBusy = 
   if (agents.length && !parentBusy && !agents.some(busy) && now - newest >= IDLE_ALERT_MS)
     out.set('idle', `No agent running for ${mins(now - newest)} (${agents.length} agents).`)
   for (const a of agents) {
-    if (a.state === 'finished')
-      for (const o of liveOpen(a).filter(o => o.background && now - (o.at ?? now) >= slowMs))
-        out.set(`background:${o.id}`, `${name(a.id)}: finished, background call running ${mins(now - (o.at ?? now))}: ${o.short}`)
+    // Keyed apart once its agent has finished, so a call that fired as slow fires again when left running.
+    for (const o of liveOpen(a).filter(o => now - (o.at ?? now) >= slowMs)) {
+      const left = a.state === 'finished' && o.background
+      out.set(`${left ? 'background' : 'slow'}:${o.id}`, `${name(a.id)}: ${left ? 'finished, background call' : 'call'} running ${mins(now - (o.at ?? now))}: ${o.short}`)
+    }
     for (const g of a.commands.groups.filter(g => g.streak >= 2))
       out.set(`streak:${a.id}:${g.cmd}`, `${name(a.id)}: failed ${g.streak} in a row: ${g.cmd}`)
   }
-  const waiting = agents.flatMap(a => liveOpen(a).filter(o => !o.background && now - (o.at ?? now) >= slowMs).map(o => ({ a, ms: now - (o.at ?? now) })))
-  if (new Set(waiting.map(w => w.a.id)).size >= 2)
-    out.set('waiting', `${new Set(waiting.map(w => w.a.id)).size} agents waiting on calls at once: ${waiting.map(w => `${name(w.a.id)} ${mins(w.ms)}`).join(', ')}`)
   return out
 }

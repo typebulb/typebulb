@@ -14,8 +14,8 @@ const TOOL = 'typebulb_babysit'
 
 /**
  * `typebulb babysit` — watch the calling session's sub-agents and stay silent until one needs the
- * parent (TB-Agent-Children.md): an idle stall, a background call outliving its agent, a failure
- * streak, several agents waiting at once. Then print what, one line each, and exit 0, which run in
+ * parent (TB-Agent-Children.md): an idle stall, a call past the slow limit, a background call
+ * outliving its agent, a failure streak. Then print what, one line each, and exit 0, which run in
  * the background is the parent's wake-up; it handles that and runs it again. A `slowMs` set is kept for
  * the session, and each poll reads it afresh, so a later `status --slow` applies. A condition fires once
  * while it lasts and again if it clears and comes back: what has fired is kept per session, so a

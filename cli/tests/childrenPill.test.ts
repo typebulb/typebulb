@@ -315,25 +315,27 @@ describe('babysitEvents', () => {
   const agent = (id: string, state: 'running' | 'done', events: Event[]) =>
     agentReport({ id, label: id, file: '', mtime: 0, depth: 1, stopped: false, state }, childDigest([brief, ...events]), nofiles, none, new Map(), true)
 
-  it('names an idle stall, a deadlock of waits, and a background call left running', () => {
+  it('names an idle stall, a slow call, and a background call left running', () => {
     const idle = babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min)
     expect([...idle.keys()]).toEqual(['idle'])
     expect(idle.get('idle')).toMatch(/^No agent running for 6m/)
     // A parent mid-turn is working, not stalled.
     expect(babysitEvents([agent('a', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])], 7 * min, true).size).toBe(0)
 
-    const waits = babysitEvents(['a', 'b'].map(id => agent(id, 'running', [call(`${id}1`, 'Bash', { command: 'npm run need -- check' }, 0)])), 3 * min)
-    expect(waits.get('waiting')).toMatch(/^2 agents waiting on calls at once/)
+    // One agent is enough: a lone slow check is what the parent most needs to hear about.
+    const slow = babysitEvents([agent('a', 'running', [call('a1', 'Bash', { command: 'npm run need -- check' }, 0)])], 3 * min)
+    expect([...slow.keys()]).toEqual(['slow:a1'])
+    expect(slow.get('slow:a1')).toMatch(/^"a": call running 3m/)
 
     const bg = babysitEvents([agent('a', 'done', [call('b1', 'Bash', { command: 'sleep 900' }, 0), result('b1', 'Command running in background', 0, { background: true })])], 11 * min)
     expect(bg.get('background:b1')).toMatch(/finished, background call running 11m/)
   })
 
-  // A project whose suite takes 6 minutes sets its own slow limit; two agents running it don't wake.
+  // A project whose suite takes 6 minutes sets its own slow limit; running it doesn't wake.
   it('waits past the slow limit the agent set', () => {
-    const waits = ['a', 'b'].map(id => agent(id, 'running', [call(`${id}1`, 'Bash', { command: 'npm run need -- check' }, 0)]))
+    const waits = [agent('a', 'running', [call('a1', 'Bash', { command: 'npm run need -- check' }, 0)])]
     expect(babysitEvents(waits, 3 * min, false, 8 * min).size).toBe(0)
-    expect(babysitEvents(waits, 9 * min, false, 8 * min).has('waiting')).toBe(true)
+    expect(babysitEvents(waits, 9 * min, false, 8 * min).has('slow:a1')).toBe(true)
     // A limit off the minute says so: 90s floored to "over 1m" would misstate it.
     const slow = childDigest([brief, call('t', 'Bash', { command: 'npm test' }, 0), result('t', 'ok', 2 * min)])
     expect(commandsOf(slow, undefined, 90_000).groups[0]!.long).toBe('over 90s')

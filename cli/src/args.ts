@@ -455,9 +455,9 @@ Usage:
                                  id or a piece of its description; no arg: the
                                  session's overview. Claude Code, Codex.
   typebulb babysit               Watch your sub-agents and stay silent until one
-                                 needs you (an idle stall, a background call left
-                                 running, a failure streak, several agents waiting
-                                 at once), then print it and exit.
+                                 needs you (an idle stall, a slow call, a
+                                 background call left running, a failure streak),
+                                 then print it and exit.
                                  Run it in the background; the exit is your
                                  wake-up. Run it again after handling it.
                                  Both take --slow (below).
@@ -477,7 +477,7 @@ Options:
   --timeout <sec>             Give up after this long; exit 2 — bounds only a
                               manual (foreground) bulb wait, default 1800 (wait)
   --slow <dur>                When a call is slow: listed in Status, and a wake
-                              once agents wait on it (default 3m). Kept for the
+                              once one runs past it (default 3m). Kept for the
                               session, the mirror's view included (status, babysit)
   --wait[=ms]                 For 'send': bound the whole exchange — retry while
                               no page is connected (a hot reload's gap), then
