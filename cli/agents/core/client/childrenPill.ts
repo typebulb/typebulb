@@ -218,7 +218,6 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
         : span({ class: 'children-tokens' }, c.tokens ? formatTokens(c.tokens) : ''),
       span({
         class: 'children-status-link',
-        'data-tip': 'Where this agent stands: what it is waiting on, its commands, files and hand-backs',
         onClick: (e: MouseEvent) => { e.stopPropagation(); void this.openChild(c.id, true) },
       }, 'status'),
     )

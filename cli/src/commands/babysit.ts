@@ -50,7 +50,7 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
   let fired: string[] = []
   try { fired = JSON.parse(readFileSync(stateFile, 'utf8')) as string[] } catch {}
   const save = (keys: string[]) => { try { writeFileSync(stateFile, JSON.stringify(keys)) } catch {} }
-  console.error(`Babysitting the sub-agents of session ${sessionId}: this exits with a line when one needs attention.`)
+  console.error(`Babysitting the sub-agents of session ${sessionId}: this exits with a line when one needs attention; run it again after handling that.`)
 
   const deadline = Date.now() + GIVE_UP_MS
   while (Date.now() < deadline) {

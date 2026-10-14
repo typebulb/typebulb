@@ -459,7 +459,8 @@ Usage:
                                  background call left running, a failure streak),
                                  then print it and exit.
                                  Run it in the background; the exit is your
-                                 wake-up. Run it again after handling it.
+                                 wake-up. Run it again after handling it:
+                                 what came up meanwhile fires at once.
                                  Both take --slow (below).
 
 Options:
