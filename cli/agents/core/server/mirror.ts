@@ -55,6 +55,7 @@ interface State<E> {
   sessionId: string
   sessionStartMs: number                   // mirror start time; events newer than this are "live this session"
   buffer: Event[]
+  base: number                             // events dropped before `buffer[0]`; poll cursors stay absolute
   partial: string                          // tail leftover (incomplete trailing line)
   offset: number                           // last byte offset read from `file`
   latest: TokenCounts                      // last response's usage = current window, NOT a session sum
@@ -88,6 +89,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     sessionId: '',
     sessionStartMs: Date.now(),
     buffer: [],
+    base: 0,
     partial: '',
     offset: 0,
     latest: { in: 0, out: 0, cached: 0, cacheCreate: 0 },
@@ -364,8 +366,14 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     s.latestModel = null                     // new session: drop the prior session's resolved model
     s.index = transcriptIndex(adapter)
     s.chainLastId = undefined
-    s.buffer.push({ type: 'cleared' })
-    s.buffer.push({ type: 'session', sessionId })
+    clearBuffer(sessionId)
+  }
+
+  // A page replaying the buffer wipes its view at `cleared`, so nothing before it is ever shown:
+  // drop it, or a long-lived mirror resends every session it ever showed (past V8's string cap).
+  function clearBuffer(sessionId: string) {
+    state.base += state.buffer.length
+    state.buffer = [{ type: 'cleared' }, { type: 'session', sessionId }]
   }
 
   // Single chokepoint for committing to a session file. Every path to ATTACHED funnels through here.
@@ -433,8 +441,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
       // Divergence — clear so we don't show dead branches / double-count. Skip on the first drain
       // after attach (attachTo already pushed a cleared).
       if (s.chainLastId !== undefined) {
-        s.buffer.push({ type: 'cleared' })
-        s.buffer.push({ type: 'session', sessionId: s.sessionId })
+        clearBuffer(s.sessionId)
         s.latest = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
       }
       // Full emit (initial attach OR a rewind/error-fork divergence) is the ONLY path where an
@@ -661,8 +668,9 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
         }
       : undefined
     return {
-      events: s.buffer.slice(cursor),
-      cursor: s.buffer.length,
+      // A cursor behind `base` gets the whole buffer, which opens with `cleared`.
+      events: s.buffer.slice(Math.max(0, cursor - s.base)),
+      cursor: s.base + s.buffer.length,
       // The driver's own streaming flag (when its session is the viewed one) covers the long
       // single-message stream where the harness writes nothing to disk and the mtime fallback
       // alone would flicker the shimmer off mid-turn (TB-Agent-Composer.md).
