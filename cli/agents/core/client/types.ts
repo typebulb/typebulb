@@ -5,6 +5,7 @@ import type { InlineBulb } from './inlineBulb.js'
 // The poll() event union + token shape are the server↔client wire contract — one canonical definition
 // in core/events.ts (no more "keep in sync" copy). `ServerEvent` is the client's name for `Event`.
 import type { ChildRow, ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, Event as ServerEvent, SessionRow, TokenCounts } from '../events.js'
+import type { TagThread } from '../tags.js'
 export type { ChildRow, ComposerDialogRequest, ComposerPoll, ComposerQueue, ComposerStats, ComposerStatus, ServerEvent, SessionRow, TokenCounts }
 
 // An agent-specific status-bar pill injected into the neutral Root (e.g. Claude's model switcher).
@@ -115,6 +116,11 @@ export interface IRoot {
   // into the child it spawned. Empty on every harness without children.
   children: ChildRow[]
   openChild(id: string): void
+  // The attached session's tag threads (TB-Agent-Board.md), from the board pill's tick, and an open
+  // ask's answer row: the message list puts one under the reply that asked.
+  threads: TagThread[]
+  askRow(t: TagThread): VElement
+  leaveBoard(): void
   // Re-fetch the session list and re-render; the session pill/tab title read from that fetched data,
   // so a metadata change (e.g. a /name recipe) needs this to show without reopening the picker.
   refreshSessions(): void
@@ -135,7 +141,8 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // (TB-LostMessage.md); `sub` are the orphan's own (read-only) messages, rendered when the stub is open.
 // `agent` marks a user turn the harness delivered for a sub-agent (TB-Agent-Children.md): the text is
 // that agent's report, so it frames rather than folding into a neighbouring send.
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean; error?: boolean; at?: number }
+// `asks` are the reply's own Ask tags, read once as it lands (TB-Agent-Board.md).
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean; error?: boolean; at?: number; asks?: { id: string; text: string }[] }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 // `lastRunAt` = the port block's launch time for this bulb (0 when never run) — the use half of

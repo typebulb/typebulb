@@ -11,6 +11,9 @@ import { turnClassFor } from './util.js'
 import { asStr, displayPath, toolSummary, toolDisplayName } from '../format.js'
 import { stuckToBottom } from './ui.js'
 import { PASTE_DIR, PASTE_IMAGE_MIME, childName, childOpenTip } from '../events.js'
+import { tagsIn, splitAtAsks } from '../tags.js'
+import { chosenView } from './askActions.js'
+import { clock } from '../childStatus.js'
 
 const PASTE_MENTION_RE = new RegExp(
   `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
@@ -127,6 +130,7 @@ export class MessageList extends Component {
   messages: Msg[] = []
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
+  expandedAgents = new Set<number>()               // sub-agent hand-back msg ids the user opened; they start folded
   expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
   turnViews: TurnView[] = []                       // ditto — one per turn, owning its Raw | Reply | Summary selector
@@ -153,6 +157,7 @@ export class MessageList extends Component {
     for (const e of this.inlineBulbs) e.dispose()
     this.messages = []
     this.expandedForks.clear()
+    this.expandedAgents.clear()
     this.expandedInlineBulbs.clear()
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
@@ -239,6 +244,7 @@ export class MessageList extends Component {
       tools: e.tools.map(t => ({ ...t, isError: false, at: e.at })),
       error: e.error,
       at: e.at,
+      asks: e.error ? undefined : tagsIn(e.text).filter(t => t.kind === 'Ask').map(t => ({ id: t.id, text: t.text })),
     })
     // Prose mode shows one copy per turn over the joined assistant prose — the per-message split is
     // tool-call timing, not authorship. Share one CopyButton across the turn's consecutive assistant
@@ -325,6 +331,23 @@ export class MessageList extends Component {
     }))
   }
 
+  /** Show the assistant message written at `at` whose text holds `needle`: the board's way back to
+   *  the reply a tag came from (TB-Agent-Board.md). Retried briefly, since a return from a child
+   *  re-emits the session's transcript first. */
+  revealAt(at: number, needle: string, tries = 15) {
+    const msg = this.messages.find(m => m.role === 'assistant' && m.at === at && m.text.includes(needle))
+      ?? this.messages.find(m => m.role === 'assistant' && m.at === at)
+    if (!msg) { if (tries > 0) setTimeout(() => this.revealAt(at, needle, tries - 1), 200); return }
+    this.#stuckToBottom = false
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = document.getElementById(`msg-${msg.id}`)
+      if (!el) return
+      el.scrollIntoView({ block: 'center' })
+      el.classList.add('revealed')
+      setTimeout(() => el.classList.remove('revealed'), 1600)
+    }))
+  }
+
   // An abandoned branch the server surfaced at this point in the stream (TB-LostMessage.md). It rides in
   // as a `fork`-role pseudo-message whose position in `messages` IS the fork parent's slot (the event
   // arrives right after the parent's own events). Its orphan content is pre-built into `sub` Msgs now,
@@ -380,9 +403,11 @@ export class MessageList extends Component {
   view() {
     return div({
       class: 'messages',
+      // Keyed, so a return from a view that held this slot (the board, the diff doc, a Status view)
+      // mounts it afresh, and the mount lands at the tail unless a reveal has aimed it elsewhere.
+      key: 'messages',
       onScroll: () => this.onScroll(),
-      // onMounted only to capture the element — scrollSoon() needs the real node to drive scrollTop.
-      onMounted: (el: Element) => { this.scrollEl = el as HTMLElement },
+      onMounted: (el: Element) => { this.scrollEl = el as HTMLElement; this.scrollSoon() },
     },
       this.parent.ready ? this.renderMessages() : div({ class: 'note' }, 'Connecting…'),
     )
@@ -690,14 +715,19 @@ export class MessageList extends Component {
     // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
     // tool steps doesn't waste vertical space.
     const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
-    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', msg.error ? 'error' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id },
+    // A sub-agent's hand-back folds to its head: the report is the parent's to read, and a run of
+    // them otherwise buries the conversation around it.
+    const folded = !!msg.agent && !this.expandedAgents.has(msg.id)
+    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', folded ? 'folded' : '', msg.error ? 'error' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id, id: `msg-${msg.id}` },
       turnView ? turnView.view(live) : null,
-      msg.agent ? this.#agentHead(msg.agent.from) : null,
+      msg.agent ? this.#agentHead(msg, folded) : null,
+      folded ? null : [
       raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       raw ? msg.tools.map(t => this.tool(t)) : null,
       this.#controls(copy),
+      ],
     )
   }
 
@@ -705,17 +735,52 @@ export class MessageList extends Component {
   // session — its kind and description, clicking through to that transcript (TB-Agent-Children.md).
   // An id that resolves to nothing still frames: the turn is the agent's either way, and saying so
   // is the point. The same list and the same gesture the `Agent` tool row uses, keyed by id not spawn.
-  #agentHead(from: string) {
+  // The rest of the head toggles the fold; folded, it carries the report's first line.
+  #agentHead(msg: Msg, folded: boolean) {
+    const from = msg.agent!.from
     const child = this.parent.children.find(c => c.id === from)
-    return div({ class: 'agent-head' },
+    const first = folded ? msg.text.split('\n').map(l => l.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? '' : ''
+    return div({ class: 'agent-head', title: folded ? 'Show the report' : 'Fold the report',
+        onClick: () => { toggleInSet(this.expandedAgents, msg.id); this.update() } },
+      caret(!folded),
       span({ class: 'glyph-img' }, '🤖'),
       span({ class: 'agent-kind' }, child?.kind ?? 'agent'),
       child
         ? a({ class: 'agent-name', title: childOpenTip(child),
-              onClick: (e: MouseEvent) => { e.preventDefault(); this.parent.openChild(child.id) } },
+              onClick: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); this.parent.openChild(child.id) } },
             childName(child))
         : span({ class: 'agent-name' }, from.slice(0, 8)),
+      first ? span({ class: 'agent-preview' }, first) : null,
     )
+  }
+
+  // An ask's row, under the paragraph that asked it (TB-Agent-Board.md). One card for its whole life:
+  // open, the board's own answer row; answered or closed, the answer drawn as the button clicked, then
+  // what settled it. A version since reworded points below, with no buttons. Only the session's own
+  // asks: one a sub-agent wrote is answered from the board.
+  #askRow(ask: { id: string; text: string }) {
+    const t = this.parent.threads.find(x => x.id === ask.id)
+    if (!t?.ask || t.ask.from) return null
+    const head = (label: string) => div({ class: 'ask-row-head' }, `${label} · `, span({ class: 'cs-mono' }, ask.id))
+    if (t.ask.text !== ask.text) return div({ class: 'ask-row stale' }, head('Asked again below'))
+    if (t.state === 'open') return div({ class: 'ask-row open' }, head('Waiting on you'), this.parent.askRow(t))
+    const closed = t.state === 'answered' ? undefined : t.latest
+    return div({ class: 'ask-row settled' },
+      head(closed ? closed.kind : `Answered ${clock(t.answer!.at)}`),
+      t.answer ? chosenView(t.answer) : null,
+      div({ class: 'ask-row-closed' }, closed
+        ? a({ class: 'cs-link', title: 'Show where it was settled', onClick: (e: MouseEvent) => { e.preventDefault(); if (closed.at) this.revealAt(closed.at, `[${ask.id}]`) } },
+            closed.text.length > 140 ? closed.text.slice(0, 140) + '…' : closed.text)
+        : 'Waiting for the orchestrator.'))
+  }
+
+  // Assistant markdown, cut after each ask's paragraph so its row sits under the words that asked.
+  #prose(key: string, text: string, asks: boolean) {
+    if (!asks) return text.trim() ? [this.#mdDiv(key, renderMarkdown(text))] : []
+    return splitAtAsks(text).flatMap((p, j) => [
+      p.md.trim() ? this.#mdDiv(`${key}-${j}`, renderMarkdown(p.md)) : null,
+      p.ask ? this.#askRow(p.ask) : null,
+    ])
   }
 
   // The bubble's hover-revealed copy pill. A row preserves the container geometry for the action;
@@ -764,11 +829,10 @@ export class MessageList extends Component {
   // InlineBulb components (msg.body); otherwise the single markdown div — user prompts through
   // userMarkdown (clickable @mentions, merged sends), assistant text through renderMarkdown.
   #renderBody(msg: Msg) {
+    const asks = !!msg.asks?.length
     if (msg.body) {
       return msg.body.flatMap((seg, i) =>
-        typeof seg === 'string'
-          ? (seg.trim() ? [this.#mdDiv(`md-${msg.id}-${i}`, renderMarkdown(seg))] : [])
-          : this.#renderInline(seg))
+        typeof seg === 'string' ? this.#prose(`md-${msg.id}-${i}`, seg, asks) : this.#renderInline(seg))
     }
     if (!msg.text) return null
     // A hand-back, or any turn in a child view, sits in a user bubble but is authored markup, not
@@ -776,7 +840,8 @@ export class MessageList extends Component {
     // misrendering what a person TYPED is worse than not rendering it, and that reason doesn't reach
     // markdown a model wrote (TB-Agent-Children.md). Headings, lists and tables there are meant.
     const user = msg.role === 'user' && !msg.agent && !msg.authored
-    return this.#mdDiv(`md-${msg.id}`, user ? userMarkdown(msg) : renderMarkdown(msg.text))
+    if (user) return this.#mdDiv(`md-${msg.id}`, userMarkdown(msg))
+    return asks ? this.#prose(`md-${msg.id}`, msg.text, true) : this.#mdDiv(`md-${msg.id}`, renderMarkdown(msg.text))
   }
 
   // A live or lone inline bulb renders its app. A superseded one folds to a "<Name> — Version N" stub whose

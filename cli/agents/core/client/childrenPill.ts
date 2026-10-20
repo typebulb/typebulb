@@ -101,6 +101,7 @@ export class ChildrenPill extends ComboboxPill<ChildRow> {
   // `status` opens the child on its Status view; without it, the transcript.
   async openChild(id: string, status = false) {
     this.close()
+    this.parent.leaveBoard()                           // a child picked is what to show, not the board over it
     this.parent.messageList.stickToBottomNextRender()   // land at the child's tail, not the old scroll
     this.#swaps++
     try {

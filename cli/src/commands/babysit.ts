@@ -4,6 +4,7 @@ import { loadEnv } from '../env.js'
 import { typebulbHome } from '../serve/paths.js'
 import { isAlive } from '../serve/serverRegistry.js'
 import { callerScope, sessionToWatch, sessionChildren, sessionStatus, sessionSlowMs } from '../../agents/core/server/childReport.js'
+import { sessionThreads } from '../../agents/core/server/board.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
 import { childAdapters } from './status.js'
 
@@ -13,9 +14,10 @@ const GIVE_UP_MS = 12 * 60 * 60_000
 const TOOL = 'typebulb_babysit'
 
 /**
- * `typebulb babysit` — watch the calling session's sub-agents and stay silent until one needs the
- * parent (TB-Agent-Children.md): an idle stall, a call past the slow limit, a background call
- * outliving its agent, a failure streak. Then print what, one line each, and exit 0, which run in
+ * `typebulb babysit` — watch the calling session and stay silent until it needs the parent: a
+ * sub-agent's idle stall, a call past the slow limit, a background call outliving its agent, a
+ * failure streak (TB-Agent-Children.md), an agent past its time box, or the user's answer to an ask
+ * (TB-Agent-Board.md). Then print what, one line each, and exit 0, which run in
  * the background is the parent's wake-up; it handles that and runs it again. A `slowMs` set is kept for
  * the session, and each poll reads it afresh, so a later `status --slow` applies. A condition fires once
  * while it lasts and again if it clears and comes back: what has fired is kept per session, so a
@@ -26,15 +28,16 @@ const TOOL = 'typebulb_babysit'
  * session, checked reachable before arming, and an event counts as fired only once the host accepts
  * the turn, so a failed delivery fires again on the next run.
  *
- * Exit 0: delivered. 1: cannot babysit here (or one already is). 2: gave up after the cap. 3: the
- * session has ended, so nobody is left to wake. 4: an event was found but its wake was refused.
+ * Exit 0: delivered. 1: cannot babysit here. 2: gave up after the cap. 3: the session has ended, so
+ * nobody is left to wake. 4: an event was found but its wake was refused. 5: a newer babysit took
+ * this session over.
  */
 export async function runBabysit(mode: string | undefined, slowMs?: number): Promise<void> {
   loadEnv(mode)
   const { caller, adapters } = childAdapters()
   // A harness that starts turns must know whose: never the newest session as a stand-in.
   const target = adapters.map(adapter => ({ adapter, ...(adapter.wake ? callerScope : sessionToWatch)(adapter, process.cwd()) })).find(t => t.sessionId)
-  if (!target?.sessionId) return fail(!adapters.length ? `Babysitting sub-agents isn't supported for ${caller} sessions.`
+  if (!target?.sessionId) return fail(!adapters.length ? `Babysit isn't supported for ${caller} sessions.`
     : adapters.some(a => a.wake) ? "Can't babysit: your own session couldn't be identified in this project, and a wake goes to no other."
     : 'No session to babysit in this project.')
   const { adapter, sessionId, cwd } = target
@@ -46,17 +49,26 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
 
   const dir = join(typebulbHome(), 'babysit')
   const stateFile = join(dir, `${sessionId}.json`)
-  if (!takeLock(join(dir, `${sessionId}.lock`))) return fail('A babysit is already watching this session.')
+  const lockFile = join(dir, `${sessionId}.lock`)
+  const replaced = takeLock(lockFile)
   let fired: string[] = []
   try { fired = JSON.parse(readFileSync(stateFile, 'utf8')) as string[] } catch {}
   const save = (keys: string[]) => { try { writeFileSync(stateFile, JSON.stringify(keys)) } catch {} }
-  console.error(`Babysitting the sub-agents of session ${sessionId}: this exits with a line when one needs attention; run it again after handling that.`)
+  if (replaced) console.error(`Took over from the babysit already watching this session (pid ${replaced}), which stops at its next check.`)
+  console.error(`Babysitting session ${sessionId}: this exits with a line when a sub-agent or the user's answer needs you; run it again after handling that.`)
 
   const deadline = Date.now() + GIVE_UP_MS
   while (Date.now() < deadline) {
+    // Checked before any event, so a babysit nobody waits on never consumes one. Only another pid
+    // counts: a missing lock is one the filesystem refused, and this one watches unlocked.
+    const holder = lockHolder(lockFile)
+    if (holder !== undefined && holder !== process.pid) end(5, 'A newer babysit took over this session.')
     if (adapter.sessionEnded?.(sessionId, cwd)) end(3, 'The session this babysits has ended.')
-    const { reports } = await sessionStatus(adapter, cwd, sessionChildren(adapter, cwd, sessionId))
-    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId), sessionSlowMs(sessionId))
+    const s = sessionChildren(adapter, cwd, sessionId)
+    const { reports } = await sessionStatus(adapter, cwd, s)
+    // The session's tags, read incrementally across polls: an owner's answer on the board wakes it.
+    const { threads } = sessionThreads(adapter, cwd, sessionId, s.file, s.children)
+    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId), sessionSlowMs(sessionId), threads)
     const fresh = [...events].filter(([key]) => !fired.includes(key))
     // A condition that has cleared leaves the list, so its return fires again.
     if (!fresh.length) { fired = [...events.keys()]; save(fired) }
@@ -94,24 +106,22 @@ function end(code: number, message?: string): never {
   process.exit(code)
 }
 
-// One babysit per session, so two cannot consume each other's events. The lock is created
-// exclusively, so two starting at once cannot both take it; one whose process is gone is stale and
-// taken over. It goes when this process exits, however it exits. A filesystem that refuses the lock
-// leaves babysit watching unlocked, as before.
-function takeLock(file: string): boolean {
+// One babysit per session, so two cannot consume each other's events, and the newest wins: it is the
+// one its parent is waiting on, where an older one may be an orphan whose exit wakes nobody (CC's
+// TaskStop can kill the shell and leave node running). No process ancestry tells an orphan apart:
+// under CC's background Bash the shells above node exit or re-parent while the command runs. The
+// holder it replaces sees the lock is no longer its own at its next check and exits. The lock goes
+// when its holder exits, however it exits. Returns the pid it took over from, if one was alive. A
+// filesystem that refuses the lock leaves babysit watching unlocked, as before.
+function takeLock(file: string): number | undefined {
   try { mkdirSync(join(file, '..'), { recursive: true }) } catch {}
-  for (let tries = 0; tries < 2; tries++) {
-    try {
-      writeFileSync(file, String(process.pid), { flag: 'wx' })
-      process.on('exit', () => { try { if (Number(readFileSync(file, 'utf8')) === process.pid) rmSync(file) } catch {} })
-      return true
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') return true
-      let pid = 0
-      try { pid = Number(readFileSync(file, 'utf8')) } catch {}
-      if (pid && pid !== process.pid && isAlive(pid)) return false
-      try { rmSync(file) } catch {}
-    }
-  }
-  return false
+  const held = lockHolder(file)
+  try { writeFileSync(file, String(process.pid)) } catch {}
+  process.on('exit', () => { try { if (lockHolder(file) === process.pid) rmSync(file) } catch {} })
+  return held && held !== process.pid && isAlive(held) ? held : undefined
+}
+
+// The pid a lock names; undefined for a missing or unreadable lock.
+function lockHolder(file: string): number | undefined {
+  try { return Number(readFileSync(file, 'utf8')) || undefined } catch { return undefined }
 }

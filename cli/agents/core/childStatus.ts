@@ -5,6 +5,7 @@
 import { childName, childShownState, type Event, type ChildRow } from './events.js'
 import { asStr, displayPath, formatDuration as mins, toolSummary, toolDisplayName, stripAnsi } from './format.js'
 import { masked, preamble, isRead, endsInSearch, exitHidden, commandLabel, gitMoves, statementReads } from './shell.js'
+import { briefOf, answerLine, type Brief, type TagThread } from './tags.js'
 
 const IDLE_MIN_MS = 60_000     // a quiet stretch before a wake shorter than this is thinking, not idle
 const COMMANDS_SHOWN = 8
@@ -48,17 +49,25 @@ export function childDigest(events: Event[]) {
   // Each text block's first line, with the calls made before it: none after the last one makes it
   // the closing text, a finished agent's report.
   let narration: { text: string; calls: number }[] = []
+  let brief: Brief | undefined
+  // The time box in force and where it started (TB-Agent-Board.md): a box runs from the message
+  // that sets it, and a wake after the agent finished starts a new run, boxed only if it says so.
+  let run: { start?: number; boxMs?: number } = {}
   let origin: number | undefined, ended = false, lastAt = 0
   for (const e of events) {
     if (e.type === 'cleared') {
-      calls = []; byId = new Map(); byTask = new Map(); wakes = []; activity = []; turnEnds = []; narration = []; origin = undefined; ended = false
+      calls = []; byId = new Map(); byTask = new Map(); wakes = []; activity = []; turnEnds = []; narration = []; brief = undefined; run = {}; origin = undefined; ended = false
       continue
     }
     const at = 'at' in e ? e.at : undefined
     if (at !== undefined) lastAt = Math.max(lastAt, at)
     if (e.type === 'user') {
-      if (origin === undefined && !e.agent) origin = at
-      else if (at !== undefined) wakes.push(at)
+      if (origin === undefined && !e.agent) { origin = at; brief ??= briefOf(e.text); run = { start: at, boxMs: brief.boxMs } }
+      else {
+        if (at !== undefined) wakes.push(at)
+        const box = e.agent ? undefined : briefOf(e.text).boxMs
+        if (box !== undefined || (ended && !e.agent)) run = { start: at, boxMs: box }
+      }
       ended = false
     } else if (e.type === 'assistant') {
       if (at !== undefined) activity.push(at)
@@ -88,7 +97,10 @@ export function childDigest(events: Event[]) {
       ended = true
     }
   }
-  return { calls, turnEnds, narration, lastAt, ...timeline(calls, wakes, activity, origin, lastAt) }
+  const runStart = run.start ?? origin
+  return { calls, turnEnds, narration, lastAt, brief, boxMs: run.boxMs,
+    runMs: timeline(calls, wakes.filter(w => w > (runStart ?? -Infinity)), activity, runStart, lastAt).span,
+    ...timeline(calls, wakes, activity, origin, lastAt) }
 }
 
 // Active time: a child woken after finishing waited idle, so the stretch from its last activity to
@@ -357,6 +369,9 @@ export interface StatusReport {
   // While it runs with nothing open, its newest finished call of any tool, so the row a call held stays
   // until the next call starts instead of blinking out between calls. Gone once it stops running.
   latest?: { id: string; label: string; run: Run }
+  // Its brief's first line, what the owner will see when it is done, and the time box in force with
+  // the active time of the run it boxes, from the message that set it (TB-Agent-Board.md).
+  brief: string; boxMs?: number; runMs: number
 }
 
 /** What git says of a path: whether it is still changed, and when it was last committed (0 for
@@ -404,6 +419,7 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
     read: [...read.values()].sort((x, y) => x.at - y.at),
     narration: (report ? d.narration.slice(0, -1) : d.narration).map(p => p.text),
     latest: done && run ? { id: done.id, label: label(done), run } : undefined,
+    brief: d.brief?.line ?? '', boxMs: d.boxMs, runMs: d.runMs,
   }
 }
 
@@ -424,6 +440,11 @@ const maxStreak = (r: StatusReport) => Math.max(0, ...r.commands.groups.map(g =>
 // or thinking, so its active time and that wait's share run to now.
 const sinceEntry = (r: StatusReport, now: number) => r.state === 'running' ? Math.max(0, now - r.asOf) : 0
 export const activeAt = (r: StatusReport, now: number) => r.activeMs + sinceEntry(r, now)
+/** The active time of the run its time box covers, to now while it runs. */
+const runAt = (r: StatusReport, now: number) => r.runMs + sinceEntry(r, now)
+/** Running past the time box in force. `past its time box` is a contract phrase. */
+export const late = (r: StatusReport, now: number) => r.state === 'running' && r.boxMs !== undefined && runAt(r, now) > r.boxMs
+const LATE = 'past its time box'
 
 // A finished agent with background calls still going leads with them: "finished" alone misreads. The
 // phrases `background call running` and `failed N in a row` are a contract (TB-Agent-Children.md): a
@@ -432,12 +453,14 @@ function stateWord(r: StatusReport, now: number): string {
   const bg = r.state === 'finished' ? liveOpen(r).filter(o => o.background) : []
   return bg.length ? `finished, background call running ${mins(now - (bg[0]!.at ?? now))}${bg.length > 1 ? ` (+${bg.length - 1} more)` : ''}` : r.state
 }
-/** Where it stands, its active time, and any idle time outside it: the text joins them, the view
- *  sets each in a tile. */
+/** Where it stands, its active time against any time box, and any idle time outside it: the text
+ *  joins them, the view sets each in a tile. */
 export const stateParts = (r: StatusReport, now: number) =>
-  ({ state: stateWord(r, now), active: `${mins(activeAt(r, now))} active`, idle: r.idleMs ? `${mins(r.idleMs)} idle` : '' })
-/** "running · 28m active · 1h 2m idle". */
-export const stateLine = (r: StatusReport, now: number) => { const p = stateParts(r, now); return [p.state, p.active, p.idle].filter(Boolean).join(' · ') }
+  ({ state: stateWord(r, now), active: `${mins(activeAt(r, now))} active${!r.boxMs ? ''
+      : r.runMs < r.activeMs ? `, ${mins(runAt(r, now))} of a ${mins(r.boxMs)} box this run` : ` of a ${mins(r.boxMs)} box`}`,
+    late: late(r, now) ? LATE : '', idle: r.idleMs ? `${mins(r.idleMs)} idle` : '' })
+/** "running · 28m active of a 20m box · past its time box · 1h 2m idle". */
+export const stateLine = (r: StatusReport, now: number) => { const p = stateParts(r, now); return [p.state, p.active, p.late, p.idle].filter(Boolean).join(' · ') }
 
 const openLine = (o: StatusReport['open'][number], now: number) => o.interrupted
   ? `${o.label}: interrupted, its process has ended`
@@ -544,12 +567,13 @@ export interface CheckFile { path: string; writers: { id: string; name: string; 
 /** The session's overview: whether anything is moving, the files to check, then a line for each agent
  *  that still asks something of the parent: running, failing, or a writer of a file to check. The rest
  *  fold into one count, stops named apart. A nested agent indents under the one that spawned it, when that one shows. */
-export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number): string {
+export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number, asks: string[] = []): string {
   const moving = agents.filter(busy).length
   const newest = Math.max(0, ...agents.map(a => a.asOf))
   const out = [moving
     ? `Session ${sessionId}: ${moving} of ${agents.length} agents running.`
     : `Session ${sessionId}: No agent running for ${mins(now - newest)} (${agents.length} agents).`]
+  if (asks.length) out.push('', ...asks)
   if (files.length) {
     out.push('', 'Files to check before git add:')
     for (const f of files) out.push(`  ${f.path}  ${f.writers.map(w => `"${w.name}"${w.running ? ' (running)' : w.stopped ? ' (stopped)' : ''}`).join(', ')}${f.blind.length ? ' ⚠' : ''}`)
@@ -563,14 +587,14 @@ export function overviewText(sessionId: string, agents: (StatusReport & { depth:
     const state = stateWord(a, now).padEnd(8)
     const doing = bg.length ? bg[0]!.short : o ? `waiting ${mins(now - (o.at ?? now))} on ${o.short}` : ''
     const streak = maxStreak(a)
-    const marks = [doing, streak >= 2 ? `failed ${streak} in a row` : '', files.some(f => f.blind.includes(a.id)) ? '⚠' : ''].filter(Boolean)
+    const marks = [doing, late(a, now) ? LATE : '', streak >= 2 ? `failed ${streak} in a row` : '', files.some(f => f.blind.includes(a.id)) ? '⚠' : ''].filter(Boolean)
     const indent = a.parentId && shown.has(a.parentId) ? '  '.repeat(Math.max(0, a.depth - 1)) : ''
     out.push(`  ${indent}${a.id}  ${state} ${`${mins(activeAt(a, now))} active`.padStart(10)}  ${a.name}${marks.length ? ` · ${marks.join(' · ')}` : ''}`)
   }
   const rest = agents.filter(a => !shown.has(a.id)), stopped = rest.filter(a => a.state === 'stopped').length
   const fold = [rest.length - stopped ? `${rest.length - stopped} finished` : '', stopped ? `${stopped} stopped` : ''].filter(Boolean).join(', ')
   if (rest.length) out.push(`  ${listed.length ? '+' : ''}${fold}, nothing to check`)
-  out.push('', 'Run `typebulb status <id>` for one agent\'s report, or `typebulb babysit` in the background to be woken when an agent needs attention.')
+  out.push('', 'Run `typebulb status <id>` for one agent\'s report, or `typebulb babysit` in the background to be woken when an agent or the user\'s answer needs you.')
   return out.join('\n')
 }
 
@@ -580,15 +604,19 @@ const IDLE_ALERT_MS = 5 * 60_000
 
 /** The conditions that need a parent's attention now, each keyed so that it fires once while it
  *  lasts and again if it clears and comes back: a key carries no minutes, only what it is about. The
- *  texts keep the overview's fixed phrases, which a parent may match. */
-export function babysitEvents(agents: StatusReport[], now: number, parentBusy = false, slowMs = DEFAULT_SLOW_MS): Map<string, string> {
+ *  texts keep the overview's fixed phrases, which a parent may match. `threads` are the session's
+ *  tags (TB-Agent-Board.md): an owner's answer wakes it, and an open ask means nothing is stalled,
+ *  since the work waits on the owner. */
+export function babysitEvents(agents: StatusReport[], now: number, parentBusy = false, slowMs = DEFAULT_SLOW_MS, threads: TagThread[] = []): Map<string, string> {
   const out = new Map<string, string>()
   const name = (id: string) => `"${agents.find(a => a.id === id)?.name ?? id}"`
   const newest = Math.max(0, ...agents.map(a => a.asOf))
   // A parent mid-turn is working, not stalled: waking it would only end the babysit between fan-outs.
-  if (agents.length && !parentBusy && !agents.some(busy) && now - newest >= IDLE_ALERT_MS)
+  if (agents.length && !parentBusy && !agents.some(busy) && !threads.some(t => t.state === 'open') && now - newest >= IDLE_ALERT_MS)
     out.set('idle', `No agent running for ${mins(now - newest)} (${agents.length} agents).`)
+  for (const t of threads) if (t.state === 'answered') out.set(`answer:${t.id}:v${t.version}:${t.answer!.at}`, answerLine(t.id, t.answer!))
   for (const a of agents) {
+    if (late(a, now)) out.set(`late:${a.id}`, `${name(a.id)}: ${LATE}, ${stateParts(a, now).active}`)
     // Keyed apart once its agent has finished, so a call that fired as slow fires again when left running.
     for (const o of liveOpen(a).filter(o => now - (o.at ?? now) >= slowMs)) {
       const left = a.state === 'finished' && o.background

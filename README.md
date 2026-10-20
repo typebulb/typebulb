@@ -30,7 +30,7 @@ This document is dedicated to the typebulb CLI. At its core, it compiles and ser
 - **`tb.infer()`** — one-shot runtime inference over the bulb's own blocks (`infer.md` + `data.txt` → `insight.json`), with a confirmation modal, streaming, and share/save of a good run. Requires `--trust`.
 - **Restricted by default** — A plain `npx typebulb my-app.bulb.md` runs with no filesystem or `server.ts` (like typebulb.com); `--trust` grants those for a run. Trust is **remembered**: `typebulb trust <file>` elevates a bulb once so later plain runs are trusted, `untrust` revokes it, and `--no-trust` forces a Restricted run.
 - **Predict trust** — `typebulb predict <file>` reports the capability a bulb will likely need (fs / AI / `server.ts`) without running it, so you can decide on `--trust` up front rather than after a mid-run permission failure.
-- **Agent mirror** — a browser view of your coding agent's sessions, rendering inline bulbs, KaTeX, and mermaid live in the conversation, plus runs/stops local bulbs. On Pi it also carries a prompt panel, so the user can drive their pi sessions from the mirror directly. `typebulb agent` brings it up, auto-detecting your harness (Claude Code, Codex, or Pi). Bulbs the agent runs open where the mirror is: in VS Code beside it, or in your browser.
+- **Agent mirror** — a browser view of your coding agent's sessions, rendering inline bulbs, KaTeX, and mermaid live in the conversation, plus runs/stops local bulbs and keeps a board of the questions an orchestrating agent asks the user. On Pi it also carries a prompt panel, so the user can drive their pi sessions from the mirror directly. `typebulb agent` brings it up, auto-detecting your harness (Claude Code, Codex, or Pi). Bulbs the agent runs open where the mirror is: in VS Code beside it, or in your browser.
 - **Proxying Claude** — the agent mirror lets you proxy Claude with a model from [OpenRouter](https://openrouter.ai). This will apply to your project only.
 
 ## Usage
@@ -69,7 +69,7 @@ typebulb trust [file]          Remember a bulb as trusted (no arg: list trusted 
 typebulb untrust <file>        Forget a bulb's trust (back to Restricted)
 typebulb status [agent]        A sub-agent's status: what it waits on, its commands and files (no arg: the session's overview)
 typebulb status --slow <dur>   When a call counts as slow for this session (default 3m)
-typebulb babysit               Watch your sub-agents silently; print and exit when one needs you (run it in the background: each exit is one wake-up, so re-arm it after handling)
+typebulb babysit               Watch your session silently; print and exit when a sub-agent or the user's answer needs you (run it in the background: each exit is one wake-up, so re-arm it after handling)
 typebulb babysit --slow <dur>  When a call counts as slow for this session (default 3m)
 typebulb --no-watch <file>     Disable hot reload
 typebulb --no-open <file>      Open nothing at launch, not even inside VS Code
@@ -295,6 +295,15 @@ A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no 
 
 - **Invoke one export with `typebulb call <file> <fn> [args…] --trust`.** It boots, runs that export, prints the `return` as JSON to stdout, and exits — a fresh boot per call. Under `call`, logs (`console.log` / `tb.log`) go to stderr, so the JSON result owns stdout.
 
+### Asking the user while you orchestrate
+
+Tag a question in your reply and the mirror's board lists it, answerable with a click there or under the reply that asked.
+
+- **Open a paragraph or list item with the tag:** `**Ask [<id>]:** <question> *Recommend:* <your pick>`. The recommendation becomes the answer button, so keep it to the pick and put the reasoning around it. A tag in a code fence or a `>` quote is an example, not an ask.
+- **The answer wakes you through babysit** as `[answer <id> v<N>] …` (on another harness, arm `typebulb wait agent --match "[answer "`). Act on it, then close it in your next reply with `**Decided [<id>]:** …`, or `**Todo [<id>]:** …` if the user parked it.
+- **An id's latest tag is its state.** `Done` and `Finding` are the other labels; ids are lowercase letters, digits and hyphens.
+- **A sub-agent's brief feeds its row:** the board shows its first line, and a line `**Time box:** 20m` has babysit wake you once it runs past; a follow-up restarts the box only with a line of its own.
+
 ## Sizing
 
 The host owns a bulb's **width**; you own its **height**.
@@ -326,7 +335,7 @@ The host owns light/dark; you style for both.
 - **A bulb's working files land beside it automatically** — relative `tb.fs` paths resolve to the bulb's folder, in `code.tsx` and `server.ts` alike: `tb.fs.write('run.json')`, no path prefix, no mkdir.
 - **Images & media: an `assets/` subfolder of the bulb's folder** (`birds.bulb.md` → `birds/assets/robin.png`) — `<img src="assets/robin.png">` just works (always that relative form, never `/assets/…`), every tier except inline. It holds what the bulb ships in order to run (e.g. images), never results.
 - **See what's already running** — `typebulb logs` with no argument lists every running bulb and mirror; check it before launching anything.
-- **Checking on sub-agents you spawned** — `typebulb status` is your session's overview (what's running, failure streaks, files to check before `git add`), and `typebulb status <id>` one agent's; run it before committing. Arm `typebulb babysit` in the background when you fan out (Claude Code: `run_in_background`; Codex: experimental, may need elevated permissions): it exits with a line when an agent needs you, because a background command wakes you only by exiting. Handle it and arm it again right away; the re-arm loses nothing, as what came up meanwhile fires at once and what it already reported doesn't repeat. Run babysit unpiped, and brief their checks unpiped or after `set -o pipefail`: a command piped into `tail` exits with `tail`'s code, hiding its own. Both take `--slow` (when a call counts as slow, default `3m`): set it to your project's pace once, e.g. `--slow 10m` where the test suite takes 8, and the session keeps it.
+- **Checking on sub-agents you spawned** — `typebulb status` is your session's overview (what's running, failure streaks, files to check before `git add`), and `typebulb status <id>` one agent's; run it before committing. Arm `typebulb babysit` in the background when you fan out (Claude Code: `run_in_background`; Codex: experimental, may need elevated permissions): it exits with a line when an agent or the user's answer needs you, because a background command wakes you only by exiting. Handle it and arm it again right away; the re-arm loses nothing, as what came up meanwhile fires at once and what it already reported doesn't repeat. Run babysit unpiped, and brief their checks unpiped or after `set -o pipefail`: a command piped into `tail` exits with `tail`'s code, hiding its own. Both take `--slow` (when a call counts as slow, default `3m`): set it to your project's pace once, e.g. `--slow 10m` where the test suite takes 8, and the session keeps it.
 - **Self-testing a local bulb** — To confirm a bulb works, run it, instrument with `tb.log(...)`, and read it back with `typebulb logs`. That's the loop to verify behaviour without asking the user to copy-paste console output. `tb.fs.write(...)` is handy for dumping large outputs.
 - **Self-testing client code** — gate checks behind `tb.onMessage(m => { if (m === 'selftest') return run() })`, trigger with `typebulb send <file> selftest --wait`, and assert on the JSON reply — see [Interrogating the live page](#interrogating-the-live-page).
 - **Probe handlers go in the first draft** — the selftest, readback, and set handlers you'll want later: adding one is an edit, and that hot reload destroys the very state you meant to inspect.

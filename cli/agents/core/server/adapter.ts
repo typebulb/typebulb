@@ -165,6 +165,10 @@ export abstract class AgentAdapter<E = unknown> {
   abstract idOf(e: E): string | undefined
   /** The entry's parent id (CC `parentUuid` / Pi `parentId`); undefined at the root. */
   abstract parentOf(e: E): string | undefined
+  /** The entry a compaction boundary continues, where the harness records one (CC `logicalParentUuid`):
+   *  the board's walk crosses it, since an ask made before a compaction is still open after it
+   *  (TB-Agent-Board.md). The mirror's own walk stops there, as the harness's view does. */
+  logicalParentOf?(e: E): string | undefined
   /** One pass over a file's entries in the order written, run on each before the engine indexes it:
    *  a harness whose transcript is not a tree re-parents here, so the single-parent walk reaches every
    *  entry (CC's parallel tool calls). One per file read, so it may keep state. Default: a tree. */

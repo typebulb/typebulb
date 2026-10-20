@@ -162,6 +162,7 @@ export class DiffPill extends ComboboxPill<never> {
 
   closeDoc() {
     this.#ruler.release()        // the pane gets its native scrollbar back with the doc's teardown
+    this.parent.messageList.stickToBottomNextRender()   // back to the transcript at its tail
     this.viewing = undefined
     this.update()
   }

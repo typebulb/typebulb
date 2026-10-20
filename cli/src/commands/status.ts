@@ -2,7 +2,9 @@ import { loadEnv } from '../env.js'
 import { agentAdapterFactories } from '../agentViewer/registry.js'
 import { detectCallerHarness } from '../agentViewer/resolve.js'
 import { sessionsWithChildren, sessionChildren, callerScope, matchChildren, sessionStatus, sessionSlowMs, type SessionChildren } from '../../agents/core/server/childReport.js'
+import { sessionThreads } from '../../agents/core/server/board.js'
 import { statusText, overviewText } from '../../agents/core/childStatus.js'
+import { asksLines } from '../../agents/core/tags.js'
 import { childName, childShownState, type ChildRow } from '../../agents/core/events.js'
 import type { AgentAdapter } from '../../agents/core/server/adapter.js'
 
@@ -34,10 +36,15 @@ export async function runStatus(query: string | undefined, mode: string | undefi
     if (!query) {
       // The caller's own session, never another's for want of agents in it; outside one, the newest.
       const s = own ? sessionChildren(adapter, cwd, own) : sessionsWithChildren(adapter, cwd).next().value
-      if (!s?.children.length) { if (own) { sessionSlowMs(own, slowMs); console.log('No sub-agents in this session yet.'); return } continue }
+      // Its tags too: an answer the owner gave on the board is the parent's to act on (TB-Agent-Board.md).
+      const asks = s ? asksLines(sessionThreads(adapter, cwd, s.sessionId, s.file, s.children).threads, Date.now()) : []
+      if (!s?.children.length) {
+        if (own) { sessionSlowMs(own, slowMs); console.log([...asks, ...asks.length ? [''] : [], 'No sub-agents in this session yet.'].join('\n')); return }
+        continue
+      }
       sessionSlowMs(own ?? s.sessionId, slowMs)
       const { reports, files } = await sessionStatus(adapter, cwd, s)
-      console.log(overviewText(s.sessionId, reports, files, Date.now()))
+      console.log(overviewText(s.sessionId, reports, files, Date.now(), asks))
       return
     }
     for (const s of sessionsWithChildren(adapter, cwd)) {

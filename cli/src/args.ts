@@ -454,10 +454,11 @@ Usage:
                                  failing repeatedly, uncommitted files. Name it by
                                  id or a piece of its description; no arg: the
                                  session's overview. Claude Code, Codex.
-  typebulb babysit               Watch your sub-agents and stay silent until one
-                                 needs you (an idle stall, a slow call, a
-                                 background call left running, a failure streak),
-                                 then print it and exit.
+  typebulb babysit               Watch your session and stay silent until it
+                                 needs you (a sub-agent's idle stall, slow call,
+                                 background call left running, failure streak or
+                                 overrun time box; or the user's answer on the
+                                 mirror's board), then print it and exit.
                                  Run it in the background; the exit is your
                                  wake-up. Run it again after handling it:
                                  what came up meanwhile fires at once.

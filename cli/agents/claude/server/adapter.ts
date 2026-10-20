@@ -23,6 +23,7 @@ interface JsonlEntry {
   isApiErrorMessage?: boolean
   effort?: string            // on an assistant entry: the reasoning effort it ran at
   parentUuid?: string
+  logicalParentUuid?: string // on a compact_boundary: the pre-compaction leaf it continues
   timestamp?: string
   sessionId?: string
   aiTitle?: string
@@ -593,6 +594,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   }
   idOf(raw: JsonlEntry) { return raw.uuid }
   parentOf(raw: JsonlEntry) { return raw.parentUuid }
+  logicalParentOf(raw: JsonlEntry) { return raw.logicalParentUuid }
   // CC parents each parallel call's result on its own call, so a walk from the leaf keeps one branch
   // and drops the other results (TB-LostMessage.md). Chaining a message's blocks and results in the
   // order written gives the engine the list it walks.

@@ -9,6 +9,8 @@ import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import { summarizeProse } from './summarize.js'
 import { entryEvents, sessionLive as sessionLiveOf, childState, transcriptIndex, type TranscriptIndex } from './transcript.js'
 import { sessionStatus } from './childReport.js'
+import { sessionThreads, saveAnswer } from './board.js'
+import { answerLine, type Answer, type AnswerChoice } from '../tags.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
 import type { ChildRow, ChildTranscript, ComposerPoll, Event, SessionFile, SessionRow, Thread, TokenCounts } from '../events.js'
@@ -827,6 +829,44 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     return report ? { ok: true, report } : { ok: false, error: 'child not found' }
   }
 
+  // ── the board (TB-Agent-Board.md) ──
+
+  // The attached session's threads; with `full`, also its moving agents' Status reports and the rest
+  // of its agents, for the board view. The pill's lazy tick asks without, which costs a stat per
+  // file until one grows. Read from the session's own file whichever thread the view is on.
+  async function board(full = false) {
+    if (!state.sessionId || !sessionFile) return { threads: [], agents: [], others: [] }
+    const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
+    const { threads, briefs } = sessionThreads(adapter, state.cwd, state.sessionId, sessionFile, kids)
+    if (!full) return { threads, agents: [], others: [] }
+    const live = sessionLive()
+    const rows = kids.map(c => ({ ...c, state: childState(c, live) }))
+    const moving = new Set(rows.filter(c => c.state === 'running' || c.failing && c.state !== 'stopped').map(c => c.id))
+    const { reports } = moving.size ? await sessionStatus(adapter, state.cwd, { sessionId: state.sessionId, live, children: rows }, moving) : { reports: [] }
+    const others = rows.filter(c => !moving.has(c.id)).map(c => ({ id: c.id, name: childName(c), state: c.state, at: c.mtime, brief: briefs.get(c.id) ?? '' }))
+    return { threads, agents: reports, others }
+  }
+
+  // The owner's click on an ask: recorded for babysit and status, and logged as `[answer …]` for an
+  // orchestrator's `wait agent`. It never writes into the session (Mirror Invariant 1a). Refused when
+  // the ask has been closed or asked again since the page last read it.
+  async function answerAsk(id: string, version: number, choice: AnswerChoice, note?: string) {
+    if (!state.sessionId || !sessionFile) return { ok: false, error: 'no session attached' }
+    const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
+    const t = sessionThreads(adapter, state.cwd, state.sessionId, sessionFile, kids).threads.find(x => x.id === id)
+    if (!t?.ask) return { ok: false, error: 'no such ask' }
+    if (t.latest.kind !== 'Ask') return { ok: false, error: `already ${t.state}` }
+    if (t.version !== version) return { ok: false, error: 'this ask has been asked again since; read it again' }
+    const text = String(note ?? '').replace(/\s+/g, ' ').trim()
+    if (!['accept', 'todo', 'discuss', 'note'].includes(choice)) return { ok: false, error: 'bad choice' }
+    if (choice === 'accept' && !t.ask.recommend) return { ok: false, error: 'this ask has no recommendation' }
+    if (choice === 'note' && !text) return { ok: false, error: 'empty note' }
+    const a: Answer = { version, choice, at: Date.now(), ...choice === 'accept' ? { recommend: t.ask.recommend } : {}, ...text ? { note: text } : {} }
+    saveAnswer(state.sessionId, id, a)
+    console.log(answerLine(id, a))
+    return { ok: true, answer: a }
+  }
+
   // ── session picker ──
 
   async function listSessions(): Promise<SessionRow[]> {
@@ -981,5 +1021,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, board, answerAsk, shutdownComposer }
 }

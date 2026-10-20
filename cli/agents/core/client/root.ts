@@ -4,11 +4,13 @@ import { TokenPill } from './tokenPill.js'
 import { BulbsPill } from './bulbsPill.js'
 import { DiffPill } from './diffPill.js'
 import { ChildrenPill } from './childrenPill.js'
+import { BoardPill } from './boardPill.js'
 import { MessageList } from './messageList.js'
 import { truncate } from './util.js'
 import { basename } from '../format.js'
 import { armTooltipDismiss } from './ui.js'
 import type { ChildRow, ServerEvent, IRoot, TokenCounts, ComposerStats, RootConfig, StatusPillLike, ComposerLike } from './types.js'
+import type { TagThread } from '../tags.js'
 
 // The neutral agent mirror shell (TB-Agent-Mirror.md, TB-Agent-Harness.md). It tails the host's transcript via the
 // `tb.server.poll` RPC and renders the neutral message list + status bar; everything harness-specific
@@ -24,6 +26,7 @@ export class Root extends Component implements IRoot {
   bulbsPill = new BulbsPill()
   diffPill = new DiffPill()
   childrenPill = new ChildrenPill()
+  boardPill = new BoardPill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   cost = 0                                  // session spend: summed per-entry harness costs (IRoot.cost)
@@ -76,13 +79,30 @@ export class Root extends Component implements IRoot {
       id: () => this.childrenPill.viewing?.id,
       onChange: () => this.update(),
       reveal: id => { this.messageList.revealTool(id); this.update() },
+      toTail: () => this.messageList.stickToBottomNextRender(),
     })
-    // Esc leaves an open child transcript, matching the diff doc's own key — global because the
-    // child view IS the message list, which has no focused surface of its own to hang it on.
+    this.boardPill.board.bind({
+      onChange: () => this.update(),
+      // A tag in the session's own transcript is shown there; one a child wrote opens that child.
+      reveal: tag => {
+        this.boardPill.setViewing(false)
+        if (tag.from) { this.openChild(tag.from); return }
+        if (this.childrenPill.viewing) void this.childrenPill.closeChild()
+        if (tag.at) this.messageList.revealAt(tag.at, `[${tag.id}]`)
+        this.update()
+      },
+      openChild: id => { this.boardPill.setViewing(false); this.openChild(id) },
+      asks: this.boardPill.asks,
+    })
+    // Esc leaves the board or an open child transcript, matching the diff doc's own key — global
+    // because the child view IS the message list, which has no focused surface of its own to hang it on.
     document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && this.boardPill.viewing) { this.boardPill.setViewing(false); this.update(); return }
       if (e.key !== 'Escape' || !this.childrenPill.viewing || this.childrenPill.open) return
       void this.childrenPill.closeChild()
     })
+    // `?view=board` opens on the board, so it can live in a tab of its own.
+    if (new URLSearchParams(location.search).get('view') === 'board') this.boardPill.setViewing(true)
     this.init()
   }
 
@@ -95,6 +115,7 @@ export class Root extends Component implements IRoot {
     if (this.bulbsPill !== except) this.bulbsPill.close()
     if (this.diffPill !== except) this.diffPill.close()
     if (this.childrenPill !== except) this.childrenPill.close()
+    if (this.boardPill !== except) this.boardPill.close()
     for (const p of this.pills) if (p !== except) p.close?.()
   }
 
@@ -102,6 +123,9 @@ export class Root extends Component implements IRoot {
   // offer a way into the child a tool row spawned without importing the pill (TB-Agent-Children.md).
   get children(): ChildRow[] { return this.childrenPill.children }
   openChild(id: string) { void this.childrenPill.openChild(id) }
+  get threads(): TagThread[] { return this.boardPill.threads }
+  askRow(t: TagThread) { return this.boardPill.asks.view(t) }
+  leaveBoard() { if (this.boardPill.viewing) this.boardPill.setViewing(false) }
 
   async init() {
     const i = await tb.server.info()
@@ -175,6 +199,7 @@ export class Root extends Component implements IRoot {
         if (events.length || composerChanged) this.messageList.scrollSoon()
         // An open Status view asks the server again; it throttles itself.
         if (this.childrenPill.viewing) void this.childrenPill.status.sync()
+        if (this.boardPill.viewing) void this.boardPill.board.sync()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()
@@ -197,7 +222,7 @@ export class Root extends Component implements IRoot {
         // The agents pill is scoped to the attached session (TB-Agent-Children.md), so a switch
         // clears its rows here. Keyed on the id changing, not on the event: a child swap re-emits
         // this under the same id, and that list is the one already on screen.
-        if (e.sessionId !== this.sessionId) this.childrenPill.reset()
+        if (e.sessionId !== this.sessionId) { this.childrenPill.reset(); this.boardPill.reset() }
         this.sessionId = e.sessionId
         // A conversation can be named before the picker has a row for it (the composer's own
         // sessions are listed from their first send, ahead of the agent writing the file), so pull
@@ -225,6 +250,7 @@ export class Root extends Component implements IRoot {
         // An open git-diff doc takes the transcript's slot — render-only; the transcript keeps
         // draining underneath and returns intact on close.
         this.diffPill.viewing ? this.diffPill.docView()
+          : this.boardPill.viewing ? this.boardPill.board.view()
           : this.childrenPill.viewing && this.childrenPill.status.open ? this.childrenPill.status.view()
           : this.messageList.view(),
         this.#cwdHint(),
@@ -271,6 +297,7 @@ export class Root extends Component implements IRoot {
         this.diffPill.view(),
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
+        this.boardPill.view(),
         this.childrenPill.view(),
         this.sessionPicker.view(),
         this.bulbsPill.view(),

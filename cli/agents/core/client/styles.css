@@ -1350,12 +1350,16 @@ html[data-theme="dark"] .masthead-logo.dark { display: block; }
 /* The frame's header: the agents pill's glyph, the agent's type, then its description, which is the
    link into its transcript. Muted by colour and NOT by size — the description is the one thing that
    tells eleven siblings apart, so it stays at the body's size (the picker's child-row rule). */
-.agent-head { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .55rem; }
+.agent-head { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .55rem; cursor: pointer; }
 .agent-head .glyph-img { flex: none; align-self: center; }
+.agent-head .caret-tri { flex: none; align-self: center; }
 .agent-kind { flex: none; color: var(--muted); }
-.agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.agent-name { color: var(--accent); cursor: pointer; }
 a.agent-name:hover { text-decoration: underline; }
+/* Folded, the frame is its head alone, which carries the report's first line in the muted voice. */
+.bubble.agent.folded .agent-head { margin-bottom: 0; }
+.agent-preview { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 /* Consecutive tool-only bubbles sit tight via negative margin (flex `gap`
    can't be overridden per sibling pair). The adjacent-sibling selector leaves
    the first tools-only bubble's gap intact, preserving the turn boundary. */
@@ -1959,6 +1963,55 @@ a.agent-name:hover { text-decoration: underline; }
 .children-status-link[data-tip]::after { top: 50%; bottom: auto; right: calc(100% + .5rem); transform: translateY(-50%); max-width: 27rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A citation's landing row, marked briefly so the eye finds it. */
 .tool.revealed { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; transition: outline-color 1s; }
+.bubble.revealed { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; transition: outline-color 1s; }
+
+/* The board (boardView.ts, TB-Agent-Board.md): the Status view's sections and rows, plus an ask's
+   card. The ask colour is --warn amber, the same tier as anything else waiting on the owner. */
+.board-pill { padding: 0 .45rem; gap: .25rem; }
+.board-pill.waiting { color: var(--warn); }
+.board-pill .pill-close { margin-left: .2rem; }
+.cs-tile.bd-waiting { color: var(--warn); font-weight: 600; }
+.cs-tile.bd-clear { color: var(--diff-add); }
+/* A section heading in the colour of what it holds: the transcript ask card's bar and palette. The bar
+   sits on the rows' outer edge (.cs-list's outset), the title stays on the text column. */
+.bd-h { border-left: 3px solid var(--tone); margin-left: -.4rem; padding-left: calc(.4rem - 3px); }
+.bd-h.waiting { --tone: var(--warn); }
+.bd-h.answered { --tone: var(--diff-add); }
+.bd-h.moving { --tone: var(--accent); }
+.cs-item .bd-chosen { margin-top: .3rem; }
+/* A row's time: even digits a shade above muted, so leading times read as a column, not a colour. */
+.bd-time { font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--fg) 55%, var(--muted)); }
+.bd-q > .bd-time { display: inline-block; min-width: 8ch; margin-right: .5rem; }
+/* Outset like .cs-list, so a card's edges meet the rows' borders below it. */
+.bd-group { display: flex; flex-direction: column; gap: .6rem; margin: 0 -.4rem .6rem; }
+.bd-group-head { display: flex; justify-content: flex-end; }
+.bd-card { border: 1px solid var(--border); border-left: 3px solid var(--warn); padding: .5rem .75rem .6rem; }
+.bd-card.late { border-left-color: var(--err); }
+.bd-meta { margin-bottom: .2rem; }
+.bd-md > :first-child { margin-top: 0; }
+.bd-md > :last-child { margin-bottom: 0; }
+.bd-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-top: .5rem; }
+.bd-btn { font: inherit; font-size: .9rem; padding: .15rem .65rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-btn:hover:not(:disabled) { border-color: var(--accent); }
+.bd-btn:disabled { opacity: .5; cursor: default; }
+/* The recommendation is the one free-text label, so it wraps rather than truncates: short, it stays
+   a pill; long, it spans the row and the fixed choices drop below it. */
+.bd-btn.rec { border-color: var(--diff-add); color: var(--diff-add); font-weight: 600; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.bd-btn.later { border-style: dashed; color: var(--muted); }
+.bd-note { display: flex; gap: .4rem; flex: 1 1 16rem; min-width: 0; }
+.bd-input { flex: 1; min-width: 0; font: inherit; font-size: .9rem; padding: .15rem .5rem; border-radius: 6px; border: 1px solid var(--border); background: Canvas; color: CanvasText; }
+.bd-q { flex: 1 1 20rem; min-width: 0; overflow-wrap: anywhere; }
+.bd-fold > summary { cursor: pointer; list-style-position: inside; }
+/* The same asks under the paragraph that asked them (messageList #askRow): one card for the ask's
+   whole life, amber while it waits on the owner, the accept button's green once answered, so the
+   answer stays a landmark. The chosen pill is the clicked button, inert. */
+.ask-row { --ask: var(--warn); border-left: 3px solid var(--ask); padding: .4rem .6rem .5rem; margin: .5rem 0; background: color-mix(in srgb, var(--ask) 6%, transparent); overflow-wrap: anywhere; }
+.ask-row.settled { --ask: var(--diff-add); }
+.ask-row.stale { --ask: var(--muted); }
+.ask-row-head { color: var(--ask); font-weight: 600; font-size: .9rem; }
+.ask-row .bd-actions { margin-top: .35rem; }
+.bd-chosen .bd-btn { pointer-events: none; }
+.ask-row-closed { margin-top: .3rem; color: var(--muted); }
 
 /* An expanded abandoned-branch (fork) stub renders its orphan messages here — set apart from the live
    transcript with a left rule and slight fade, signalling "this is not the active conversation"

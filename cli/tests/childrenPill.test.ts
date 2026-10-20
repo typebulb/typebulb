@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, writeFileSync, appendFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { byAncestry } from '../agents/core/order.js'
 import { childDigest, editedFiles, commandsOf, notable, quietRuns, quietRunsLine, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
+import { tagsIn, tagsOf, threadsOf, briefOf, splitAtAsks } from '../agents/core/tags.js'
+import { sessionTags } from '../agents/core/server/tagIndex.js'
+import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
 import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
 import type { Event } from '../agents/core/events.js'
@@ -339,5 +345,89 @@ describe('babysitEvents', () => {
     // A limit off the minute says so: 90s floored to "over 1m" would misstate it.
     const slow = childDigest([brief, call('t', 'Bash', { command: 'npm test' }, 0), result('t', 'ok', 2 * min)])
     expect(commandsOf(slow, undefined, 90_000).groups[0]!.long).toBe('over 90s')
+  })
+
+  // The board's two (TB-Agent-Board.md): a time box the brief set, and the owner's answer.
+  it('wakes on an agent past its time box and on an answer, and not idle while an ask is open', () => {
+    const boxed: Event = { type: 'user', text: 'When this is done, the owner will see a chart.\n**Time box:** 20m', at: 0 }
+    const r = agentReport({ id: 'a', label: 'a', file: '', mtime: 0, depth: 1, stopped: false, state: 'running' }, childDigest([boxed, call('a1', 'Bash', { command: 'npm test' }, 0)]), nofiles, none, new Map(), true)
+    expect(r.brief).toBe('When this is done, the owner will see a chart.')
+    expect(babysitEvents([r], 19 * min, false, 60 * min).size).toBe(0)
+    expect(babysitEvents([r], 21 * min, false, 60 * min).get('late:a')).toMatch(/^"a": past its time box, 21m active of a 20m box/)
+
+    // A finished agent woken with a follow-up starts a new run, boxed by that message alone (takeoff,
+    // 2026-10-20: three follow-ups alarmed on the spawn brief's 15m box summed across them all).
+    const resumed = (followUp: string) => agentReport({ id: 'b', label: 'b', file: '', mtime: 0, depth: 1, stopped: false, state: 'running' }, childDigest([
+      { type: 'user', text: 'Spike.\n**Time box:** 15m', at: 0 }, call('b1', 'Bash', { command: 'npm test' }, 0), result('b1', 'ok', 14 * min),
+      { type: 'turn_end', at: 14 * min }, { type: 'user', text: followUp, at: 60 * min }, call('b2', 'Bash', { command: 'npm test' }, 60 * min + 1000)]), nofiles, none, new Map(), true)
+    const rebox = resumed('One more check.\n**Time box:** 10m')
+    expect(babysitEvents([rebox], 65 * min, false, 60 * min).has('late:b')).toBe(false)
+    expect(babysitEvents([rebox], 71 * min, false, 60 * min).get('late:b')).toMatch(/past its time box, 25m active, 11m of a 10m box this run/)
+    expect(babysitEvents([resumed('One more check, no rush.')], 90 * min, false, 60 * min).has('late:b')).toBe(false)
+
+    const ask = threadsOf(tagsOf([{ type: 'assistant', text: '**Ask [t]:** which? *Recommend:* this', thinking: '', tools: [], live: false, at: 0 }]))
+    const done = [agent('b', 'done', [call('x', 'Bash', { command: 'npm test' }, min), result('x', 'ok', min)])]
+    expect(babysitEvents(done, 7 * min, false, undefined, ask).has('idle')).toBe(false)
+    const answered = threadsOf(tagsOf([{ type: 'assistant', text: '**Ask [t]:** which? *Recommend:* this', thinking: '', tools: [], live: false, at: 0 }]),
+      { t: { version: 1, choice: 'accept', recommend: 'this', at: 5 } })
+    expect([...babysitEvents(done, 7 * min, false, undefined, answered).values()]).toContain('[answer t v1] accept: this')
+  })
+})
+
+describe('tags', () => {
+  // TB-Agent-Board.md: a bold label and an id open a paragraph or list item, outside fenced blocks.
+  it('reads asks with their recommendation, list-item tags, and nothing inside a fence', () => {
+    const text = [
+      'Some reasoning first.',
+      '',
+      '**Ask [p79-target]:** what should "fast enough" be',
+      'for page 79? *Recommend:* 15 s, never a failure.',
+      '',
+      '- **Todo [docs]:** write it up',
+      '- **Finding [slow-io]**: the walk is the cost',
+      '',
+      '```md',
+      '**Ask [not-me]:** quoted, not asked',
+      '```',
+    ].join('\n')
+    const tags = tagsIn(text)
+    expect(tags.map(t => `${t.kind}:${t.id}`)).toEqual(['Ask:p79-target', 'Todo:docs', 'Finding:slow-io'])
+    expect(tags[0]).toMatchObject({ question: 'what should "fast enough" be\nfor page 79?', recommend: '15 s, never a failure.' })
+    expect(tags[2]!.text).toBe('the walk is the cost')
+    // The mirror cuts the reply after the ask's paragraph, to put its answer row under it.
+    expect(splitAtAsks(text).map(p => p.ask?.id ?? p.md.split('\n')[1])).toEqual(['p79-target', '- **Todo [docs]:** write it up'])
+  })
+
+  it('takes a thread\'s state from its latest tag, and versions an ask only when its words change', () => {
+    const say = (text: string, at: number): Event => ({ type: 'assistant', text, thinking: '', tools: [], live: false, at })
+    const tags = tagsOf([
+      say('**Ask [a]:** one? *Recommend:* yes', 1), say('**Ask [a]:** one? *Recommend:* yes', 2),
+      say('**Ask [b]:** two?', 3), say('**Ask [b]:** two, really?', 4),
+      say('**Ask [c]:** three?', 5), say('**Decided [c]:** three.', 6),
+    ])
+    const byId = new Map(threadsOf(tags, { b: { version: 1, choice: 'note', note: 'hm', at: 7 }, c: { version: 1, choice: 'accept', at: 5 } }).map(t => [t.id, t]))
+    expect(byId.get('a')).toMatchObject({ state: 'open', version: 1 })
+    // An answer to the first wording does not answer the second.
+    expect(byId.get('b')).toMatchObject({ state: 'open', version: 2 })
+    // A closed thread keeps the answer, so the transcript can show how the owner answered.
+    expect(byId.get('c')).toMatchObject({ state: 'decided', answer: { choice: 'accept' } })
+    expect(briefOf('Do it.\n**Time box:** 1.5h').boxMs).toBe(90 * min)
+  })
+
+  // An ask made before a compaction is still open after it, so the read crosses the boundary that
+  // the mirror's own walk stops at; a branch rewound away is not read.
+  it('reads a session\'s tags across a compaction boundary, from where the last read left off', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tb-tags-')), 's.jsonl')
+    const line = (o: object) => JSON.stringify(o) + '\n'
+    const user = (uuid: string, parentUuid: string | null, text: string) => line({ uuid, parentUuid, type: 'user', timestamp: '2026-10-19T10:00:00Z', message: { role: 'user', content: text } })
+    const said = (uuid: string, parentUuid: string, text: string) => line({ uuid, parentUuid, type: 'assistant', timestamp: '2026-10-19T10:01:00Z', message: { id: `m-${uuid}`, role: 'assistant', content: [{ type: 'text', text }] } })
+    writeFileSync(file, user('u1', null, 'go') + said('a1', 'u1', '**Ask [early]:** before the compaction?')
+      + said('dead', 'u1', '**Ask [rewound]:** on a dead branch?') + user('u2', 'a1', 'more')
+      + line({ uuid: 'cb', parentUuid: null, logicalParentUuid: 'u2', type: 'system', subtype: 'compact_boundary' })
+      + user('u3', 'cb', 'continued'))
+    const adapter = new ClaudeAdapter()
+    expect(sessionTags(adapter, file).map(t => t.id)).toEqual(['early'])
+    appendFileSync(file, said('a2', 'u3', '**Decided [early]:** yes.'))
+    expect(threadsOf(sessionTags(adapter, file)).map(t => `${t.id}:${t.state}`)).toEqual(['early:decided'])
   })
 })

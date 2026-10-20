@@ -15,7 +15,7 @@ import {
 
 const REFRESH_MS = 2000
 
-type Source = { id: () => string | undefined; onChange: () => void; reveal: (toolId: string) => void }
+type Source = { id: () => string | undefined; onChange: () => void; reveal: (toolId: string) => void; toTail: () => void }
 
 // A section with no rows says so where its first row would be, not in its heading: "none", or the count
 // of what it folded. A heading carries a count only above rows.
@@ -38,6 +38,7 @@ export class ChildStatusView extends Component {
 
   toggle() {
     this.open = !this.open
+    if (!this.open) this.#src?.toTail()     // back to the transcript at its tail
     void this.sync()
     this.#src?.onChange()
   }

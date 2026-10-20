@@ -6,12 +6,13 @@ import { readTranscript, sessionLive, childState } from './transcript.js'
 import { childName, type ChildRow, type ChildTranscript } from '../events.js'
 import { orderByDescending, byAncestry } from '../order.js'
 import { childDigest, fileTouches, sharedFiles, agentReport, busy, NO_GIT, DEFAULT_SLOW_MS, type Digest, type Touches, type StatusReport, type Shared, type CheckFile, type Settled } from '../childStatus.js'
+import { tagsOf, type Tag } from '../tags.js'
 import { typebulbHome } from '../../../src/servers.js'
 
 // A session's child Status reports (TB-Agent-Children.md), for `typebulb status` and the mirror's
 // view alike: every child's transcript digested, its files set against its siblings', no model call.
 
-export interface SessionChildren { sessionId: string; children: ChildRow[]; live: boolean }
+export interface SessionChildren { sessionId: string; children: ChildRow[]; live: boolean; file?: string }
 
 /** Every session's children, the caller's own session first, then the rest newest first: where a
  *  bare name is looked up, so an orchestrator finds its own agents before anyone else's. Lazy, since
@@ -30,7 +31,7 @@ export function* sessionsWithChildren<E>(adapter: AgentAdapter<E>, cwd: string):
 
 function withState<E>(adapter: AgentAdapter<E>, cwd: string, sessionId: string, file: string | undefined, kids: ChildTranscript[]): SessionChildren {
   const live = sessionLive(adapter, sessionId, cwd, file)
-  return { sessionId, live, children: kids.map(c => ({ ...c, state: childState(c, live) })) }
+  return { sessionId, live, file, children: kids.map(c => ({ ...c, state: childState(c, live) })) }
 }
 
 /** The caller's own session and the project it is filed under, which is not the cwd when its shell
@@ -75,17 +76,25 @@ export function sessionSlowMs(sessionId: string, set?: number): number {
 // A digest and its file touches are a function of the file, so they hold until it changes: an idle
 // child costs a stat. Only the session last reported is kept, so a long-lived mirror holds one
 // session's agents rather than every one it has shown (86 of takeoff's held 59 MB).
-interface Digested { size: number; mtime: number; cwd: string; d: Digest; touches: Touches }
+interface Digested { size: number; mtime: number; cwd: string; d: Digest; touches: Touches; tags: Tag[] }
 const digests = new Map<string, Digested>()
-function digestOf<E>(adapter: AgentAdapter<E>, file: string, cwd: string): Digested {
+function digestOf<E>(adapter: AgentAdapter<E>, file: string, cwd: string, from: string): Digested {
   let st: { size: number; mtimeMs: number } = { size: -1, mtimeMs: -1 }
   try { st = statSync(file) } catch {}
   const hit = digests.get(file)
   if (hit && hit.size === st.size && hit.mtime === st.mtimeMs && hit.cwd === cwd) return hit
-  const d = childDigest(readTranscript(adapter, file, 'child'))
-  const entry = { size: st.size, mtime: st.mtimeMs, cwd, d, touches: fileTouches(d, cwd) }
+  const events = readTranscript(adapter, file, 'child')
+  const d = childDigest(events)
+  const entry = { size: st.size, mtime: st.mtimeMs, cwd, d, touches: fileTouches(d, cwd), tags: tagsOf(events, from) }
   digests.set(file, entry)
   return entry
+}
+
+/** The tags a session's children wrote, and each one's brief line, from the digest cache Status
+ *  keeps, so the board reads no child twice (TB-Agent-Board.md). */
+export function childFacts<E>(adapter: AgentAdapter<E>, cwd: string, kids: ChildTranscript[]): { tags: Tag[]; briefs: Map<string, string> } {
+  const got = kids.map(c => ({ c, x: digestOf(adapter, c.file, cwd, c.id) }))
+  return { tags: got.flatMap(g => g.x.tags), briefs: new Map(got.map(g => [g.c.id, g.x.d.brief?.line ?? ''])) }
 }
 
 // A background command's output file, its head and tail: where its first and last lines are. Gone
@@ -102,20 +111,22 @@ function readOutput(file: string): string | undefined {
 }
 
 /** Every child of a session reported, in ancestry order, with the files to check before `git add`.
- *  With `only`, just that child's report and no files: its siblings still count for the files they
- *  share with it, but one view's refresh no longer builds every sibling's report. */
-export async function sessionStatus<E>(adapter: AgentAdapter<E>, cwd: string, s: SessionChildren, only?: string): Promise<{ reports: (StatusReport & { depth: number; parentId?: string })[]; files: CheckFile[] }> {
+ *  With `only` (an id, or the board's set of moving agents), just those reports and no files: their
+ *  siblings still count for the files they share, but one view's refresh no longer builds every
+ *  sibling's report. */
+export async function sessionStatus<E>(adapter: AgentAdapter<E>, cwd: string, s: SessionChildren, only?: string | Set<string>): Promise<{ reports: (StatusReport & { depth: number; parentId?: string })[]; files: CheckFile[] }> {
   const kids = byAncestry([...s.children].sort((a, b) => (a.started ?? a.mtime) - (b.started ?? b.mtime)))
   const slowMs = sessionSlowMs(s.sessionId)
-  const got = kids.map(c => digestOf(adapter, c.file, cwd))
+  const got = kids.map(c => digestOf(adapter, c.file, cwd, c.id))
   const files = new Set(kids.map(c => c.file))
   for (const f of digests.keys()) if (!files.has(f)) digests.delete(f)
   const shared = sharedFiles(kids.map((c, i) => ({ id: c.id, writes: got[i]!.touches.writes, reads: got[i]!.touches.reads })))
   const settled = await gitSettled(cwd, Math.min(Infinity, ...[...shared.writers.values()].flat().map(w => w.at)), [...shared.writers.keys()])
   const names = new Map(kids.map(c => [c.id, childName(c)]))
-  const reports = kids.flatMap((c, i) => only && c.id !== only ? []
+  const skip = (id: string) => only !== undefined && (typeof only === 'string' ? id !== only : !only.has(id))
+  const reports = kids.flatMap((c, i) => skip(c.id) ? []
     : [{ ...agentReport(c, got[i]!.d, got[i]!.touches, shared, names, s.live, readOutput, settled, slowMs), depth: c.depth, parentId: c.parentId }])
-  return { reports, files: only ? [] : checkFiles(reports, shared, settled) }
+  return { reports, files: only !== undefined ? [] : checkFiles(reports, shared, settled) }
 }
 
 /** The overview's files to check before `git add`: still changed in git, and since the file's last
