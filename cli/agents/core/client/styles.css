@@ -1978,7 +1978,6 @@ a.agent-name:hover { text-decoration: underline; }
 .bd-h.waiting { --tone: var(--warn); }
 .bd-h.answered { --tone: var(--diff-add); }
 .bd-h.moving { --tone: var(--accent); }
-.cs-item .bd-chosen { margin-top: .3rem; }
 /* A row's time: even digits a shade above muted, so leading times read as a column, not a colour. */
 .bd-time { font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--fg) 55%, var(--muted)); }
 .bd-q > .bd-time { display: inline-block; min-width: 8ch; margin-right: .5rem; }
@@ -1987,17 +1986,27 @@ a.agent-name:hover { text-decoration: underline; }
 .bd-group-head { display: flex; justify-content: flex-end; }
 .bd-card { border: 1px solid var(--border); border-left: 3px solid var(--warn); padding: .5rem .75rem .6rem; }
 .bd-card.late { border-left-color: var(--err); }
+.bd-card.answered { border-left-color: var(--diff-add); }
 .bd-meta { margin-bottom: .2rem; }
 .bd-md > :first-child { margin-top: 0; }
 .bd-md > :last-child { margin-bottom: 0; }
 .bd-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-top: .5rem; }
-.bd-btn { font: inherit; font-size: .9rem; padding: .15rem .65rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-btn:hover:not(:disabled) { border-color: var(--accent); }
+/* Outline is an option, filled is chosen: hover tints a button in its own colour, a press deepens it,
+   and a recorded answer (.chosen) fills solid, fading in so the click visibly lands. */
+.bd-btn { --btn: var(--fg); font: inherit; font-size: .9rem; padding: .15rem .65rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background-color .15s; }
+.bd-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--btn) 12%, var(--bg)); }
+.bd-btn:active:not(:disabled) { background: color-mix(in srgb, var(--btn) 22%, var(--bg)); }
 .bd-btn:disabled { opacity: .5; cursor: default; }
 /* The recommendation is the one free-text label, so it wraps rather than truncates: short, it stays
    a pill; long, it spans the row and the fixed choices drop below it. */
-.bd-btn.rec { border-color: var(--diff-add); color: var(--diff-add); font-weight: 600; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.bd-btn.rec { --btn: var(--diff-add); border-color: var(--diff-add); color: var(--diff-add); font-weight: 600; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .bd-btn.later { border-style: dashed; color: var(--muted); }
+.bd-btn.chosen { animation: bd-fill .35s ease-out; }
+.bd-btn.rec.chosen { background: var(--diff-add); color: var(--bg); }
+.bd-btn.later.chosen { border-style: solid; background: color-mix(in srgb, var(--fg) 16%, var(--bg)); color: var(--fg); }
+@keyframes bd-fill { from { background: var(--bg); color: var(--btn); } }
+/* A note is the owner's own words, so it gets the filled look too: a reply bubble beside any pill. */
+.bd-chosen-note { --btn: var(--fg); padding: .15rem .65rem; border-radius: 6px; background: color-mix(in srgb, var(--fg) 8%, var(--bg)); animation: bd-fill .35s ease-out; }
 .bd-note { display: flex; gap: .4rem; flex: 1 1 16rem; min-width: 0; }
 .bd-input { flex: 1; min-width: 0; font: inherit; font-size: .9rem; padding: .15rem .5rem; border-radius: 6px; border: 1px solid var(--border); background: Canvas; color: CanvasText; }
 .bd-q { flex: 1 1 20rem; min-width: 0; overflow-wrap: anywhere; }

@@ -65,7 +65,9 @@ export class BoardView extends Component {
           answered.length ? div({ class: 'cs-tile' }, `${answered.length} answered, waiting for the orchestrator`) : null)),
       this.#error ? div({ class: 'child-status-note err' }, this.#error) : null,
       this.#asks(open, now),
-      answered.length ? this.#section('Answered, waiting for the orchestrator', answered.map(t => this.#answeredRow(t)), 'answered') : null,
+      answered.length ? div({ class: 'cs-section' },
+        div({ class: 'cs-h bd-h answered' }, 'Answered, waiting for the orchestrator', span({ class: 'cs-count' }, String(answered.length))),
+        div({ class: 'bd-group' }, answered.map(t => this.#answeredRow(t)))) : null,
       this.#agents(d.agents, now),
       settled.length || doneAgents.length ? this.#section('Settled today', [
         ...settled.sort((x, y) => (y.latest.at ?? 0) - (x.latest.at ?? 0)).map(t => this.#threadRow(t)),
@@ -78,7 +80,7 @@ export class BoardView extends Component {
   }
 
   // `tone` gives the heading the colour of what it holds, the transcript ask card's left bar.
-  #section(title: string, rows: VElement[], tone?: 'waiting' | 'answered' | 'moving') {
+  #section(title: string, rows: VElement[], tone?: 'moving') {
     return div({ class: 'cs-section' }, div({ class: ['cs-h', tone ? `bd-h ${tone}` : ''] }, title, span({ class: 'cs-count' }, String(rows.length))), div({ class: 'cs-list' }, rows))
   }
 
@@ -123,11 +125,15 @@ export class BoardView extends Component {
       onClick: (e: MouseEvent) => { e.preventDefault(); this.#src?.reveal(tag) } }, tag.from ? 'in its agent' : 'in conversation')
   }
 
+  // The ask's own card, its bar gone green and its buttons replaced by the answer they gave.
   #answeredRow(t: TagThread) {
-    return div({ class: 'cs-item', key: `ans-${t.id}` },
-      div({ class: 'cs-item-main' },
-        span({ class: 'bd-q' }, t.ask!.question || t.ask!.text),
-        div({ class: 'cs-item-meta' }, span({ class: 'bd-time' }, clock(t.answer!.at)), this.#where(t.ask!))),
+    const ask = t.ask!
+    return div({ class: 'bd-card answered', key: `ans-${t.id}-${t.version}` },
+      div({ class: 'cs-item-meta bd-meta' },
+        span({ class: 'cs-mono' }, t.id),
+        span({ class: 'bd-time' }, `answered ${clock(t.answer!.at)}`),
+        this.#where(ask)),
+      md(`aq-${t.id}-${t.version}`, ask.question || ask.text),
       chosenView(t.answer!))
   }
 

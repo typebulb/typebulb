@@ -7,11 +7,12 @@ import type { Answer, AnswerChoice, TagThread } from '../tags.js'
 
 const LATER = { todo: 'Leave as todo', discuss: 'Discuss' } as const
 
-/** A recorded answer drawn as the button that was clicked, so an answered ask still looks like its ask. */
+/** A recorded answer drawn as the button that was clicked, filled and checked: outline is an option,
+ *  filled is chosen, so an answered ask still looks like its ask and plainly changed state. */
 export function chosenView(a: Answer): VElement {
   return span({ class: 'bd-actions bd-chosen' },
-    a.choice === 'accept' ? span({ class: 'bd-btn rec' }, `✓ ${a.recommend ?? ''}`)
-      : a.choice === 'todo' || a.choice === 'discuss' ? span({ class: 'bd-btn later' }, LATER[a.choice]) : null,
+    a.choice === 'accept' ? span({ class: 'bd-btn rec chosen' }, `✓ ${a.recommend ?? ''}`)
+      : a.choice === 'todo' || a.choice === 'discuss' ? span({ class: 'bd-btn later chosen' }, `✓ ${LATER[a.choice]}`) : null,
     a.note ? span({ class: 'bd-chosen-note' }, `“${a.note}”`) : null)
 }
 
@@ -46,7 +47,7 @@ export class AskActions {
     const send = (choice: AnswerChoice) => () => void this.answer(t, choice)
     return div({ class: 'bd-answer' },
       div({ class: 'bd-actions', role: 'group', ariaLabel: `answer ${t.id}` },
-        ask.recommend ? button({ class: 'bd-btn rec', disabled: busy, title: 'Accept the recommendation', onClick: send('accept') }, `✓ ${ask.recommend}`) : null,
+        ask.recommend ? button({ class: 'bd-btn rec', disabled: busy, title: 'Accept the recommendation', onClick: send('accept') }, ask.recommend) : null,
         button({ class: 'bd-btn later', disabled: busy, title: 'Not now: park it as a todo', onClick: send('todo') }, LATER.todo),
         button({ class: 'bd-btn later', disabled: busy, title: 'Take it to the chat', onClick: send('discuss') }, LATER.discuss),
         span({ class: 'bd-note' },
