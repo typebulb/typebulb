@@ -5,7 +5,7 @@ import { join } from 'path'
 import { byAncestry } from '../agents/core/order.js'
 import { childDigest, editedFiles, commandsOf, notable, quietRuns, quietRunsLine, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
 import { tagsIn, tagsOf, threadsOf, briefOf, splitAtAsks } from '../agents/core/tags.js'
-import { sessionTags } from '../agents/core/server/tagIndex.js'
+import { sessionTags, sessionBackground } from '../agents/core/server/tagIndex.js'
 import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
 import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
@@ -429,5 +429,19 @@ describe('tags', () => {
     expect(sessionTags(adapter, file).map(t => t.id)).toEqual(['early'])
     appendFileSync(file, said('a2', 'u3', '**Decided [early]:** yes.'))
     expect(threadsOf(sessionTags(adapter, file)).map(t => `${t.id}:${t.state}`)).toEqual(['early:decided'])
+  })
+
+  // A parent waiting on its own background run is not stalled, so babysit's idle wake reads these.
+  it('keeps the session\'s own background calls open until their notice, babysit\'s left out', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tb-bg-')), 's.jsonl')
+    const line = (o: object) => JSON.stringify(o) + '\n'
+    const at = '2026-10-28T10:00:00Z'
+    const run = (id: string, command: string) => line({ uuid: `a${id}`, type: 'assistant', timestamp: at, message: { id: `m${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } })
+      + line({ uuid: `r${id}`, type: 'user', timestamp: at, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `Command running in background with ID: t${id}` }] } })
+    writeFileSync(file, run('x', 'node bench.mjs') + run('b', 'npx typebulb babysit'))
+    const adapter = new ClaudeAdapter()
+    expect(sessionBackground(adapter, file)).toEqual([Date.parse(at)])
+    appendFileSync(file, line({ uuid: 'n', type: 'attachment', timestamp: at, attachment: { type: 'queued_command', prompt: '<task-notification><tool-use-id>x</tool-use-id><status>completed</status></task-notification>' } }))
+    expect(sessionBackground(adapter, file)).toEqual([])
   })
 })

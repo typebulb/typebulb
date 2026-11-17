@@ -18,7 +18,7 @@ interface Daemon { exe: string; socket: string }
 async function daemon(): Promise<Daemon> {
   let out: string
   try {
-    out = (await execFileAsync('codex', ['app-server', 'daemon', 'version'], { shell: true, timeout: TIMEOUT_MS })).stdout
+    out = (await execFileAsync('codex', ['app-server', 'daemon', 'version'], { shell: true, timeout: TIMEOUT_MS, windowsHide: true })).stdout
   } catch (e) {
     const err = e as { code?: string | number; stderr?: string; message?: string }
     const said = (err.stderr || err.message || '').trim().split('\n').at(-1)
@@ -115,7 +115,7 @@ class Connection {
 
 async function connect(): Promise<Connection> {
   const d = await daemon()
-  const c = new Connection(spawn(d.exe, ['app-server', 'proxy', '--sock', d.socket], { stdio: ['pipe', 'pipe', 'pipe'] }))
+  const c = new Connection(spawn(d.exe, ['app-server', 'proxy', '--sock', d.socket], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }))
   await c.call('initialize', { clientInfo: { name: 'typebulb', version: '1' } })
   c.notify('initialized')
   return c

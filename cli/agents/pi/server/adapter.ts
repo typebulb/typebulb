@@ -64,7 +64,7 @@ async function fdList(cwd: string): Promise<string[] | null> {
   for (const bin of ['fd', 'fdfind', ...(existsSync(managed) ? [managed] : [])]) {
     const out = await new Promise<string | null>(resolve => {
       execFile(bin, ['--base-directory', cwd, '--type', 'f', '--follow', '--hidden', '--exclude', '.git'],
-        { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout))
+        { maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => resolve(err ? null : stdout))
     })
     if (out !== null) return out.split('\n').filter(Boolean).map(f => f.replace(/\\/g, '/'))
   }

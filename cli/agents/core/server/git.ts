@@ -15,7 +15,9 @@ const MAX_DIFF_CHARS = 2_000_000
 
 // Exported for the engine's other read-only git spawns (composerFiles' ls-files).
 export async function git(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 })
+  // windowsHide: a caller with no console (a backgrounded babysit, the detached mirror) would
+  // otherwise be given a console window per call.
+  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, windowsHide: true })
   return stdout
 }
 

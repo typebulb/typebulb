@@ -73,7 +73,7 @@ export async function ensureBulbServerPackages(
 
   console.log(`  Installing: ${missing.join(', ')}`)
   const flags = ['--no-audit', '--no-fund', ...(opts?.ignoreScripts ? ['--ignore-scripts'] : [])]
-  await execFileAsync('npm', ['install', ...flags, ...missing], { cwd: bulbCacheDir, shell: true })
+  await execFileAsync('npm', ['install', ...flags, ...missing], { cwd: bulbCacheDir, shell: true, windowsHide: true })
 }
 
 /** A bare spec declared in the bulb's config.json installs at that range; a spec

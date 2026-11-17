@@ -319,6 +319,11 @@ export function parseArgs(args: string[]): CliArgs {
       console.error('Usage: typebulb send <file> [message]')
       process.exit(1)
     }
+    // One argument, so a shell-split `tb:theme light` is refused rather than sent as bare `tb:theme`.
+    if (callPositionals.length > 2) {
+      console.error(`send takes one message; quote it: typebulb send ${callPositionals[0]} '${callPositionals.slice(1).join(' ')}'`)
+      process.exit(1)
+    }
     result.file = callPositionals[0]
     result.sendMessage = callPositionals[1]
   }

@@ -234,6 +234,9 @@ export abstract class AgentAdapter<E = unknown> {
    * asks the narrower question the dot actually means.
    */
   sessionsWorking?(cwd: string): Set<string> | undefined
+  /** sessionId → the short name the harness addresses a LIVE session by (CC's `takeoff-69`, what its
+   *  agents message each other with). Batch like `sessionsWorking`; absent ⇒ the harness has none. */
+  sessionNames?(): Map<string, string>
 
   // ── picker + search ──
   /** The session's dropdown title/preview (harness-specific precedence). */

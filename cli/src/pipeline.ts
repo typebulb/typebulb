@@ -83,7 +83,18 @@ export async function importServerModule(serverSource: string, bulbPath: string,
   if (packages.length > 0) await ensureBulbServerPackages(packages, cacheDir, dependencies)
 
   const serverPath = serverModulePath(bulbPath)
-  await fs.writeFile(serverPath, code, 'utf-8')
+  // Written whole, then renamed into place: a concurrent boot of the same bulb (two `call`s, or a
+  // `call` beside a hot reload) imports the path while this one writes it, and a part-written module
+  // loads as one with no exports. Windows refuses a rename while another boot has the target open,
+  // which lasts only as long as its own read or rename, so a refusal is retried.
+  const tmpPath = `${serverPath}.${process.pid}.tmp`
+  await fs.writeFile(tmpPath, code, 'utf-8')
+  for (let attempt = 1; ; attempt++) {
+    try { await fs.rename(tmpPath, serverPath); break } catch (e) {
+      if (attempt === 20) { await fs.rm(tmpPath, { force: true }); throw e }
+      await new Promise(r => setTimeout(r, 10 * attempt))
+    }
+  }
 
   // Give the module a `tb` global (tb.ai / tb.ai.stream / tb.models / tb.dir) before it runs — its free `tb`
   // reference resolves to this, the same way the browser shim provides one. Must precede the import

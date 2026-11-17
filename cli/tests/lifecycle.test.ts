@@ -54,14 +54,15 @@ describe('runWait ends when the bulb\'s last page goes (TB-Page-Lifecycle.md, in
     await rm(dir, { recursive: true, force: true })
   })
 
-  /** A live bulb server whose log already holds a run and an OLD departure — the history a
-   *  `--match` first run scans from 0, and must not mistake for its own observation. */
+  /** A live bulb server whose log already holds a run, the launch hint that quotes the match, and
+   *  an OLD departure — the history a `--match` first run scans from 0, and must not mistake for
+   *  its own observation. */
   const armed = async (): Promise<{ file: string; log: string }> => {
     const child = spawnSleeper(); kids.push(child)
     const file = path.join(process.cwd(), 'waited.bulb.md')
     await registerServer({ pid: child.pid!, port: 20301, url: 'http://127.0.0.1:20301', file, cwd: process.cwd(), startedAt: 1, version: VERSION })
     const log = path.join(dir, `${child.pid}.log`)
-    await writeFile(log, '── run 1 ── 00:00:00\nstarted\n[page] disconnected\n')
+    await writeFile(log, '── run 1 ── 00:00:00\n  typebulb wait waited.bulb.md --match "[page] connected"\nstarted\n[page] disconnected\n')
     return { file, log }
   }
 

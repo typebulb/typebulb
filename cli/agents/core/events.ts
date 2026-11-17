@@ -44,6 +44,8 @@ export interface SessionRow {
    *  Deliberately not "the process is alive", which is true of every window left open
    *  (TB-Agent-Mirror-Ready.md). */
   working?: boolean
+  /** The harness's short address for a live session (`adapter.sessionNames`); absent once it exits. */
+  name?: string
   /** The full-text decoration, set only on a search result. */
   hitCount?: number
   snippet?: string

@@ -611,7 +611,8 @@ export function babysitEvents(agents: StatusReport[], now: number, parentBusy = 
   const out = new Map<string, string>()
   const name = (id: string) => `"${agents.find(a => a.id === id)?.name ?? id}"`
   const newest = Math.max(0, ...agents.map(a => a.asOf))
-  // A parent mid-turn is working, not stalled: waking it would only end the babysit between fan-outs.
+  // A parent mid-turn, or waiting on a background call of its own, is working, not stalled: waking it
+  // would only end the babysit between fan-outs.
   if (agents.length && !parentBusy && !agents.some(busy) && !threads.some(t => t.state === 'open') && now - newest >= IDLE_ALERT_MS)
     out.set('idle', `No agent running for ${mins(now - newest)} (${agents.length} agents).`)
   for (const t of threads) if (t.state === 'answered') out.set(`answer:${t.id}:v${t.version}:${t.answer!.at}`, answerLine(t.id, t.answer!))

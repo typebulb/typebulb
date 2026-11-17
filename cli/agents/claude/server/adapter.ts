@@ -530,7 +530,7 @@ function readPreview(file: string): string {
 
 // CC's own pid-session store — one record per *running* CC process, removed on clean exit. A session
 // is live iff a record names it and that pid is alive.
-interface SessionRecord { sessionId?: string; pid?: number; startedAt?: number; status?: string; cwd?: string }
+interface SessionRecord { sessionId?: string; pid?: number; startedAt?: number; status?: string; cwd?: string; name?: string }
 function liveRecords(root: string): SessionRecord[] {
   const dir = join(root, 'sessions')
   let names: string[]
@@ -709,6 +709,9 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   sessionEnded(sessionId: string) { return !sessionAlive(this.root, sessionId) }
 
   sessionsWorking(_cwd: string) { return workingSessionIds(this.root) }
+  sessionNames() {
+    return new Map(liveRecords(this.root).filter(r => r.name).map(r => [r.sessionId!, r.name!]))
+  }
 
   readPreview(file: string) { return readPreview(file) }
 

@@ -112,7 +112,7 @@ export class PiRpcDriver {
     spawnFn: (command: string, cwd: string) => ChildProcess = (command, dir) =>
       // TYPEBULB_MIRROR marks a mirror-driven pi (bash subshells inherit it): the skill tells the
       // agent the mirror is already open — skip `typebulb agent`, don't close with its link.
-      spawn(command, { cwd: dir, shell: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, TYPEBULB_MIRROR: '1' } })) {
+      spawn(command, { cwd: dir, shell: true, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, TYPEBULB_MIRROR: '1' } })) {
     this.#exited = new Promise(res => { this.#resolveExited = res })
     if (sessionFile?.includes('"')) {
       this.#error = 'session path contains a quote — cannot drive it'
@@ -317,7 +317,7 @@ export class PiRpcDriver {
     await Promise.race([this.#exited, delay(DISPOSE_GRACE_MS)])
     if (child.exitCode === null && !child.killed) {
       if (process.platform === 'win32' && child.pid) {
-        try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* best-effort */ }
+        try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* best-effort */ }
       } else {
         try { child.kill('SIGKILL') } catch { /* best-effort */ }
       }

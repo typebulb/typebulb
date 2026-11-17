@@ -5,6 +5,7 @@ import { typebulbHome } from '../serve/paths.js'
 import { isAlive } from '../serve/serverRegistry.js'
 import { callerScope, sessionToWatch, sessionChildren, sessionStatus, sessionSlowMs } from '../../agents/core/server/childReport.js'
 import { sessionThreads } from '../../agents/core/server/board.js'
+import { sessionBackground } from '../../agents/core/server/tagIndex.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
 import { childAdapters } from './status.js'
 
@@ -68,10 +69,17 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
     const { reports } = await sessionStatus(adapter, cwd, s)
     // The session's tags, read incrementally across polls: an owner's answer on the board wakes it.
     const { threads } = sessionThreads(adapter, cwd, sessionId, s.file, s.children)
-    const events = babysitEvents(reports, Date.now(), !!adapter.sessionsWorking?.(cwd)?.has(sessionId), sessionSlowMs(sessionId), threads)
+    // A parent waiting on a background call of its own is woken when it ends, so it is not stalled
+    // either. A call from before the live process started is dead (every child carries the session's start).
+    const since = s.children[0]?.liveSince
+    const parentBusy = !!adapter.sessionsWorking?.(cwd)?.has(sessionId)
+      || s.live && sessionBackground(adapter, s.file).some(at => since === undefined || (at ?? 0) >= since)
+    const events = babysitEvents(reports, Date.now(), parentBusy, sessionSlowMs(sessionId), threads)
     const fresh = [...events].filter(([key]) => !fired.includes(key))
-    // A condition that has cleared leaves the list, so its return fires again.
-    if (!fresh.length) { fired = [...events.keys()]; save(fired) }
+    // A condition that has cleared leaves the list, so its return fires again. A fired stall stays
+    // while the parent is busy: its turn handling the wake hides the stall without ending it, and
+    // dropping it there made every re-arm fire the same notice again.
+    if (!fresh.length) { fired = fired.filter(k => events.has(k) || k === 'idle' && parentBusy); save(fired) }
     else {
       const text = fresh.map(([, t]) => t).join('\n')
       if (adapter.wake) {

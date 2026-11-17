@@ -873,9 +873,10 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     // Asked ONCE for the whole list, not per row (adapter contract). undefined ⇒ this harness can't
     // say which sessions are mid-turn, and every row then shows no working cue.
     const working = adapter.sessionsWorking?.(state.cwd)
+    const names = adapter.sessionNames?.()
     const onDisk = adapter.listSessionFiles(state.cwd)
       .map(({ sessionId, file, mtime }) => ({
-        sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId),
+        sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), name: names?.get(sessionId),
       }))
     // Union, not just the adapter's listing: an owned conversation is pickable from its first send,
     // so a turn started here and left to run is never unreachable while pi holds its file back (C7).
@@ -913,6 +914,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     const out: SessionRow[] = []
     let sessions = 0
     const working = adapter.sessionsWorking?.(state.cwd)
+    const names = adapter.sessionNames?.()
     for (const { sessionId, file, mtime } of adapter.listSessionFiles(state.cwd).sort((a, b) => b.mtime - a.mtime)) {
       const own = searchHits(searchTurns(file, mtime), q)
       // Full-text IS the include-children gesture (TB-Agent-Children.md): what a session's agents did
@@ -927,7 +929,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
         out.push({ sessionId, mtime: c.mtime, preview: childName(c), ...hit, child: { id: c.id, kind: c.kind, depth: c.depth } })
       // Same working cue as the browse list. Child rows above carry none: that dot would be their
       // parent's turn, not theirs.
-      out.push({ sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), ...own })
+      out.push({ sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), name: names?.get(sessionId), ...own })
       // The cap counts SESSIONS, not rows: a session's matching children ride along with it, so
       // counting rows would let one heavily-delegated session spend the whole budget.
       if (++sessions >= SEARCH_MAX_SESSIONS) break

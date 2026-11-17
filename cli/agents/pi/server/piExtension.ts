@@ -185,6 +185,7 @@ export default function (pi) {
       try {
         const child = spawn(process.execPath, [TB_BIN, "wait", "agent", "--match", "[inline "], {
           stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
           env: { ...process.env, TYPEBULB_WAIT_SHIM: "1", TYPEBULB_WAIT_FOLLOW: "1" },
         });
         watcher = child;
@@ -266,6 +267,7 @@ export default function (pi) {
         const bash = resolveBash();
         const opts = {
           stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
           env: { ...process.env, TYPEBULB_WAIT_SHIM: "1" },
         };
         const child = bash ? spawn(bash, ["-c", cmd], opts) : spawn(cmd, { ...opts, shell: true });

@@ -139,7 +139,7 @@ export function toBulbPositions(line: string, bulbName: string, startOf: (blockF
  *  `.cmd` shim, and runs the same `tsc` whatever the platform. */
 function spawnTsc(tscJs: string, cwd: string): Promise<{ stdout: string; exitCode: number }> {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [tscJs, '--noEmit'], { cwd })
+    const child = spawn(process.execPath, [tscJs, '--noEmit'], { cwd, windowsHide: true })
     let stdout = ''
     child.stdout?.on('data', d => { stdout += d.toString() })
     child.stderr?.on('data', d => { stdout += d.toString() })
@@ -176,7 +176,7 @@ function resolveTscJs(searchDirs: string[]): string | undefined {
 
   // Global installs sit outside Node's default resolution; ask npm where its root is.
   try {
-    const globalRoot = execSync('npm root -g', { encoding: 'utf8' }).trim()
+    const globalRoot = execSync('npm root -g', { encoding: 'utf8', windowsHide: true }).trim()
     return fromPaths([globalRoot])
   } catch {
     return undefined

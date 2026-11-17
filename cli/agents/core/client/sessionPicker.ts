@@ -117,7 +117,10 @@ export class SessionPicker extends ComboboxPill<SessionRow> {
     const blank = p.sessionId === ''
     const raw = blank ? 'new conversation' : this.currentPreview() || 'current'
     const label = truncate(raw, 25)
-    const tip = `${p.cwd}\n${blank || this.currentRow()?.pending ? 'New conversation — not saved yet' : `Session: ${p.sessionId}`}`   // cwd on hover, not in the bar
+    const row = this.currentRow()
+    // A live session's short name is what agents message it by; the id is all a closed one has.
+    const id = row?.name ? `Agent name: ${row.name}` : `Session: ${p.sessionId}`
+    const tip = `${p.cwd}\n${blank || row?.pending ? 'New conversation — not saved yet' : id}`   // cwd on hover, not in the bar
     return div({ class: 'sid-wrap' },
       button({
         class: 'pill',

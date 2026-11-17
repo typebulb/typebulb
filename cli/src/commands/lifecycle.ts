@@ -278,6 +278,8 @@ export async function runWait(arg: string | undefined, opts: { match?: string; t
         if (!line.trim()) continue
         if (watchDeparture && live && line.startsWith(PAGE_LOG.disconnected)) departed = true
         if (opts.match && !line.includes(opts.match)) continue
+        // The CLI's own hint to arm this wait quotes the match; it is an instruction, not the event.
+        if (opts.match && line.includes(`--match "${opts.match}"`)) continue
         console.log(line)
         seen.push(line)
         if (following) continue                  // a tail has no burst to gather: the reader is already attached
