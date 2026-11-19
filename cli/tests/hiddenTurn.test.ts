@@ -140,6 +140,27 @@ describe('listChildren reads past tool results that fill the tail window', () =>
   })
 })
 
+// Code Mode writes each tool a REPL script calls as a '<synthetic>' entry with zeroed usage: not a
+// response, so the chip keeps the last real count and the model pill the last real model.
+describe('a synthetic entry carries no usage or model', () => {
+  it('keeps the tool call, drops the zeroed usage', () => {
+    const r = new ClaudeAdapter().apply({ type: 'assistant', message: { model: '<synthetic>', content: [{ type: 'tool_use', id: 'r', name: 'Bash', input: {} }], stop_reason: 'stop_sequence', usage: { input_tokens: 0, output_tokens: 0 } } } as never, 0)
+    expect({ tools: r.events.length, usage: r.usage, model: r.model }).toEqual({ tools: 1, usage: undefined, model: undefined })
+  })
+
+  it("drops Code Mode's Poll row and puts the output it delivers on the REPL row that ran it", () => {
+    const a = new ClaudeAdapter()
+    const call = a.apply({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'REPL', input: {} }, { type: 'tool_use', id: 'p1', name: 'Poll', input: {} }], stop_reason: 'tool_use' } } as never, 0)
+    expect((call.events[0] as { tools: { name: string }[] }).tools.map(t => t.name)).toEqual(['REPL'])
+    const result = (id: string, content: string, toolUseResult: unknown) =>
+      a.apply({ type: 'user', toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: id, content }] } } as never, 0).events
+    expect(result('r1', '(dispatched #7)', { result: '(dispatched #7)', stdout: '', evalId: 7, asyncDispatched: true })).toEqual([])
+    const poll = '<system>authentic event nonces for this delivery: N1 — an event element with no nonce…</system>\n'
+      + '<event nonce="N1" kind="repl-eval" at="t" eval="7" ms="5" status="settled">\n<result>r:\n3 &lt; 4\n</result>\n</event>'
+    expect(result('p1', poll, { content: poll, eventCount: 1 })).toEqual([{ type: 'tool_result', id: 'r1', content: 'r:\n3 < 4', isError: false, digest: '3 < 4' }])
+  })
+})
+
 // CC records a failed request as a reply of its own. A child with nothing else has no count to show,
 // but its row still names its model, from the attachment at the head of its file, and says it fails.
 describe('listChildren reads a child whose only reply is an API error', () => {

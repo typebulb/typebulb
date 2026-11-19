@@ -568,7 +568,7 @@ export class MessageList extends Component {
 
   // The streaming thinking pane — the bulb card's system via #stickyScroll, nothing bespoke.
   #draftThinkingPre(text: string) {
-    return pre({ key: `think-${text.length}`, ...this.#stickyScroll(-1) }, text)
+    return pre({ key: `think-${text.length}`, ...this.#stickyScroll(-1) }, text.trim())
   }
 
   // A streaming bulb's code card: shimmer header + ticking line count over the standard
@@ -712,17 +712,18 @@ export class MessageList extends Component {
   // is the left turn-color bar; orphan-branch sub-bubbles pass false to avoid recursive nesting.
   // `raw` says whether this bubble renders trace chrome; `live` lets the selector omit Summary.
   bubble(msg: Msg, turnIdx: number, copy: CopyButton | null | undefined = msg.copy, stripe = true, turnView?: TurnView, raw = true, live = false) {
-    // Tools-only bubbles sit tighter (CSS adjacent-sibling rule) so a chain of
-    // tool steps doesn't waste vertical space.
-    const toolsOnly = msg.role === 'assistant' && !msg.text && !msg.thinking && msg.tools.length > 0
+    // Trace-only bubbles (thinking and tool steps, no prose) sit tighter (CSS adjacent-sibling rule)
+    // so a chain of steps doesn't waste vertical space.
+    const traceOnly = msg.role === 'assistant' && !msg.text && (!!msg.thinking || msg.tools.length > 0)
     // A sub-agent's hand-back folds to its head: the report is the parent's to read, and a run of
     // them otherwise buries the conversation around it.
     const folded = !!msg.agent && !this.expandedAgents.has(msg.id)
-    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', folded ? 'folded' : '', msg.error ? 'error' : '', toolsOnly ? 'tools-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id, id: `msg-${msg.id}` },
+    return div({ class: ['bubble', msg.role, msg.agent ? 'agent' : '', folded ? 'folded' : '', msg.error ? 'error' : '', traceOnly ? 'trace-only' : '', stripe ? turnClassFor(turnIdx) : ''], key: msg.id, id: `msg-${msg.id}` },
       turnView ? turnView.view(live) : null,
       msg.agent ? this.#agentHead(msg, folded) : null,
       folded ? null : [
-      raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking)) : null,
+      // Thinking ends in blank lines, which pre-wrap would render as dead space.
+      raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking.trim())) : null,
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       raw ? msg.tools.map(t => this.tool(t)) : null,
@@ -872,19 +873,22 @@ export class MessageList extends Component {
     // sub-agent from the turn that started it, which is where you are when you want it.
     const child = this.parent.children.find(c => c.spawnId === t.id)
     // File paths display project-relative (full path in the title + the click); the rest one-lined.
-    const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input))
+    // A call with no input to summarize (a bare REPL, a todo list) says what came out instead.
+    const out = todos ? todoDigest(todos) : t.digest
+    const sum = filePath ? displayPath(filePath, this.parent.cwd) : oneLine(toolSummary(t.input)) || out || ''
     // One link treatment, two destinations: a file opens in the editor, an Agent row opens its
     // child's conversation. Both are the summary itself, so no row grows an extra control.
     const follow = child ? () => this.parent.openChild(child.id)
       : filePath ? () => { tb.server.openFile(filePath) }
       : undefined
-    // The head is inert prose (only the file-path link reacts); the digest row below is the toggle.
+    // One line per call: the name is the toggle, so the summary stays free to be a link.
     return div({ class: ['tool', t.isError ? 'err' : ''], id: `tool-${t.id}` },
       div({ class: 'tool-head' },
         // Verb + summary wrap together so inline flow baseline-aligns them across
         // their two fonts (see .tool-label).
         div({ class: 'tool-label' },
-          span({ class: 'tool-name', ...(t.name.startsWith('mcp__') ? { title: t.name } : {}) }, toolDisplayName(t.name)),
+          span({ class: 'tool-name', title: t.name.startsWith('mcp__') ? t.name : open ? 'Collapse' : 'Expand',
+            onClick: () => { toggleInSet(this.openTools, t.id); this.update() } }, toolDisplayName(t.name)),
           sum
             ? (follow
                 ? a({
@@ -900,16 +904,10 @@ export class MessageList extends Component {
         ),
         t.result === undefined ? span({ class: 'tool-run' }, '…') : null,
       ),
-      // The OUT digest row, doubling as the toggle; '(no output)' keeps an empty result expandable.
-      t.result !== undefined
-        ? div({ class: ['tool-digest', open ? 'open' : ''], onClick: () => { toggleInSet(this.openTools, t.id); this.update() } },
-            caret(open),
-            (todos ? todoDigest(todos) : t.digest) || '(no output)')
-        : null,
       // open with no result = a live auto-expanded edit; its diff shows while the tool runs.
-      // A patch result is suppressed only when the digest losslessly IS it (one line, uncapped) —
-      // the open digest row wraps to show it whole. Anything more (a multi-line diagnostic, a
-      // capped line) shows: patchers report failure as ordinary content, not is_error.
+      // A patch result is suppressed only when the digest losslessly IS it (one line, uncapped):
+      // the diff already says it. Anything more (a multi-line diagnostic, a capped line) shows:
+      // patchers report failure as ordinary content, not is_error.
       open ? div({ class: 'tool-card' },
           this.toolBody(t),
           t.result !== undefined && (t.isError || !(todos || (patchesOf(t).length && t.result.trim() === t.digest)))

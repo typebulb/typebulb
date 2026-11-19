@@ -1360,10 +1360,10 @@ a.agent-name:hover { text-decoration: underline; }
 /* Folded, the frame is its head alone, which carries the report's first line in the muted voice. */
 .bubble.agent.folded .agent-head { margin-bottom: 0; }
 .agent-preview { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-/* Consecutive tool-only bubbles sit tight via negative margin (flex `gap`
+/* Consecutive trace-only bubbles (thinking, tool steps) sit tight via negative margin (flex `gap`
    can't be overridden per sibling pair). The adjacent-sibling selector leaves
-   the first tools-only bubble's gap intact, preserving the turn boundary. */
-.bubble.tools-only + .bubble.tools-only { margin-top: -.9rem; }
+   the first trace-only bubble's gap intact, preserving the turn boundary. */
+.bubble.trace-only + .bubble.trace-only { margin-top: -.9rem; }
 
 /* Turn stripe — a 2px colored bar to the left of each bubble. All bubbles in
    one user→assistant turn share a color; the palette cycles through 5 so
@@ -1858,7 +1858,7 @@ a.agent-name:hover { text-decoration: underline; }
   font-size: .85rem;
 }
 /* Row shape shared by tool heads and the collapsed-turn summary; only the latter is a click
-   target (a tool's toggle is its digest row). */
+   target as a whole (a tool's toggle is its name, leaving the summary free to be a link). */
 .tool-head, .turn-summary {
   display: flex;
   align-items: center;
@@ -1873,9 +1873,9 @@ a.agent-name:hover { text-decoration: underline; }
    crush it; the digest row has no flex gap, so its spacing rides the marker. */
 .caret-tri { width: 10px; height: 10px; transition: transform .15s ease; }
 .caret-tri.open { transform: rotate(90deg); }
-.tool-digest .caret-tri { margin-right: .5rem; }
 /* Plain bold — an accent verb reads as a hyperlink; accent is reserved for the file-path link. */
-.tool-name { font-weight: 600; }
+.tool-name { font-weight: 600; cursor: pointer; user-select: none; }
+.tool-name:hover { text-decoration: underline; text-decoration-skip-ink: none; }
 /* Errors here are routine (a first-read miss the retry fixes), so a failed tool
    recolors just its verb rather than boxing the whole row — a quiet signal. */
 .tool.err .tool-name { color: var(--err); }
@@ -2030,7 +2030,7 @@ a.agent-name:hover { text-decoration: underline; }
   padding-left: .6rem;
   border-left: 2px solid color-mix(in srgb, var(--fg) 18%, transparent);
   opacity: .82;
-  /* Same column geometry as .messages — the tools-only negative-margin rule assumes a 1rem gap. */
+  /* Same column geometry as .messages — the trace-only negative-margin rule assumes a 1rem gap. */
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -2085,24 +2085,8 @@ a.agent-name:hover { text-decoration: underline; }
 }
 .tool-run { color: var(--muted); }
 
-/* The OUT line ("463 lines", the first stdout line): a tool's second row and its only toggle.
-   Text stays selectable — a drag copies, a plain click toggles. */
-.tool-digest {
-  padding: 0 0 .15rem .6rem;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  user-select: text;
-}
-.tool-digest:hover { color: var(--fg); }
-/* Expanded = nothing readable hidden: the digest wraps to its full text (it may be the whole
-   result — suppressed patch one-liners rely on this). */
-.tool-digest.open { white-space: normal; }
-
-/* Expanded input/output card beneath the digest row — additive only, the rows above keep their
-   collapsed look. First child sheds its top divider (nothing above it inside the card). */
+/* Expanded input/output card beneath the row — additive only, the row keeps its collapsed look.
+   First child sheds its top divider (nothing above it inside the card). */
 .tool-card {
   margin: .15rem 0 .55rem .6rem;
   background: var(--veil);
@@ -2189,10 +2173,11 @@ a.agent-name:hover { text-decoration: underline; }
   letter-spacing: .06em;
 }
 
-.thinking { margin-bottom: .4rem; font-size: .82rem; color: var(--muted); }
+.thinking { margin-bottom: .4rem; padding: .3rem 0; font-size: .82rem; color: var(--muted); }
+.thinking:last-child { margin-bottom: 0; }
 /* The <summary> toggle defaults to a text cursor — give it the pointer every other expandable uses. */
 .thinking summary { cursor: pointer; }
-.thinking pre { white-space: pre-wrap; }
+.thinking pre { white-space: pre-wrap; margin: .35rem 0 0; }
 /* Streaming (draft) thinking: capped + scrollable at the bulb-streaming card's height — ambient
    progress, not reading material — stuck to the live edge unless the user scrolls up
    (#draftThinkingPre). Durable rows stay uncapped: finished thinking IS reading material. */

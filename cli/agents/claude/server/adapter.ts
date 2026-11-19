@@ -30,7 +30,7 @@ interface JsonlEntry {
   customTitle?: string
   message?: { id?: string; model?: string; content?: string | ContentBlock[]; usage?: TokenUsage; stop_reason?: string | null }
   usage?: TokenUsage
-  attachment?: { type?: string; prompt?: unknown; commandMode?: string; identity?: { modelId?: string } }
+  attachment?: { type?: string; prompt?: unknown; commandMode?: string; identity?: { modelId?: string }; envelopes?: string[] }
   // CC's structured per-tool result (numLines, numFiles, structuredPatch, stdout, …) — the object its
   // own condensed UI renders from. Shape varies per tool; toolResultDigest matches on it.
   toolUseResult?: unknown
@@ -140,6 +140,11 @@ const DEFAULT_AGENT_TYPE = 'general-purpose'
 const CHILD_TAIL_WINDOWS = [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]
 interface TailFacts { tokens?: number; model?: string; effort?: string; running?: boolean; failing?: boolean; stopped?: boolean }
 const childTails = new Map<string, TailFacts & { size: number; mtime: number }>()
+// A response the model wrote. CC's own entries (an API error, Code Mode's REPL-inner tool calls) are
+// model '<synthetic>' with zeroed usage, which would blank the token chip and name a fake model.
+function isModelReply(e: JsonlEntry): boolean {
+  return !e.isApiErrorMessage && e.message?.model !== '<synthetic>' && !!(e.message?.usage ?? e.usage)
+}
 function childTail(file: string, size: number, mtime: number): TailFacts {
   const hit = childTails.get(file)
   if (hit && hit.size === size && hit.mtime === mtime) return hit
@@ -161,7 +166,7 @@ function childTail(file: string, size: number, mtime: number): TailFacts {
       const e = entries[i]
       if (e?.type !== 'assistant') continue
       last ??= e
-      if (!e.isApiErrorMessage && e.message?.usage) reply = e
+      if (isModelReply(e)) reply = e
     }
     const usage = reply?.message?.usage
     // A window of tool results alone has no response in it (one image result runs to 600KB). The
@@ -462,11 +467,32 @@ export function toolResultDigest(r: unknown, content: string): string {
   if (typeof o.searchCount === 'number') return plural(o.searchCount, 'search', 'searches')            // WebSearch
   if (Array.isArray(o.matches) && typeof o.total_deferred_tools === 'number') return plural(o.matches.length, 'tool')  // ToolSearch
   if (Array.isArray(o.newTodos)) return plural(o.newTodos.length, 'todo')                              // TodoWrite
+  if (typeof o.code === 'string' && typeof o.evalId === 'number') return replDigest(content)            // REPL, run inline
   if (typeof o.numFiles === 'number') return plural(o.numFiles, 'file')                                // Glob (no mode)
   return firstLineDigest(content)
 }
 
 // A turn the mirror never shows: one of CC's isMeta injections (a launched skill's full body, command
+// Code Mode's Poll result: each script's settled output as <event kind="repl-eval" eval="N">, with
+// the output's own <, > and & escaped. Only events carrying a nonce the first line lists are real.
+const REPL_EVENT = /<event nonce="([^"]*)" kind="repl-eval"[^>]*\beval="(\d+)"[^>]*>([\s\S]*?)<\/event>/g
+function replEvals(content: string): { evalId: number; text: string; isError: boolean }[] {
+  const listed = /^<system>authentic event nonces for this delivery: ([^<—]*)/.exec(content)?.[1]
+  const nonces = listed === undefined ? undefined : new Set(listed.trim().split(/\s+/))
+  return [...content.matchAll(REPL_EVENT)].filter(m => !nonces || nonces.has(m[1]!)).map(m => ({
+    evalId: Number(m[2]),
+    isError: /<error>/.test(m[3]!),
+    text: m[3]!.replace(/<\/?(?:log|result|error)>/g, '').trim()
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'),
+  }))
+}
+
+// A script's output, by its first line of substance: a returned object prints each key alone on a
+// line ("r:") above its value, and the key, a lone bracket or an empty string says nothing.
+function replDigest(text: string): string {
+  return firstLineDigest(text.split('\n').filter(l => !/^\s*(?:[\w$]+:|[[{]|''|""|undefined)\s*$/.test(l)).join('\n')) || 'done'
+}
+
 // caveats, /loop resume nudges). Display-only: the entry stays in the chain. Which THREAD an entry
 // belongs to is not a display question and isn't asked here — a transcript file never mixes threads,
 // so `isSidechain` answers it against the view (TB-Agent-Children.md). Exported for the hiddenTurn test.
@@ -572,8 +598,11 @@ function liveSince(root: string, sessionId: string): number | undefined {
 
 export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   readonly displayName = 'Claude Mirror'
+  // Code Mode: an eval number → its REPL call and output so far, so a Poll's delivery lands on that row.
+  #evals = new Map<number, { id: string; text: string; isError: boolean }>()
 
   constructor(private root = join(homedir(), '.claude')) { super() }
+  override forRead() { return new ClaudeAdapter(this.root) }
 
   // CC sets CLAUDECODE=1 in every shell it spawns (also CLAUDE_CODE_ENTRYPOINT, and the cross-tool
   // AI_AGENT=claude-code_<ver>); CLAUDECODE is the narrowest, most stable signal.
@@ -638,6 +667,15 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
         for (const b of content) {
           if (b?.type === 'tool_result') {
             const content = toText(b.content)
+            const tr = entry.toolUseResult as { asyncDispatched?: unknown; evalId?: unknown; eventCount?: unknown } | undefined
+            if (tr?.asyncDispatched === true && typeof tr.evalId === 'number') {
+              this.#evals.set(tr.evalId, { id: b.tool_use_id ?? '', text: '', isError: false })
+              continue
+            }
+            if (typeof tr?.eventCount === 'number') {
+              events.push(...this.#deliver(content))
+              continue
+            }
             const exit = b.is_error ? /^Exit code (\d+)/.exec(content)?.[1] : undefined
             const r = entry.toolUseResult as { backgroundTaskId?: unknown } | undefined
             const background = BACKGROUNDED.test(content) || (!!r && typeof r === 'object' && !!r.backgroundTaskId)
@@ -665,6 +703,10 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
       if (text) events.push(userEvent(text))
       return { events }
     }
+    // A wake turn carries what settled in the background the same way a Poll result does.
+    if (entry.type === 'attachment' && entry.attachment?.type === 'poll_events') {
+      return { events: (entry.attachment.envelopes ?? []).flatMap(env => this.#deliver(env)) }
+    }
     if (entry.type === 'assistant') {
       const content = entry.message?.content
       const blocks: ContentBlock[] = Array.isArray(content) ? content : []
@@ -675,7 +717,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
         .join('')
       const thinking = blocks.filter(b => b.type === 'thinking').map(b => b.thinking ?? '').join('\n')
       const tools = blocks
-        .filter(b => b.type === 'tool_use')
+        .filter(b => b.type === 'tool_use' && b.name !== 'Poll')   // Code Mode's wait: its deliveries go to their REPL rows
         .map(b => ({ id: b.id ?? '', name: b.name ?? '', input: b.input ?? {} }))
       if (text || thinking || tools.length) {
         const ts = Date.parse(entry.timestamp ?? '')
@@ -690,19 +732,31 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
         const task = asStr(t.input.task_id) ?? asStr(t.input.shell_id)
         if (task) events.push({ type: 'task_done', task, outcome: 'stopped' })
       }
-      const usageRaw = entry.message?.usage ?? entry.usage
+      const modelReply = isModelReply(entry)
+      const usageRaw = modelReply ? entry.message?.usage ?? entry.usage : undefined
       const usage: TokenCounts | undefined = usageRaw && {
         in: usageRaw.input_tokens ?? 0,
         out: usageRaw.output_tokens ?? 0,
         cached: usageRaw.cache_read_input_tokens ?? 0,
         cacheCreate: usageRaw.cache_creation_input_tokens ?? 0,
       }
-      return { events, usage, model: entry.message?.model }
+      return { events, usage, model: modelReply ? entry.message?.model : undefined }
     }
     return { events }   // mode, permission-mode, file-history-snapshot, system, summary, etc.
   }
 
   chainWorking(entries: JsonlEntry[]): boolean { return chainWorking(entries) }
+
+  // Each settled script's output onto the REPL row that dispatched it, appended for late output.
+  #deliver(content: string): Event[] {
+    return replEvals(content).flatMap(ev => {
+      const call = this.#evals.get(ev.evalId)
+      if (!call) return []
+      call.text = call.text ? call.text + '\n' + ev.text : ev.text
+      call.isError ||= ev.isError
+      return [{ type: 'tool_result' as const, id: call.id, content: call.text, isError: call.isError, digest: replDigest(call.text) }]
+    })
+  }
 
   sessionAlive(sessionId: string) { return sessionAlive(this.root, sessionId) }
   // CC writes a record for every running process and removes it on exit, so no live record is final.
