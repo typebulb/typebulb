@@ -119,8 +119,26 @@ function noProseDigest(msgs: Msg[]): string {
   for (const m of msgs) for (const t of m.tools) counts.set(toolDisplayName(t.name), (counts.get(toolDisplayName(t.name)) ?? 0) + 1)
   const steps = [...counts.values()].reduce((a, b) => a + b, 0)
   if (!steps) return 'no reply text'
-  const tally = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ')
-  return `no reply text · ${steps} step${steps === 1 ? '' : 's'} · ${tally}`
+  return `no reply text · ${steps} step${steps === 1 ? '' : 's'} · ${toolTally(msgs)}`
+}
+
+// "Read ×300, Bash ×12": a run of messages' tool calls by name, in first-seen order.
+function toolTally(msgs: Msg[]): string {
+  const counts = new Map<string, number>()
+  for (const m of msgs) for (const t of m.tools) counts.set(toolDisplayName(t.name), (counts.get(toolDisplayName(t.name)) ?? 0) + 1)
+  return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ')
+}
+
+// Thinking short enough to read as a note (CC's summaries run to a few hundred characters) shows
+// inline and counts as the turn's prose; a long chain of thought (pi's runs to pages) stays folded.
+const BRIEF_THINKING = 600
+function briefThinking(m: Msg): boolean {
+  const t = m.thinking.trim()
+  return m.role === 'assistant' && !!t && t.length <= BRIEF_THINKING
+}
+// What Reply and Summary show of an assistant row.
+function readable(m: Msg): boolean {
+  return m.role === 'assistant' && (!!m.text || !!m.body || briefThinking(m))
 }
 
 // Messages panel: scrolling area, bubbles, expanded-tool set, sticky-bottom.
@@ -131,6 +149,7 @@ export class MessageList extends Component {
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedAgents = new Set<number>()               // sub-agent hand-back msg ids the user opened; they start folded
+  expandedScriptCalls = new Set<number>()          // first msg id of each run of script calls the user opened
   expandedInlineBulbs = new Set<string>()               // inline bulb keys whose folded (superseded) version the user re-expanded
   copyButtons: CopyButton[] = []                   // public so domeleon discovers these child components
   turnViews: TurnView[] = []                       // ditto — one per turn, owning its Raw | Reply | Summary selector
@@ -158,6 +177,7 @@ export class MessageList extends Component {
     this.messages = []
     this.expandedForks.clear()
     this.expandedAgents.clear()
+    this.expandedScriptCalls.clear()
     this.expandedInlineBulbs.clear()
     this.#pasteThumbs.clear()
     this.#superseded = new Set()
@@ -243,6 +263,7 @@ export class MessageList extends Component {
       thinking: e.thinking,
       tools: e.tools.map(t => ({ ...t, isError: false, at: e.at })),
       error: e.error,
+      virtual: e.virtual,
       at: e.at,
       asks: e.error ? undefined : tagsIn(e.text).filter(t => t.kind === 'Ask').map(t => ({ id: t.id, text: t.text })),
     })
@@ -597,9 +618,9 @@ export class MessageList extends Component {
   renderTurn(msgs: Msg[], turnIdx: number, live: boolean) {
     // Reply and Summary render from `visible`, which holds no fork stub: an abandoned branch is trace,
     // so it is Raw's alone (TB-LostMessage.md), and Raw renders from `msgs`.
-    const visible = msgs.filter(m => m.role === 'user' || m.text || m.body)
-    const firstProse = visible.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
-    const lastProse = [...visible].reverse().find(m => m.role === 'assistant' && (!!m.text || !!m.body))
+    const visible = msgs.filter(m => m.role === 'user' || readable(m))
+    const firstProse = visible.find(readable)
+    const lastProse = [...visible].reverse().find(readable)
     // A turn selects off its newest assistant row rather than its newest PROSE row — every row of a
     // turn shares one selector — so a turn of pure tool work has tabs like any other, hosted on its
     // placeholder in Reply. Only a turn with no assistant row at all (a prompt awaiting its reply)
@@ -623,7 +644,7 @@ export class MessageList extends Component {
   // which is that view's assistant portion start.
   #selectorHost(msgs: Msg[], turnView: TurnView, live: boolean): Msg | undefined {
     if (turnView.raw(live)) return msgs.find(m => m.role !== 'user')
-    return msgs.find(m => m.role === 'assistant' && (!!m.text || !!m.body))
+    return msgs.find(readable)
   }
 
   // A turn with no assistant row at all — a prompt whose reply hasn't landed. Nothing to switch
@@ -633,12 +654,33 @@ export class MessageList extends Component {
   }
 
   // Raw: the full chronological trace — every assistant row, thinking, tools, per-message copy, and
-  // the turn's abandoned-branch stubs, which no other view renders.
+  // the turn's abandoned-branch stubs, which no other view renders. A run of calls a script made
+  // folds into one row: the script's own row above already says what it returned.
   #renderRawTurn(msgs: Msg[], turnIdx: number, host: Msg | undefined, turnView: TurnView, live: boolean) {
-    return msgs.map(m =>
-      m.role === 'fork'
+    const out = []
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i]!
+      if (m.virtual) {
+        let j = i
+        while (msgs[j + 1]?.virtual) j++
+        const run = msgs.slice(i, j + 1)
+        out.push(this.#scriptCallsRow(run, turnIdx, host && run.includes(host) ? turnView.view(live) : undefined))
+        i = j
+      } else out.push(m.role === 'fork'
         ? this.forkStub(m, turnIdx, m === host ? turnView : undefined, live)
         : this.bubble(m, turnIdx, undefined, true, m === host ? turnView : undefined, true, live))
+    }
+    return out
+  }
+
+  #scriptCallsRow(run: Msg[], turnIdx: number, head?: ReturnType<typeof div>) {
+    const id = run[0]!.id
+    const n = run.reduce((k, m) => k + m.tools.length, 0)
+    const body = this.expandedScriptCalls.has(id)
+      ? div({ class: 'script-calls' }, run.flatMap(m => m.tools.map(t => this.tool(t))))
+      : undefined
+    const label = `${n} call${n === 1 ? '' : 's'} from scripts: ${toolTally(run)}`
+    return this.#collapsibleRow(`script-calls-${id}`, turnIdx, this.expandedScriptCalls, id, label, head, body, 'trace-only')
   }
 
   // Reply: exact authored prose — user messages and the last assistant bubble, no chrome, turn-level
@@ -683,9 +725,9 @@ export class MessageList extends Component {
   // open set; the fork additionally shows its orphan body beneath when open.
   // `head` is the turn's selector row when this stub opens the turn's trace, so the row stays above
   // everything it switches.
-  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, head?: ReturnType<typeof div>, body?: ReturnType<typeof div>) {
+  #collapsibleRow(key: string, turnIdx: number, set: Set<number>, id: number, label: HValues, head?: ReturnType<typeof div>, body?: ReturnType<typeof div>, cls = '') {
     const expanded = set.has(id)
-    return div({ class: ['bubble', 'assistant', turnClassFor(turnIdx)], key },
+    return div({ class: ['bubble', 'assistant', cls, turnClassFor(turnIdx)], key },
       head ?? null,
       div({ class: 'turn-summary', onClick: () => { toggleInSet(set, id); this.update() } },
         caret(expanded),
@@ -722,8 +764,10 @@ export class MessageList extends Component {
       turnView ? turnView.view(live) : null,
       msg.agent ? this.#agentHead(msg, folded) : null,
       folded ? null : [
-      // Thinking ends in blank lines, which pre-wrap would render as dead space.
-      raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking.trim())) : null,
+      // Brief thinking reads inline, in Reply too; a long chain stays folded, and Raw's alone. Trimmed:
+      // thinking ends in blank lines, which pre-wrap would render as dead space.
+      briefThinking(msg) ? div({ class: 'thinking-brief' }, this.#mdDiv(`think-${msg.id}`, renderMarkdown(msg.thinking.trim())))
+        : raw && msg.thinking ? details({ class: 'thinking' }, summary('thinking'), pre(msg.thinking.trim())) : null,
       this.#renderBody(msg),
       msg.role === 'user' ? this.#pasteThumbView(msg) : null,
       raw ? msg.tools.map(t => this.tool(t)) : null,

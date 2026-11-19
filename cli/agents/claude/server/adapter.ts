@@ -21,6 +21,7 @@ interface JsonlEntry {
   agentId?: string           // set only on a child transcript's entries: the child's own id
   isMeta?: boolean
   isApiErrorMessage?: boolean
+  isVirtual?: boolean        // on an assistant entry: a call a Code Mode REPL script made, not the model
   effort?: string            // on an assistant entry: the reasoning effort it ran at
   parentUuid?: string
   logicalParentUuid?: string // on a compact_boundary: the pre-compaction leaf it continues
@@ -400,7 +401,8 @@ const TASK_NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
 function taskNotices(e: JsonlEntry): Event[] {
   const c = e.message?.content
   const text = e.type === 'attachment' && e.attachment?.type === 'queued_command' ? toText(e.attachment.prompt)
-    : e.type === 'user' && e.isMeta && !(Array.isArray(c) && c.some(b => b?.type === 'tool_result')) ? toText(c) : ''
+    : e.type === 'user' && !(Array.isArray(c) && c.some(b => b?.type === 'tool_result'))
+      && (e.isMeta || toText(c).trimStart().startsWith('<task-notification>')) ? toText(c) : ''
   if (!text.includes('<task-notification>')) return []
   const out: Event[] = []
   for (const [, body] of text.matchAll(TASK_NOTICE)) {
@@ -410,6 +412,10 @@ function taskNotices(e: JsonlEntry): Event[] {
     const exit = /\bexit(?: code)? (\d+)/.exec(/<summary>([\s\S]*?)<\/summary>/.exec(body!)?.[1] ?? '')?.[1]
     const output = /<output-file>([^<]+)<\/output-file>/.exec(body!)?.[1]
     out.push({ type: 'task_done', id, outcome, exit: exit === undefined ? undefined : Number(exit), output })
+    // An agent's notice carries its report: the only copy when it ended without a hand-back.
+    const agent = /<task-id>([^<]+)<\/task-id>/.exec(body!)?.[1]
+    const report = /<result>([\s\S]*?)(?:<\/result>|$)/.exec(body!)?.[1]?.trim()
+    if (agent && report && /<summary>Agent "/.test(body!)) out.push({ type: 'user', text: report, agent: { from: agent } })
   }
   return out
 }
@@ -600,6 +606,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   readonly displayName = 'Claude Mirror'
   // Code Mode: an eval number → its REPL call and output so far, so a Poll's delivery lands on that row.
   #evals = new Map<number, { id: string; text: string; isError: boolean }>()
+  // A sub-agent's last report: whether it came as a hand-back, and its text (see #freshReport).
+  #reports = new Map<string, { handedBack: boolean; text: string }>()
 
   constructor(private root = join(homedir(), '.claude')) { super() }
   override forRead() { return new ClaudeAdapter(this.root) }
@@ -628,6 +636,9 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   // and drops the other results (TB-LostMessage.md). Chaining a message's blocks and results in the
   // order written gives the engine the list it walks.
   linker(): Linker<JsonlEntry> {
+    // A fresh index is a drain from the top, so what apply remembers across entries starts over.
+    this.#evals.clear()
+    this.#reports.clear()
     const messageOf = new Map<string, string>()   // entry → the assistant message it belongs to
     const tip = new Map<string, string>()         // message → its newest entry
     return { link(e) {
@@ -652,10 +663,23 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   isRecoveryNoise(raw: JsonlEntry) { return !!raw.isApiErrorMessage }
 
   apply(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
+    const notices = coordinatorMessage(entry) ? [] : taskNotices(entry)
+    if (notices.length) return { events: notices.filter(ev => ev.type !== 'user' || this.#freshReport(ev.agent!.from, ev.text)) }
+    const r = this.#applyEntry(entry, sessionStartMs)
+    for (const ev of r.events) if (ev.type === 'user' && ev.agent) this.#reports.set(ev.agent.from, { handedBack: true, text: ev.text })
+    return r
+  }
+
+  // One stop can report twice, a hand-back then its notice's <result>, and a notice is carried twice.
+  #freshReport(from: string, text: string): boolean {
+    const prev = this.#reports.get(from)
+    this.#reports.set(from, { handedBack: false, text })
+    return !prev?.handedBack && prev?.text !== text
+  }
+
+  #applyEntry(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
     const delivered = coordinatorMessage(entry)
     if (delivered) return { events: [userEvent(delivered)] }
-    const notices = taskNotices(entry)
-    if (notices.length) return { events: notices }
     if (isHiddenTurn(entry) && !isHandback(entry)) return { events: [] }   // CC's isMeta injections
     const events: Event[] = []
     if (entry.type === 'user') {
@@ -722,7 +746,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
       if (text || thinking || tools.length) {
         const ts = Date.parse(entry.timestamp ?? '')
         const live = !isNaN(ts) && ts >= sessionStartMs
-        events.push({ type: 'assistant', text, thinking, tools, live, error: entry.isApiErrorMessage || undefined })
+        events.push({ type: 'assistant', text, thinking, tools, live, error: entry.isApiErrorMessage || undefined, virtual: entry.isVirtual || undefined })
       }
       // The turn ends on a finished reply, or from 2.1.289 on the agent's own SubagentHandback call
       // (the rule chainWorking reads). Through 2.1.284 a handback was followed by a closing reply, so a

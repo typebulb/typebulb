@@ -142,7 +142,7 @@ export interface Tool { id: string; name: string; input: Record<string, unknown>
 // `agent` marks a user turn the harness delivered for a sub-agent (TB-Agent-Children.md): the text is
 // that agent's report, so it frames rather than folding into a neighbouring send.
 // `asks` are the reply's own Ask tags, read once as it lands (TB-Agent-Board.md).
-export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean; error?: boolean; at?: number; asks?: { id: string; text: string }[] }
+export interface Msg { id: number; role: 'user' | 'assistant' | 'fork'; text: string; thinking: string; tools: Tool[]; copy?: CopyButton; turnCopy?: CopyButton; turnView?: TurnView; segments?: string[]; body?: (string | InlineBulb)[]; fork?: { count: number; sub: Msg[] }; agent?: { from: string }; authored?: boolean; error?: boolean; virtual?: boolean; at?: number; asks?: { id: string; text: string }[] }
 
 export interface RunningServer { pid: number; port: number; url: string; file: string; startedAt: number; trust?: boolean; predicted?: string; denied?: string }
 // `lastRunAt` = the port block's launch time for this bulb (0 when never run) — the use half of

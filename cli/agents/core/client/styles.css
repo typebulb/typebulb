@@ -2178,6 +2178,12 @@ a.agent-name:hover { text-decoration: underline; }
 /* The <summary> toggle defaults to a text cursor — give it the pointer every other expandable uses. */
 .thinking summary { cursor: pointer; }
 .thinking pre { white-space: pre-wrap; margin: .35rem 0 0; }
+/* Brief thinking, inline: the muted voice marks it as the model's note rather than its reply. */
+.thinking-brief { color: var(--muted); padding: .15rem 0; }
+.thinking-brief .md > :first-child { margin-top: 0; }
+.thinking-brief .md > :last-child { margin-bottom: 0; }
+/* A run of script calls, opened: its tool rows, tight under the row that folds them. */
+.script-calls { padding: .15rem 0 .3rem .6rem; }
 /* Streaming (draft) thinking: capped + scrollable at the bulb-streaming card's height — ambient
    progress, not reading material — stuck to the live edge unless the user scrolls up
    (#draftThinkingPre). Durable rows stay uncapped: finished thinking IS reading material. */

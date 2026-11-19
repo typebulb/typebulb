@@ -165,8 +165,9 @@ export type Event =
   // view, where the brief and follow-ups come from the parent agent — so it renders as markdown.
   | { type: 'user'; text: string; agent?: { from: string }; authored?: boolean; at?: number }
   // `error` marks a notice the harness wrote in the model's place (CC: an API error), so it renders
-  // as a failure rather than as a reply.
-  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean; error?: boolean; at?: number }
+  // as a failure rather than as a reply. `virtual` marks a call a script made (CC Code Mode's REPL),
+  // which the client folds with its neighbours into one row.
+  | { type: 'assistant'; text: string; thinking: string; tools: { id: string; name: string; input: Record<string, unknown> }[]; live: boolean; error?: boolean; virtual?: boolean; at?: number }
   // `digest` is the one-line OUT summary a collapsed tool row shows ("463 lines", "2 files",
   // the first stdout line) — adapter-computed: CC from the structured `toolUseResult` its own
   // condensed UI renders from, Pi from the raw result text. '' / absent ⇒ nothing to show.

@@ -159,6 +159,19 @@ describe('a synthetic entry carries no usage or model', () => {
       + '<event nonce="N1" kind="repl-eval" at="t" eval="7" ms="5" status="settled">\n<result>r:\n3 &lt; 4\n</result>\n</event>'
     expect(result('p1', poll, { content: poll, eventCount: 1 })).toEqual([{ type: 'tool_result', id: 'r1', content: 'r:\n3 < 4', isError: false, digest: '3 < 4' }])
   })
+
+  it('shows an agent report from its task notice once, unless a hand-back already delivered that stop', () => {
+    const a = new ClaudeAdapter()
+    a.linker()
+    const notice = (id: string, report: string) => ({ type: 'attachment', attachment: { type: 'queued_command', prompt:
+      `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>t-${id}</tool-use-id>\n<status>completed</status>\n<summary>Agent "probe" finished</summary>\n<result>${report}</result>\n</task-notification>` } }) as never
+    const reports = (e: never) => a.apply(e, 0).events.filter(ev => ev.type === 'user')
+    expect(reports(notice('a1', 'Done.'))).toEqual([{ type: 'user', text: 'Done.', agent: { from: 'a1' } }])
+    expect(reports(notice('a1', 'Done.'))).toEqual([])                       // the notice's second carrier
+    a.apply({ type: 'user', isMeta: true, message: { content: '<agent-message from="a2">\nHanded back.\n</agent-message>' } } as never, 0)
+    expect(reports(notice('a2', 'Handed back.'))).toEqual([])                // the same stop, reported twice
+    expect(reports(notice('a2', 'Resumed, done again.'))).toHaveLength(1)    // its next stop
+  })
 })
 
 // CC records a failed request as a reply of its own. A child with nothing else has no count to show,
