@@ -34,6 +34,7 @@ export interface SessionFile { sessionId: string; file: string; mtime: number }
  *  fields it carries. */
 export interface SessionRow {
   sessionId: string
+  /** When the conversation last moved (its newest timestamped entry), not the file's mtime. */
   mtime: number
   preview: string
   /** A conversation this mirror owns whose file the harness hasn't written yet: listed so a turn left

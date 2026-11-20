@@ -8,6 +8,7 @@ import { searchHits, type SearchTurn } from './search.js'
 import { savePaste, readPaste, type PasteRequest } from './paste.js'
 import { summarizeProse } from './summarize.js'
 import { entryEvents, sessionLive as sessionLiveOf, childState, transcriptIndex, type TranscriptIndex } from './transcript.js'
+import { lastEntryAt } from './sessions.js'
 import { sessionStatus } from './childReport.js'
 import { sessionThreads, saveAnswer } from './board.js'
 import { answerLine, type Answer, type AnswerChoice } from '../tags.js'
@@ -869,15 +870,27 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
 
   // ── session picker ──
 
+  // A session file's picker fields, re-read only when its mtime moves: every open re-read every
+  // transcript, seconds in a project with hundreds. `at` is the row's time (lastEntryAt).
+  const rowCache = new Map<string, { mtime: number; preview: string; at: number }>()
+  function rowInfo(file: string, mtime: number): { preview: string; at: number } {
+    const hit = rowCache.get(file)
+    if (hit?.mtime === mtime) return hit
+    const info = { mtime, preview: adapter.readPreview(file), at: lastEntryAt<E>(file, e => adapter.timestampOf(e)) ?? mtime }
+    rowCache.set(file, info)
+    return info
+  }
+
   async function listSessions(): Promise<SessionRow[]> {
     // Asked ONCE for the whole list, not per row (adapter contract). undefined ⇒ this harness can't
     // say which sessions are mid-turn, and every row then shows no working cue.
     const working = adapter.sessionsWorking?.(state.cwd)
     const names = adapter.sessionNames?.()
     const onDisk = adapter.listSessionFiles(state.cwd)
-      .map(({ sessionId, file, mtime }) => ({
-        sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), name: names?.get(sessionId),
-      }))
+      .map(({ sessionId, file, mtime }) => {
+        const { preview, at } = rowInfo(file, mtime)
+        return { sessionId, mtime: at, preview, working: working?.has(sessionId), name: names?.get(sessionId) }
+      })
     // Union, not just the adapter's listing: an owned conversation is pickable from its first send,
     // so a turn started here and left to run is never unreachable while pi holds its file back (C7).
     const pending = pendingRecs().map(c => ({ sessionId: c.sessionId, mtime: c.rec.startedAt, preview: c.rec.prompt ?? '', pending: true }))
@@ -915,7 +928,8 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     let sessions = 0
     const working = adapter.sessionsWorking?.(state.cwd)
     const names = adapter.sessionNames?.()
-    for (const { sessionId, file, mtime } of adapter.listSessionFiles(state.cwd).sort((a, b) => b.mtime - a.mtime)) {
+    const files = adapter.listSessionFiles(state.cwd).map(f => ({ ...f, ...rowInfo(f.file, f.mtime) }))
+    for (const { sessionId, file, mtime, preview, at } of orderByDescending(files, f => f.at)) {
       const own = searchHits(searchTurns(file, mtime), q)
       // Full-text IS the include-children gesture (TB-Agent-Children.md): what a session's agents did
       // is part of what the session did, and a child only appears when it matched, so the browse list
@@ -929,7 +943,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
         out.push({ sessionId, mtime: c.mtime, preview: childName(c), ...hit, child: { id: c.id, kind: c.kind, depth: c.depth } })
       // Same working cue as the browse list. Child rows above carry none: that dot would be their
       // parent's turn, not theirs.
-      out.push({ sessionId, mtime, preview: adapter.readPreview(file), working: working?.has(sessionId), name: names?.get(sessionId), ...own })
+      out.push({ sessionId, mtime: at, preview, working: working?.has(sessionId), name: names?.get(sessionId), ...own })
       // The cap counts SESSIONS, not rows: a session's matching children ride along with it, so
       // counting rows would let one heavily-delegated session spend the whole budget.
       if (++sessions >= SEARCH_MAX_SESSIONS) break

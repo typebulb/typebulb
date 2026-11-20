@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { isHiddenTurn } from '../agents/claude/server.js'
 import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
 import { readTranscript } from '../agents/core/server/transcript.js'
+import { lastEntryAt } from '../agents/core/server/sessions.js'
 
 /**
  * The mirror hides non-conversational turns structurally (TB-Agent-Mirror.md):
@@ -281,5 +282,21 @@ describe('a tool result quoting a task notification', () => {
     const quoted = '<task-notification>\n<tool-use-id>t9</tool-use-id>\n<status>completed</status>\n</task-notification>'
     const events = a.apply({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: quoted }] } } as never, 0).events
     expect(events.map(e => e.type)).toEqual(['tool_result'])
+  })
+})
+
+describe('lastEntryAt', () => {
+  // CC appends untimestamped bookkeeping as an idle session's process exits; the picker's time must
+  // stay on the last turn.
+  it('reads the newest timestamped entry, past the untimestamped bookkeeping after it', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tb-last-')), 's.jsonl')
+    writeFileSync(file, [
+      { type: 'user', timestamp: '2026-11-19T10:00:00.000Z', message: { content: 'hi' } },
+      { type: 'system', subtype: 'turn_duration', timestamp: '2026-11-19T10:05:00.000Z' },
+      { type: 'cost-state', totalCostUSD: 1 },
+      { type: 'last-prompt', lastPrompt: 'hi' },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n')
+    const a = new ClaudeAdapter()
+    expect(lastEntryAt(file, e => a.timestampOf(e as never))).toBe(Date.parse('2026-11-19T10:05:00.000Z'))
   })
 })

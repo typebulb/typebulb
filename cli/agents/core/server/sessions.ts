@@ -29,6 +29,22 @@ export function readTail(file: string, cap: number): { text: string; partial: bo
   } finally { closeSync(fd) }
 }
 
+// When a transcript last moved: its newest timestamped entry, read from the tail. Not the mtime, which
+// CC also moves as an idle session's process exits (it appends untimestamped cost and title lines).
+export function lastEntryAt<E>(file: string, timestampOf: (e: E) => string | undefined): number | undefined {
+  const tail = readTail(file, 64 * 1024)
+  if (!tail) return undefined
+  const lines = tail.text.split('\n')
+  for (let i = lines.length - 1; i >= (tail.partial ? 1 : 0); i--) {
+    if (!lines[i]!.includes('"timestamp"')) continue
+    try {
+      const at = Date.parse(timestampOf(JSON.parse(lines[i]!) as E) ?? '')
+      if (!isNaN(at)) return at
+    } catch { /* a cut line */ }
+  }
+  return undefined
+}
+
 // List the `.jsonl` session files in `dir` as SessionFile[] — sessionId is the filename stem. The
 // session *directory* is the schema-specific part each adapter computes (CC: ~/.claude/projects/…;
 // Pi: ~/.pi/agent/sessions/…); the listing itself is identical across agents (both name files
