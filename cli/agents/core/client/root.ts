@@ -5,6 +5,7 @@ import { BulbsPill } from './bulbsPill.js'
 import { DiffPill } from './diffPill.js'
 import { ChildrenPill } from './childrenPill.js'
 import { BoardPill } from './boardPill.js'
+import { SchedulePill } from './schedulePill.js'
 import { MessageList } from './messageList.js'
 import { truncate } from './util.js'
 import { basename } from '../format.js'
@@ -27,6 +28,7 @@ export class Root extends Component implements IRoot {
   diffPill = new DiffPill()
   childrenPill = new ChildrenPill()
   boardPill = new BoardPill()
+  schedulePill = new SchedulePill()
   messageList = new MessageList()
   tokens: TokenCounts = { in: 0, out: 0, cached: 0, cacheCreate: 0 }
   cost = 0                                  // session spend: summed per-entry harness costs (IRoot.cost)
@@ -94,15 +96,22 @@ export class Root extends Component implements IRoot {
       openChild: id => { this.boardPill.setViewing(false); this.openChild(id) },
       asks: this.boardPill.asks,
     })
+    this.schedulePill.schedule.bind({
+      onChange: () => this.update(),
+      openChild: id => { this.schedulePill.setViewing(false); this.openChild(id) },
+    })
     // Esc leaves the board or an open child transcript, matching the diff doc's own key — global
     // because the child view IS the message list, which has no focused surface of its own to hang it on.
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape' && this.boardPill.viewing) { this.boardPill.setViewing(false); this.update(); return }
+      if (e.key === 'Escape' && this.schedulePill.viewing) { this.schedulePill.setViewing(false); this.update(); return }
       if (e.key !== 'Escape' || !this.childrenPill.viewing || this.childrenPill.open) return
       void this.childrenPill.closeChild()
     })
-    // `?view=board` opens on the board, so it can live in a tab of its own.
-    if (new URLSearchParams(location.search).get('view') === 'board') this.boardPill.setViewing(true)
+    // `?view=board` opens on the board, so it can live in a tab of its own; `?view=schedule` likewise.
+    const view = new URLSearchParams(location.search).get('view')
+    if (view === 'board') this.boardPill.setViewing(true)
+    else if (view === 'schedule') this.schedulePill.setViewing(true)
     this.init()
   }
 
@@ -116,6 +125,7 @@ export class Root extends Component implements IRoot {
     if (this.diffPill !== except) this.diffPill.close()
     if (this.childrenPill !== except) this.childrenPill.close()
     if (this.boardPill !== except) this.boardPill.close()
+    if (this.schedulePill !== except) this.schedulePill.close()
     for (const p of this.pills) if (p !== except) p.close?.()
   }
 
@@ -126,6 +136,7 @@ export class Root extends Component implements IRoot {
   get threads(): TagThread[] { return this.boardPill.threads }
   askRow(t: TagThread) { return this.boardPill.asks.view(t) }
   leaveBoard() { if (this.boardPill.viewing) this.boardPill.setViewing(false) }
+  leaveSchedule() { if (this.schedulePill.viewing) this.schedulePill.setViewing(false) }
 
   async init() {
     const i = await tb.server.info()
@@ -200,6 +211,7 @@ export class Root extends Component implements IRoot {
         // An open Status view asks the server again; it throttles itself.
         if (this.childrenPill.viewing) void this.childrenPill.status.sync()
         if (this.boardPill.viewing) void this.boardPill.board.sync()
+        if (this.schedulePill.viewing) void this.schedulePill.schedule.sync()
         // Per-poll hook for an injected pill (Claude's switcher refreshes its live model + caching cue
         // here, authoritatively from the proxy's own state, not the transcript — TB-Agent-Switcher.md).
         this.#onPollTick?.()
@@ -222,7 +234,7 @@ export class Root extends Component implements IRoot {
         // The agents pill is scoped to the attached session (TB-Agent-Children.md), so a switch
         // clears its rows here. Keyed on the id changing, not on the event: a child swap re-emits
         // this under the same id, and that list is the one already on screen.
-        if (e.sessionId !== this.sessionId) { this.childrenPill.reset(); this.boardPill.reset() }
+        if (e.sessionId !== this.sessionId) { this.childrenPill.reset(); this.boardPill.reset(); this.schedulePill.reset() }
         this.sessionId = e.sessionId
         // A conversation can be named before the picker has a row for it (the composer's own
         // sessions are listed from their first send, ahead of the agent writing the file), so pull
@@ -251,6 +263,7 @@ export class Root extends Component implements IRoot {
         // draining underneath and returns intact on close.
         this.diffPill.viewing ? this.diffPill.docView()
           : this.boardPill.viewing ? this.boardPill.board.view()
+          : this.schedulePill.viewing ? this.schedulePill.schedule.view()
           : this.childrenPill.viewing && this.childrenPill.status.open ? this.childrenPill.status.view()
           : this.messageList.view(),
         this.#cwdHint(),
@@ -298,6 +311,7 @@ export class Root extends Component implements IRoot {
         ...this.pills.map(p => p.view()),
         this.tokenPill.view(),
         this.boardPill.view(),
+        this.schedulePill.view(),
         this.childrenPill.view(),
         this.sessionPicker.view(),
         this.bulbsPill.view(),

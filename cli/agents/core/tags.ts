@@ -38,25 +38,27 @@ type ReplyTag = Omit<Tag, 'turn' | 'at' | 'from'>
  *  next list item, or the next tag. */
 export const tagsIn = (text: string): ReplyTag[] => scan(text).map(s => s.tag)
 
-/** A reply's text cut after each Ask's paragraph, so its answer row can sit under the words that asked. */
-export function splitAtAsks(text: string): { md: string; ask?: { id: string; text: string } }[] {
+/** A reply's text cut around each Ask's paragraph, so the ask can stand apart in its own tone with its
+ *  answer row under it. `md` is the prose before the ask. */
+export interface AskPart { id: string; text: string; question?: string; recommend?: string }
+export function splitAtAsks(text: string): { md: string; ask?: AskPart }[] {
   const lines = text.split('\n')
-  const out: { md: string; ask?: { id: string; text: string } }[] = []
+  const out: { md: string; ask?: AskPart }[] = []
   let from = 0
-  for (const { tag, end } of scan(text)) {
+  for (const { tag, start, end } of scan(text)) {
     if (tag.kind !== 'Ask') continue
-    out.push({ md: lines.slice(from, end).join('\n'), ask: { id: tag.id, text: tag.text } })
+    out.push({ md: lines.slice(from, start).join('\n'), ask: { id: tag.id, text: tag.text, question: tag.question, recommend: tag.recommend } })
     from = end
   }
   out.push({ md: lines.slice(from).join('\n') })
   return out
 }
 
-// Each tag with `end`, the index of the line its paragraph stops before.
-function scan(text: string): { tag: ReplyTag; end: number }[] {
-  const out: { tag: ReplyTag; end: number }[] = []
+// Each tag with the lines its paragraph spans: from `start`, stopping before `end`.
+function scan(text: string): { tag: ReplyTag; start: number; end: number }[] {
+  const out: { tag: ReplyTag; start: number; end: number }[] = []
   let fence = ''
-  let cur: { kind: TagKind; id: string; lines: string[] } | undefined
+  let cur: { kind: TagKind; id: string; lines: string[]; start: number } | undefined
   const flush = (end: number) => {
     if (!cur) return
     const body = cur.lines.join('\n').trim()
@@ -66,7 +68,7 @@ function scan(text: string): { tag: ReplyTag; end: number }[] {
       tag.question = q!.trim()
       if (r?.trim()) tag.recommend = r.trim()
     }
-    out.push({ tag, end })
+    out.push({ tag, start: cur.start, end })
     cur = undefined
   }
   const lines = text.split('\n')
@@ -76,7 +78,7 @@ function scan(text: string): { tag: ReplyTag; end: number }[] {
     if (fence) { if (f && f[0] === fence[0] && f.length >= fence.length) fence = ''; continue }
     if (f) { flush(i); fence = f; continue }
     const m = LABEL.exec(line.trimStart())
-    if (m) { flush(i); cur = { kind: m[1] as TagKind, id: m[2]!, lines: [line.trimStart().slice(m[0].length)] }; continue }
+    if (m) { flush(i); cur = { kind: m[1] as TagKind, id: m[2]!, lines: [line.trimStart().slice(m[0].length)], start: i }; continue }
     if (!cur) continue
     if (!line.trim() || ITEM.test(line)) { flush(i); continue }
     cur.lines.push(line.trim())

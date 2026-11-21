@@ -42,7 +42,8 @@ export class BoardPill extends StatusPill {
 
   setViewing(on: boolean) {
     // Back to the transcript at its tail, as leaving a child does; a reveal after this re-aims it.
-    if (!on) this.parent.messageList.stickToBottomNextRender()
+    if (on) this.parent.leaveSchedule()
+    else this.parent.messageList.stickToBottomNextRender()
     this.viewing = on
     this.board.show(on)
     this.update()

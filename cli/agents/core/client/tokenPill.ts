@@ -1,5 +1,5 @@
 import { Component, span } from 'domeleon'
-import { formatTokens } from './util.js'
+import { formatTokens } from '../format.js'
 import { busyPill } from './ui.js'
 import type { IRoot } from './types.js'
 

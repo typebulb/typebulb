@@ -299,10 +299,18 @@ A `**server.ts**` block with no `**code.tsx**` is a headless bulb — no UI, no 
 
 Tag a question in your reply and the mirror's board lists it, answerable with a click there or under the reply that asked.
 
-- **Open a paragraph or list item with the tag:** `**Ask [<id>]:** <question> *Recommend:* <your pick>`. The recommendation becomes the answer button, so keep it to the pick and put the reasoning around it. A tag in a code fence or a `>` quote is an example, not an ask.
+- **Open a paragraph or list item with the tag:** `**Ask [<id>]:** <question> *Recommend:* <your pick>`. The recommendation is what the *Accept* button accepts, so keep it to the pick and put the reasoning around it. A tag in a code fence or a `>` quote is an example, not an ask.
 - **The answer wakes you through babysit** as `[answer <id> v<N>] …` (on another harness, arm `typebulb wait agent --match "[answer "`). Act on it, then close it in your next reply with `**Decided [<id>]:** …`, or `**Todo [<id>]:** …` if the user parked it.
 - **An id's latest tag is its state.** `Done` and `Finding` are the other labels; ids are lowercase letters, digits and hyphens.
 - **A sub-agent's brief feeds its row:** the board shows its first line, and a line `**Time box:** 20m` has babysit wake you once it runs past; a follow-up restarts the box only with a line of its own.
+
+### Planning while you orchestrate
+
+Post your plan as a `mermaid` `gantt` in a reply and the mirror's schedule draws it, with your agents and long-running commands laid over it.
+
+- **The latest gantt is the plan:** a bar's title is its agent's description (punctuation aside), so the agent's real start, state and end replace the plan's; tag your own bars `active`, then `done`.
+- **Add `Target :milestone, end, 19:00, 0m` only for a deadline the user names**, follow each landing bar with its put-back bar, and price what bars cost your context with `%% cost 20k` (every bar) or `%% cost v 5k, cl 80k` (by id).
+- **Babysit wakes you on two facts:** a bar `ready, not started`, or `plan stale` (a running agent no bar names). Re-post when the plan's shape changes, never for drift: `typebulb status` prints it, and whether the plan fits is yours to judge.
 
 ## Sizing
 

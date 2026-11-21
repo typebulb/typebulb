@@ -5,7 +5,8 @@ import { git } from './git.js'
 import { readTranscript, sessionLive, childState } from './transcript.js'
 import { childName, type ChildRow, type ChildTranscript } from '../events.js'
 import { orderByDescending, byAncestry } from '../order.js'
-import { childDigest, fileTouches, sharedFiles, agentReport, busy, NO_GIT, DEFAULT_SLOW_MS, type Digest, type Touches, type StatusReport, type Shared, type CheckFile, type Settled } from '../childStatus.js'
+import { childDigest, fileTouches, sharedFiles, agentReport, busy, laneRuns, NO_GIT, DEFAULT_SLOW_MS, type Digest, type Touches, type StatusReport, type Shared, type CheckFile, type Settled } from '../childStatus.js'
+import type { Lane } from '../plan.js'
 import { tagsOf, type Tag } from '../tags.js'
 import { typebulbHome } from '../../../src/servers.js'
 
@@ -100,7 +101,7 @@ export function childFacts<E>(adapter: AgentAdapter<E>, cwd: string, kids: Child
 // A background command's output file, its head and tail: where its first and last lines are. Gone
 // once the harness cleans up, which leaves the run its exit alone.
 const OUTPUT_EDGE = 4096
-function readOutput(file: string): string | undefined {
+export function readOutput(file: string): string | undefined {
   let fd: number
   try { fd = openSync(file, 'r') } catch { return undefined }
   try {
@@ -108,6 +109,23 @@ function readOutput(file: string): string | undefined {
     const read = (pos: number, len: number) => { const b = Buffer.alloc(len); return b.subarray(0, readSync(fd, b, 0, len, pos)).toString('utf8') }
     return size <= 2 * OUTPUT_EDGE ? read(0, size) : `${read(0, OUTPUT_EDGE)}\n${read(size - OUTPUT_EDGE, OUTPUT_EDGE)}`
   } catch { return undefined } finally { closeSync(fd) }
+}
+
+export interface ChildPlanFacts { runStart?: number; boxMs?: number; todos?: { done: number; total: number } }
+/** What the schedule needs of the children (TB-Agent-Schedule.md), from the digests Status keeps, so no
+ *  child is read twice: each one's runs for the checks lane; when its latest run started (a follow-up to a
+ *  finished agent is a new job, as it is a new time box) and that run's box; and its own todo list's
+ *  progress, where it keeps one. */
+export function childSchedule<E>(adapter: AgentAdapter<E>, cwd: string, rows: ChildRow[], live: boolean, now: number): { lanes: Lane[]; facts: Map<string, ChildPlanFacts> } {
+  const got = rows.map(c => ({ c, d: digestOf(adapter, c.file, cwd, c.id).d }))
+  const todosOf = (d: Digest) => {
+    const list = [...d.calls].reverse().find(x => Array.isArray(x.input?.todos))?.input.todos as { status?: string }[] | undefined
+    return list?.length ? { done: list.filter(t => t.status === 'completed').length, total: list.length } : undefined
+  }
+  return {
+    lanes: got.flatMap(({ c, d }) => laneRuns(d.calls, now, live, c.state === 'running', readOutput).map(r => ({ ...r, who: childName(c) }))),
+    facts: new Map(got.map(({ c, d }) => [c.id, { runStart: d.runStart, boxMs: d.boxMs, todos: todosOf(d) }])),
+  }
 }
 
 /** Every child of a session reported, in ancestry order, with the files to check before `git add`.

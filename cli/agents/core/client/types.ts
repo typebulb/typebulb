@@ -121,6 +121,8 @@ export interface IRoot {
   threads: TagThread[]
   askRow(t: TagThread): VElement
   leaveBoard(): void
+  // The schedule (TB-Agent-Schedule.md) takes the transcript's slot as the board does; one at a time.
+  leaveSchedule(): void
   // Re-fetch the session list and re-render; the session pill/tab title read from that fetched data,
   // so a metadata change (e.g. a /name recipe) needs this to show without reopening the picker.
   refreshSessions(): void

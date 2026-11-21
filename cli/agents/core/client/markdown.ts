@@ -1,7 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import katex from 'katex'
 import DOMPurify from 'dompurify'
-import { renderMermaidSVG } from 'beautiful-mermaid'
+import { render as renderMermaid } from 'pele'
 import hljs from 'highlight.js/lib/core'
 import hljsTypescript from 'highlight.js/lib/languages/typescript'
 import hljsXml from 'highlight.js/lib/languages/xml'
@@ -14,6 +14,7 @@ import hljsBash from 'highlight.js/lib/languages/bash'
 import hljsYaml from 'highlight.js/lib/languages/yaml'
 import { tryParseBulb, findUnfencedBulbs } from '../../../src/render.js'
 import type { Msg } from './types.js'
+import { svgFor } from './icons.js'
 
 // `html: true` lets the agent's natural semantic HTML through the parser — today only <details>/<summary>
 // (collapsible answers, spoilers, folded logs). It is safe only because BOTH raw-HTML render rules
@@ -296,14 +297,18 @@ function applyMathRules(m: MarkdownIt) {
 }
 applyMathRules(md)
 
-// beautiful-mermaid decodes only XML + numeric entities (decodeXML), so named HTML
-// entities — &nbsp;, &mdash;, … — survive undecoded and then render as literal
-// text. Decode the full named set first; the library's pass is then a no-op.
+// pele escapes a label's text, so an HTML entity an agent writes (&amp;, &nbsp;,
+// &mdash;) would render as its literal source. Decode the full named set first.
 function decodeHtmlEntities(s: string): string {
   const ta = document.createElement('textarea')
   ta.innerHTML = s
   return ta.value
 }
+
+// ```mermaid``` fences render to inline SVG. A parse error falls through to the
+/** The transcript's plans (TB-Agent-Schedule.md), numbered by fence text: a gantt a later plan supersedes
+ *  folds to the inline bulb's stub, so only the latest stands open. Passed through markdown-it's env. */
+export interface PlanFolds { versions: Map<string, number>; latest: number }
 
 // ```mermaid``` fences render to inline SVG. A parse error falls through to the
 // default code-block rendering, so an unsupported diagram degrades to readable
@@ -344,52 +349,18 @@ md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   }
   if (lang === 'mermaid') {
     try {
-      // The library's internal theme vars share names with the bulb's (--fg/--bg/
-      // --muted/--border/--accent), so passing var(--fg) here would emit a
-      // self-referential `--fg: var(--fg)` on the SVG — a CSS cycle that resolves
-      // to invalid. The --mm-* aliases (styles.css) break the cycle, still themed.
-      const svg = renderMermaidSVG(decodeHtmlEntities(t.content), {
-        // bg backs the label mask-rects (edge/loop labels); without it they default
-        // to white and wash out in dark mode. transparent keeps the canvas clear.
-        bg: 'var(--mm-bg)',
-        fg: 'var(--mm-fg)',
-        line: 'var(--mm-line)',
-        accent: 'var(--mm-accent)',
-        muted: 'var(--mm-muted)',
-        surface: 'var(--mm-surface)',
-        border: 'var(--mm-border)',
-        font: 'system-ui, -apple-system, "Segoe UI", sans-serif',
-        transparent: true,
-      })
-      return `<div class="mermaid copyable">${svg}${copyButton(t.content)}</div>`
+      // Themed by the --pele-* variables on .mermaid (styles.css), so a theme flip needs no re-render.
+      const { svg } = renderMermaid(decodeHtmlEntities(t.content), { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' })
+      const html = `<div class="mermaid copyable">${svg}${copyButton(t.content)}</div>`
+      const plans = (env as { plans?: PlanFolds } | undefined)?.plans
+      const v = plans?.versions.get(t.content.trim())
+      return v === undefined || v >= plans!.latest ? html
+        : `<details class="plan-fold"><summary class="bulb-fold"><span class="icon caret-tri">${svgFor('caret')}</span>`
+          + `<span class="bulb-fold-app">⏱️</span><span class="bulb-fold-text">Plan — Version ${v}</span></summary>${html}</details>`
     } catch { /* fall through to a plain code block */ }
   }
   // Every other fence (code, or an unrecognised language) is a copyable source block.
   return wrapCodeBlock(defaultFence(tokens, idx, opts, env, self), t.content)
-}
-
-// Author classDef/style colors render as literal fill/stroke/color that override
-// the theme, freezing a light-mode palette into dark mode. The library has no flag
-// to suppress this, and its prop parser splits on every comma, so a color-mix() fed
-// through the source is shredded — we have to blend post-render instead. The
-// library's own colors are var(--_…), which the literal-color test skips.
-const isLiteralColor = (v: string | null): v is string =>
-  !!v && !v.startsWith('var(') && !v.startsWith('url(') && v !== 'none' && v !== 'transparent'
-
-function themeMermaidNodes(root: Element) {
-  for (const el of root.querySelectorAll<SVGElement>('.mermaid g.node [fill], .mermaid g.node [stroke]')) {
-    const fill = el.getAttribute('fill')
-    if (isLiteralColor(fill)) {
-      // Text → themed fg for legibility; shape → keep the hue, mixed mostly into bg.
-      el.setAttribute('fill', el.tagName.toLowerCase() === 'text'
-        ? 'var(--mm-fg)'
-        : `color-mix(in srgb, ${fill} 25%, var(--mm-bg))`)
-    }
-    const stroke = el.getAttribute('stroke')
-    if (isLiteralColor(stroke)) {
-      el.setAttribute('stroke', `color-mix(in srgb, ${stroke} 55%, var(--mm-fg))`)
-    }
-  }
 }
 
 // Fit each raw ```svg``` embed to its content. A raw <svg> with only a viewBox has NO intrinsic size,
@@ -510,7 +481,6 @@ export const mdUserRenderToHtml = (text: string) => mdUser.render(text)
 const mountMarkdown = (render: () => string, fallback: string) => (el: Element) => {
   try {
     el.innerHTML = render()
-    themeMermaidNodes(el)
     fitSvgEmbeds(el)
     fitTableEmbeds(el)
   } catch {
@@ -519,7 +489,7 @@ const mountMarkdown = (render: () => string, fallback: string) => (el: Element) 
   el.addEventListener('click', onMarkdownClick)
 }
 
-export const renderMarkdown = (text: string) => mountMarkdown(() => md.render(text), text)
+export const renderMarkdown = (text: string, plans?: PlanFolds) => mountMarkdown(() => md.render(text, { plans }), text)
 
 // A user prompt's @mentions become clickable links. The lookbehind requires a word
 // boundary before the @ so an email's @ (foo@bar.com) isn't mistaken for a mention.

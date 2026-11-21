@@ -6,7 +6,9 @@ import { isAlive } from '../serve/serverRegistry.js'
 import { callerScope, sessionToWatch, sessionChildren, sessionStatus, sessionSlowMs } from '../../agents/core/server/childReport.js'
 import { sessionThreads } from '../../agents/core/server/board.js'
 import { sessionBackground } from '../../agents/core/server/tagIndex.js'
+import { sessionSchedule } from '../../agents/core/server/schedule.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
+import { latestProjection, scheduleEvents } from '../../agents/core/plan.js'
 import { childAdapters } from './status.js'
 
 const POLL_MS = 10_000
@@ -17,8 +19,8 @@ const TOOL = 'typebulb_babysit'
 /**
  * `typebulb babysit` — watch the calling session and stay silent until it needs the parent: a
  * sub-agent's idle stall, a call past the slow limit, a background call outliving its agent, a
- * failure streak (TB-Agent-Children.md), an agent past its time box, or the user's answer to an ask
- * (TB-Agent-Board.md). Then print what, one line each, and exit 0, which run in
+ * failure streak (TB-Agent-Children.md), an agent past its time box, the user's answer to an ask
+ * (TB-Agent-Board.md), or the plan parting from what runs (TB-Agent-Schedule.md). Then print what, one line each, and exit 0, which run in
  * the background is the parent's wake-up; it handles that and runs it again. A `slowMs` set is kept for
  * the session, and each poll reads it afresh, so a later `status --slow` applies. A condition fires once
  * while it lasts and again if it clears and comes back: what has fired is kept per session, so a
@@ -72,9 +74,11 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
     // A parent waiting on a background call of its own is woken when it ends, so it is not stalled
     // either. A call from before the live process started is dead (every child carries the session's start).
     const since = s.children[0]?.liveSince
-    const parentBusy = !!adapter.sessionsWorking?.(cwd)?.has(sessionId)
-      || s.live && sessionBackground(adapter, s.file).some(at => since === undefined || (at ?? 0) >= since)
+    const midTurn = !!adapter.sessionsWorking?.(cwd)?.has(sessionId)
+    const parentBusy = midTurn || s.live && sessionBackground(adapter, s.file).some(at => since === undefined || (at ?? 0) >= since)
     const events = babysitEvents(reports, Date.now(), parentBusy, sessionSlowMs(sessionId), threads)
+    const plan = latestProjection(sessionSchedule(adapter, cwd, s.file, s.children, s.live, Date.now()), Date.now())
+    if (plan) for (const [k, t] of scheduleEvents(plan, threads.some(t => t.state === 'open'), midTurn)) events.set(k, t)
     const fresh = [...events].filter(([key]) => !fired.includes(key))
     // A condition that has cleared leaves the list, so its return fires again. A fired stall stays
     // while the parent is busy: its turn handling the wake hides the stall without ending it, and

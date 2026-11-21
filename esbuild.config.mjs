@@ -60,7 +60,7 @@ await build({
 })
 
 // Agent mirror clients (TB-Agent-Mirror.md, TB-Pi.md): each agent's browser UI entry, bundled
-// self-contained (NO externals — katex/markdown-it/beautiful-mermaid/dompurify/highlight.js, the
+// self-contained (NO externals — katex/markdown-it/pele/dompurify/highlight.js, the
 // neutral `agents/client/` modules, and the internal `../../src/render.ts` they import are all
 // inlined). Served as a static asset by runAgentViewer. styles.css + index.html are the neutral chrome
 // (`agents/client/`), copied next to each agent's bundle — along with KaTeX's stylesheet and fonts —
@@ -267,7 +267,7 @@ const CORE_ENTRIES = {
 const FORBIDDEN_DEPS = [
   'typescript', 'monaco-editor',
   'hono', '@hono/node-server', 'open', 'chokidar',
-  'beautiful-mermaid', 'katex', 'markdown-it', 'dompurify', 'highlight.js', 'domeleon',
+  'pele', 'katex', 'markdown-it', 'dompurify', 'highlight.js', 'domeleon',
 ]
 function firewallBreach(input) {
   const p = input.replace(/\\/g, '/')

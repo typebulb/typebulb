@@ -11,6 +11,7 @@ import { entryEvents, sessionLive as sessionLiveOf, childState, transcriptIndex,
 import { lastEntryAt } from './sessions.js'
 import { sessionStatus } from './childReport.js'
 import { sessionThreads, saveAnswer } from './board.js'
+import { sessionSchedule } from './schedule.js'
 import { answerLine, type Answer, type AnswerChoice } from '../tags.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
@@ -870,6 +871,18 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
 
   // ── session picker ──
 
+  // ── the schedule (TB-Agent-Schedule.md) ──
+
+  // The attached session's plans, agents, context and checks lane; the client projects them at its own now.
+  async function schedule() {
+    if (!state.sessionId || !sessionFile) return { plans: [], agents: [], context: { points: [], pieces: 0 }, lanes: [] }
+    const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
+    const live = sessionLive()
+    return sessionSchedule(adapter, state.cwd, sessionFile, kids.map(c => ({ ...c, state: childState(c, live) })), live, Date.now())
+  }
+
+  // ── session picker ──
+
   // A session file's picker fields, re-read only when its mtime moves: every open re-read every
   // transcript, seconds in a project with hundreds. `at` is the row's time (lastEntryAt).
   const rowCache = new Map<string, { mtime: number; preview: string; at: number }>()
@@ -1037,5 +1050,5 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
   sweepStaleLocks(state.cwd)
   refreshActive()
 
-  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, board, answerAsk, shutdownComposer }
+  return { info, poll, logInlineStatus, listSessions, searchSessions, attach, listChildren, openChild, closeChild, composerSend, composerStop, composerNew, composerFiles, composerUiRespond, composerRpc, composerPaste, composerPasteRead, summarizeTurn, childStatus, board, answerAsk, schedule, shutdownComposer }
 }

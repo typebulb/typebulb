@@ -3,12 +3,14 @@ import { mkdtempSync, writeFileSync, appendFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { byAncestry } from '../agents/core/order.js'
-import { childDigest, editedFiles, commandsOf, notable, quietRuns, quietRunsLine, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, NO_GIT } from '../agents/core/childStatus.js'
+import { childDigest, editedFiles, commandsOf, notable, quietRuns, quietRunsLine, babysitEvents, fileTouches, sharedFiles, agentReport, statusText, overviewText, laneRuns, NO_GIT } from '../agents/core/childStatus.js'
 import { tagsIn, tagsOf, threadsOf, briefOf, splitAtAsks } from '../agents/core/tags.js'
-import { sessionTags, sessionBackground } from '../agents/core/server/tagIndex.js'
+import { sessionTags, sessionBackground, sessionPlanFacts } from '../agents/core/server/tagIndex.js'
 import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
 import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
+import { parseGantt, projectPlan, scheduleEvents, ganttFences, contextFacts, planLines, type AgentFact } from '../agents/core/plan.js'
+import { scheduleChart } from '../agents/core/client/gantt.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
@@ -240,6 +242,10 @@ describe('overviewText', () => {
     const t = fileTouches(d, 'C:/p'), shared = sharedFiles([{ id: 'cut', ...t }])
     const r = { ...agentReport({ id: 'cut', label: 'cut', file: '', mtime: 0, depth: 1, stopped: true, state: 'stopped' }, d, t, shared, new Map(), true), depth: 1 }
     const old = { ...agentReport({ id: 'old', label: 'old', file: '', mtime: 0, depth: 1, stopped: true, state: 'stopped' }, childDigest([brief]), nofiles, shared, new Map(), true), depth: 1 }
+    // A call a stopped agent left open ended with it: it never wakes as slow.
+    const open = childDigest([brief, { type: 'assistant', text: '', thinking: '', tools: [{ id: 'q', name: 'Bash', input: { command: 'npm test' } }], live: false, at: 0 }])
+    const cut2 = agentReport({ id: 'k', label: 'k', file: '', mtime: 0, depth: 1, stopped: true, state: 'stopped' }, open, nofiles, shared, new Map(), true)
+    expect([...babysitEvents([cut2], 60 * 60_000).keys()].filter(k => k.startsWith('slow'))).toEqual([])
     const text = overviewText('s', [r, old], checkFiles([r, old], shared, NO_GIT), 3 * min)
     expect(text).toMatch(/\n {2}a\.ts {2}"cut" \(stopped\)\n/)
     expect(text).toMatch(/\n {2}cut {2}stopped/)
@@ -443,5 +449,110 @@ describe('tags', () => {
     expect(sessionBackground(adapter, file)).toEqual([Date.parse(at)])
     appendFileSync(file, line({ uuid: 'n', type: 'attachment', timestamp: at, attachment: { type: 'queued_command', prompt: '<task-notification><tool-use-id>x</tool-use-id><status>completed</status></task-notification>' } }))
     expect(sessionBackground(adapter, file)).toEqual([])
+  })
+})
+
+describe('plan', () => {
+  const at = (h: number, m: number) => new Date(2026, 10, 21, h, m).getTime()
+  const MIN = 60_000
+  const gantt = [
+    'gantt', '  dateFormat HH:mm', '  %% cost b1 10k, pb 0', '  section Wave 1',
+    '  parser fix :pf, 16:20, 25m', '  grid rekey :gr, 16:20, 40m', '  section Land',
+    '  batch 1 :b1, after pf gr, 10m', '  put-back :pb, 20m', '  Target :milestone, end, 19:00, 0m'].join('\n')
+
+  it('reads bars, dependencies, the Target and the plan\'s costs; a time is the one nearest the post', () => {
+    const p = parseGantt(gantt, at(16, 0))
+    expect(p.errors).toEqual([])
+    expect(p.target).toBe(at(19, 0))
+    expect([...p.costs]).toEqual([['b1', 10_000], ['pb', 0]])
+    expect(parseGantt('gantt\n %% cost 20k\n a :x, 16:00, 5m', at(16, 0)).defaultCost).toBe(20_000)
+    // No Target: no fit test, no slack, and the status head names only the ETA.
+    const bare = projectPlan(parseGantt('gantt\n a :x, 16:00, 5m', at(16, 0)), 1, [], undefined, at(16, 1))
+    expect([bare.slack, bare.bars[0]!.fitsTime, planLines(bare)[0]]).toEqual([undefined, true, 'Plan v1, posted 1m ago: ETA 04:06 PM.'])
+    expect(p.bars.map(b => [b.title, b.start, b.end, b.deps])).toEqual([
+      ['parser fix', at(16, 20), at(16, 45), []], ['grid rekey', at(16, 20), at(17, 0), []],
+      ['batch 1', at(17, 0), at(17, 10), ['pf', 'gr']], ['put-back', at(17, 10), at(17, 30), ['b1']]])
+    // Two fields: an id and a duration when the first is no start; past midnight, the next day.
+    expect(parseGantt('gantt\n a :x, 23:50, 5m\n b :y, 30m', at(23, 40)).bars.map(b => [b.id, b.end - b.start])).toEqual([['x', 5 * MIN], ['y', 30 * MIN]])
+    expect(parseGantt('gantt\n a :x, 00:10, 5m', at(23, 40)).bars[0]!.start).toBe(at(23, 40) + 30 * MIN)
+  })
+
+  it('lays the agents over the plan: an overrun pushes what waits on it past the Target, and wakes', () => {
+    const plan = parseGantt(gantt, at(16, 0))
+    const agents: AgentFact[] = [
+      { id: 'a1', name: 'Parser: fix', state: 'done', started: at(16, 20), ended: at(16, 40) },
+      { id: 'a2', name: 'grid rekey', state: 'running', started: at(16, 30), boxMs: 30 * MIN, todos: { done: 1, total: 3 } },
+      { id: 'a3', name: 'stray work', state: 'running', started: at(16, 50) }]
+    // Context grown in a turn the plan started counts toward a task's cost; talk with the owner doesn't.
+    const points = [{ at: at(16, 10), tokens: 300_000, plan: false }, { at: at(16, 41), tokens: 400_000, plan: true }, { at: at(16, 45), tokens: 420_000, plan: false }]
+    const p = projectPlan(plan, 1, agents, contextFacts(points, agents), at(18, 50))
+    const [pf, gr, b1, pb] = p.bars
+    expect([pf!.state, gr!.state, gr!.late, b1!.state]).toEqual(['done', 'running', true, 'waiting'])
+    expect(b1!.pStart).toBe(at(18, 50))
+    expect(pb!.pEnd).toBe(at(19, 20))
+    expect([b1!.fitsTime, pb!.fitsTime]).toEqual([true, false])
+    // One finished task cost 100k; grid rekey takes that, the plan prices batch 1 at 10k and put-back at 0.
+    expect(p.context).toMatchObject({ used: 420_000, perTask: 100_000, needed: 110_000 })
+    // The schedule shows; only facts wake. A bar that doesn't fit is the chart's to show, not a wake.
+    expect([...scheduleEvents(p).keys()].sort()).toEqual(['plan-unplanned:a3'])
+    // Keyed to the bar, so a re-post of the same plan wakes nothing new.
+    expect([...scheduleEvents(projectPlan(plan, 2, agents, contextFacts(points, agents), at(18, 50))).keys()].sort())
+      .toEqual([...scheduleEvents(p).keys()].sort())
+    // The axis carries the context: measured up to now, projected after it in steps at the bars' ends.
+    const html = scheduleChart(p, [], points)
+    expect(html).toMatch(/<span class="gantt-tok" data-i="\d+" style="left:/)
+    expect(html).toMatch(/gantt-tok proj[^>]*>~530k</)
+    // The width lane: agents running as steps from the first one's start.
+    expect(html).toContain('Agents running, peak 2')
+    expect(html).toContain('data-tip="2 agents running, ')
+    // Agents no bar names are drawn too; a running agent's time box shows where it runs out.
+    expect(html).toContain('<div class="gantt-sec">Unplanned</div>')
+    expect(html).toContain('data-tip="Time box ends about ')
+    // The same projection as text, for the agent: the ends, a line per bar still to run, the rest counted.
+    const text = planLines(p, [{ id: 'c', label: 'core', who: 'orchestrator', at: at(18, 40), state: 'queued' }]).join('\n')
+    expect(text).toMatch(/^Plan v1, posted 2h 50m ago: ETA .*; Target .*\(20m past it\); context 420k now, ~530k at ETA \(priced by the plan; measured 100k a task over 1 finished\)\./)
+    expect(text).toMatch(/grid rekey +running, past its bar +/)
+    expect(text).toContain('todos 1 of 3')
+    expect(text).toMatch(/put-back +waiting, doesn't fit the Target +.*\(\+1h 50m\) +~530k at its end/)
+    expect(text).toContain('1 done: parser fix')
+    expect(text).toContain('Checks: core (orchestrator) queued 10m.')
+    expect(text).toContain('plan stale: 1 agent no bar names: stray work.')
+    // Mid-turn, the plan's place is the turn's last message: plan stale waits for the turn to end.
+    expect([...scheduleEvents(p, false, true).keys()]).not.toContain('plan-unplanned:a3')
+  })
+
+  it('marks a bar ready once its dependencies are done, and wakes past the grace unless an ask is open', () => {
+    const plan = parseGantt('gantt\n fix :f, 16:00, 10m\n land :l, after f, 10m', at(16, 0))
+    const agents: AgentFact[] = [{ id: 'a', name: 'fix', state: 'done', started: at(16, 0), ended: at(16, 10) }]
+    const p = projectPlan(plan, 2, agents, undefined, at(16, 20))
+    expect(p.bars[1]).toMatchObject({ state: 'ready', readySince: at(16, 10), pStart: at(16, 20) })
+    expect([...scheduleEvents(p).keys()]).toEqual(['plan-ready:land'])
+    expect([...scheduleEvents(p, true).keys()]).toEqual([])
+  })
+
+  it('finds only mermaid gantt fences in a reply', () => {
+    // A follow-up to a finished agent is a new job: its bar's clock restarts there, as a time box does.
+    const ev = (e: object) => e as Event
+    const d = childDigest([ev({ type: 'user', text: 'first job', at: 1000 }), ev({ type: 'assistant', text: 'done', thinking: '', tools: [], live: false, at: 2000 }),
+      ev({ type: 'turn_end', at: 2000 }), ev({ type: 'user', text: 'second job', at: 9000 })])
+    expect(d.runStart).toBe(9000)
+    const reply = ['text', '```mermaid', 'flowchart TB', 'a --> b', '```', '```mermaid', '%% note', 'gantt', ' a :x, 16:00, 5m', '```', '```js', 'gantt', '```'].join('\n')
+    expect(ganttFences(reply)).toEqual(['%% note\ngantt\n a :x, 16:00, 5m'])
+  })
+
+  it('reads a session transcript\'s plans, context after each response, and its own long runs', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tb-plan-')), 's.jsonl')
+    const line = (o: object) => JSON.stringify(o) + '\n'
+    const usage = { input_tokens: 10, output_tokens: 90, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 }
+    const plan = '```mermaid\ngantt\n  fix :f, 10:05, 20m\n```'
+    writeFileSync(file, line({ uuid: 'u1', parentUuid: null, type: 'user', timestamp: '2026-11-21T10:00:00Z', message: { role: 'user', content: 'go' } })
+      + line({ uuid: 'a1', parentUuid: 'u1', type: 'assistant', timestamp: '2026-11-21T10:01:00Z', message: { id: 'm1', role: 'assistant', usage, content: [{ type: 'text', text: `The plan:\n${plan}` }] } })
+      + line({ uuid: 'a2', parentUuid: 'a1', type: 'assistant', timestamp: '2026-11-21T10:02:00Z', message: { id: 'm2', role: 'assistant', usage, content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }] } })
+      + line({ uuid: 'r1', parentUuid: 'a2', type: 'user', timestamp: '2026-11-21T10:05:00Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } }))
+    const f = sessionPlanFacts(new ClaudeAdapter(), file)
+    expect(f.plans).toEqual([{ at: Date.parse('2026-11-21T10:01:00Z'), text: 'gantt\n  fix :f, 10:05, 20m' }])
+    expect(f.points.map(p => p.tokens)).toEqual([1100, 1100])
+    const runs = laneRuns(childDigest(f.calls).calls, Date.parse('2026-11-21T10:06:00Z'), true, true)
+    expect(runs).toMatchObject([{ label: 'Run the tests', state: 'passed', at: Date.parse('2026-11-21T10:02:00Z'), end: Date.parse('2026-11-21T10:05:00Z') }])
   })
 })

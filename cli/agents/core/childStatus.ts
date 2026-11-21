@@ -98,7 +98,7 @@ export function childDigest(events: Event[]) {
     }
   }
   const runStart = run.start ?? origin
-  return { calls, turnEnds, narration, lastAt, brief, boxMs: run.boxMs,
+  return { calls, turnEnds, narration, lastAt, brief, boxMs: run.boxMs, runStart,
     runMs: timeline(calls, wakes.filter(w => w > (runStart ?? -Infinity)), activity, runStart, lastAt).span,
     ...timeline(calls, wakes, activity, origin, lastAt) }
 }
@@ -201,6 +201,28 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
     }
   }).sort((a, b) => (b.latest.at ?? 0) - (a.latest.at ?? 0))
   return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), lookups, groups: all }
+}
+
+/** A shell run on the schedule's checks lane (TB-Agent-Schedule.md): one that went to the background
+ *  or ran past `minMs`. A background run still going reads as queued while its latest line says so. */
+export interface LaneRun { id: string; label: string; at: number; end?: number; state: 'queued' | 'running' | 'failed' | 'passed' }
+// Waits, not work: they run for as long as their watcher does.
+const WATCHER = /\btypebulb\S*\s+(babysit|wait)\b/
+
+/** The runs worth a lane. `running` is whether the agent that made them is: a foreground call it left
+ *  open has ended with it, and a background one with its session (`live`). */
+export function laneRuns(calls: Call[], now: number, live: boolean, running: boolean, readOutput?: (file: string) => string | undefined, minMs = 60_000): LaneRun[] {
+  const out: LaneRun[] = []
+  for (const c of calls) {
+    const cmd = commandOf(c)
+    if (c.at === undefined || !cmd || WATCHER.test(cmd)) continue
+    const r = runOf(c, readOutput)
+    if (!r || r.open && (!live || !c.background && !running)) continue
+    if (!c.background && (r.open ? now - c.at : r.ms ?? 0) < minMs) continue
+    out.push({ id: c.id, label: clip(asStr(c.input?.description) ?? '', 80) || label(c), at: c.at, end: r.open ? undefined : c.at + (r.ms ?? 0),
+      state: r.open ? (c.background && /queued/i.test(r.last || r.first) ? 'queued' : 'running') : r.failed ? 'failed' : 'passed' })
+  }
+  return out
 }
 
 /** "12 run, 2 failed, 41 lookups", the commands' one-line count. "lookups", not "reads": Files read
@@ -387,7 +409,8 @@ export function agentReport(c: ChildRow, d: Digest, touches: Touches, shared: Sh
   const open = d.calls
     .filter(x => !neverRan(x) && isOpen(x))
     .map(x => ({ id: x.id, label: label(x), short: clip(asStr(x.input?.description) ?? '', 80) || label(x), at: x.at, background: !!x.background,
-      interrupted: !live || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince), said: saidOf(runOf(x, readOutput)) }))
+      // A stopped agent's calls ended with it, as a dead process's did.
+      interrupted: !live || c.state === 'stopped' || (c.liveSince !== undefined && (x.at ?? 0) < c.liveSince), said: saidOf(runOf(x, readOutput)) }))
   const read = new Map<string, { path: string; times: number; at: number }>()
   for (const t of [...touches.reads, ...touches.shellReads].sort((x, y) => x.at - y.at)) {
     const r = read.get(t.path) ?? { path: t.path, times: 0, at: 0 }
@@ -567,13 +590,13 @@ export interface CheckFile { path: string; writers: { id: string; name: string; 
 /** The session's overview: whether anything is moving, the files to check, then a line for each agent
  *  that still asks something of the parent: running, failing, or a writer of a file to check. The rest
  *  fold into one count, stops named apart. A nested agent indents under the one that spawned it, when that one shows. */
-export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number, asks: string[] = []): string {
+export function overviewText(sessionId: string, agents: (StatusReport & { depth: number; parentId?: string })[], files: CheckFile[], now: number, lead: string[] = []): string {
   const moving = agents.filter(busy).length
   const newest = Math.max(0, ...agents.map(a => a.asOf))
   const out = [moving
     ? `Session ${sessionId}: ${moving} of ${agents.length} agents running.`
     : `Session ${sessionId}: No agent running for ${mins(now - newest)} (${agents.length} agents).`]
-  if (asks.length) out.push('', ...asks)
+  if (lead.length) out.push('', ...lead)
   if (files.length) {
     out.push('', 'Files to check before git add:')
     for (const f of files) out.push(`  ${f.path}  ${f.writers.map(w => `"${w.name}"${w.running ? ' (running)' : w.stopped ? ' (stopped)' : ''}`).join(', ')}${f.blind.length ? ' ⚠' : ''}`)

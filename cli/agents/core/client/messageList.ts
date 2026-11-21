@@ -1,7 +1,7 @@
 import { Component, div, span, a, img, pre, details, summary, type HValues } from 'domeleon'
 import { icon } from './icons.js'
 import type { ServerEvent, Tool, Msg, IRoot } from './types.js'
-import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain } from './markdown.js'
+import { renderMarkdown, userMarkdown, splitBulbSegments, mdPlain, type PlanFolds } from './markdown.js'
 import { CopyButton } from './copyButton.js'
 import { TurnView } from './turnView.js'
 import { InlineBulb } from './inlineBulb.js'
@@ -11,9 +11,10 @@ import { turnClassFor } from './util.js'
 import { asStr, displayPath, toolSummary, toolDisplayName } from '../format.js'
 import { stuckToBottom } from './ui.js'
 import { PASTE_DIR, PASTE_IMAGE_MIME, childName, childOpenTip } from '../events.js'
-import { tagsIn, splitAtAsks } from '../tags.js'
+import { tagsIn, splitAtAsks, type AskPart } from '../tags.js'
 import { chosenView } from './askActions.js'
 import { clock } from '../childStatus.js'
+import { ganttFences, planVersions } from '../plan.js'
 
 const PASTE_MENTION_RE = new RegExp(
   `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
@@ -146,6 +147,10 @@ function readable(m: Msg): boolean {
 // writes them to the JSONL.
 export class MessageList extends Component {
   messages: Msg[] = []
+  // Each message's plan fences (TB-Agent-Schedule.md), re-read only when its text changes, and their
+  // versions; the latest keys the messages holding one, so an older plan folds as a new one lands.
+  #plans = new WeakMap<Msg, { text: string; fences: string[] }>()
+  #planFolds: PlanFolds = { versions: new Map(), latest: 0 }
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedAgents = new Set<number>()               // sub-agent hand-back msg ids the user opened; they start folded
@@ -422,6 +427,7 @@ export class MessageList extends Component {
   // ===== Views =====
 
   view() {
+    this.#numberPlans()
     return div({
       class: 'messages',
       // Keyed, so a return from a view that held this slot (the board, the diff doc, a Status view)
@@ -803,7 +809,7 @@ export class MessageList extends Component {
   // open, the board's own answer row; answered or closed, the answer drawn as the button clicked, then
   // what settled it. A version since reworded points below, with no buttons. Only the session's own
   // asks: one a sub-agent wrote is answered from the board.
-  #askRow(ask: { id: string; text: string }) {
+  #askRow(ask: AskPart) {
     const t = this.parent.threads.find(x => x.id === ask.id)
     if (!t?.ask || t.ask.from) return null
     const head = (label: string) => div({ class: 'ask-row-head' }, `${label} · `, span({ class: 'cs-mono' }, ask.id))
@@ -812,20 +818,29 @@ export class MessageList extends Component {
     const closed = t.state === 'answered' ? undefined : t.latest
     return div({ class: 'ask-row settled' },
       head(closed ? closed.kind : `Answered ${clock(t.answer!.at)}`),
-      t.answer ? chosenView(t.answer) : null,
+      t.answer ? chosenView(t.answer, false) : null,
       div({ class: 'ask-row-closed' }, closed
         ? a({ class: 'cs-link', title: 'Show where it was settled', onClick: (e: MouseEvent) => { e.preventDefault(); if (closed.at) this.revealAt(closed.at, `[${ask.id}]`) } },
             closed.text.length > 140 ? closed.text.slice(0, 140) + '…' : closed.text)
         : 'Waiting for the orchestrator.'))
   }
 
-  // Assistant markdown, cut after each ask's paragraph so its row sits under the words that asked.
+  // Assistant markdown, cut around each ask's paragraph so the ask stands apart with its row under it.
   #prose(key: string, text: string, asks: boolean) {
-    if (!asks) return text.trim() ? [this.#mdDiv(key, renderMarkdown(text))] : []
+    if (!asks) return text.trim() ? [this.#mdDiv(key, renderMarkdown(text, this.#planFolds))] : []
     return splitAtAsks(text).flatMap((p, j) => [
-      p.md.trim() ? this.#mdDiv(`${key}-${j}`, renderMarkdown(p.md)) : null,
-      p.ask ? this.#askRow(p.ask) : null,
+      p.md.trim() ? this.#mdDiv(`${key}-${j}`, renderMarkdown(p.md, this.#planFolds)) : null,
+      ...p.ask ? this.#askBlock(`${key}-${j}`, p.ask) : [],
     ])
+  }
+
+  // The question in the ask tone, as the board's card shows it; the recommendation plain beneath it.
+  #askBlock(key: string, ask: AskPart) {
+    return [
+      div({ class: 'md ask-q', key: `${key}-q`, onMounted: renderMarkdown(`**Ask [${ask.id}]:** ${ask.question ?? ask.text}`) }),
+      ask.recommend ? this.#mdDiv(`${key}-r`, renderMarkdown(`**Recommend:** ${ask.recommend}`)) : null,
+      this.#askRow(ask),
+    ]
   }
 
   // The bubble's hover-revealed copy pill. A row preserves the container geometry for the action;
@@ -875,9 +890,10 @@ export class MessageList extends Component {
   // userMarkdown (clickable @mentions, merged sends), assistant text through renderMarkdown.
   #renderBody(msg: Msg) {
     const asks = !!msg.asks?.length
+    const key = this.#plansIn(msg).length ? `md-${msg.id}-p${this.#planFolds.latest}` : `md-${msg.id}`
     if (msg.body) {
       return msg.body.flatMap((seg, i) =>
-        typeof seg === 'string' ? this.#prose(`md-${msg.id}-${i}`, seg, asks) : this.#renderInline(seg))
+        typeof seg === 'string' ? this.#prose(`${key}-${i}`, seg, asks) : this.#renderInline(seg))
     }
     if (!msg.text) return null
     // A hand-back, or any turn in a child view, sits in a user bubble but is authored markup, not
@@ -886,7 +902,21 @@ export class MessageList extends Component {
     // markdown a model wrote (TB-Agent-Children.md). Headings, lists and tables there are meant.
     const user = msg.role === 'user' && !msg.agent && !msg.authored
     if (user) return this.#mdDiv(`md-${msg.id}`, userMarkdown(msg))
-    return asks ? this.#prose(`md-${msg.id}`, msg.text, true) : this.#mdDiv(`md-${msg.id}`, renderMarkdown(msg.text))
+    return asks ? this.#prose(key, msg.text, true) : this.#mdDiv(key, renderMarkdown(msg.text, this.#planFolds))
+  }
+
+  #plansIn(m: Msg): string[] {
+    if (m.role !== 'assistant' || !m.text) return []
+    const hit = this.#plans.get(m)
+    if (hit?.text === m.text) return hit.fences
+    const fences = ganttFences(m.text).map(f => f.trim())
+    this.#plans.set(m, { text: m.text, fences })
+    return fences
+  }
+
+  #numberPlans() {
+    const all = planVersions(this.messages.flatMap(m => this.#plansIn(m)).map(text => ({ text })))
+    this.#planFolds = { versions: new Map(all.map((p, i) => [p.text, i + 1])), latest: all.length }
   }
 
   // A live or lone inline bulb renders its app. A superseded one folds to a "<Name> — Version N" stub whose

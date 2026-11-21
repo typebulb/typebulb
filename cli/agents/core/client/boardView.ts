@@ -18,6 +18,8 @@ type Source = { onChange: () => void; reveal: (tag: Tag) => void; openChild: (id
 
 const isToday = (ms: number | undefined, now: number) => !!ms && new Date(ms).toDateString() === new Date(now).toDateString()
 const md = (key: string, text: string) => div({ class: 'md bd-md', key, onMounted: renderMarkdown(text) })
+// An ask's question, in the ask tone the transcript gives it too.
+const question = (key: string, text: string) => div({ class: 'md bd-md ask-q', key, onMounted: renderMarkdown(text) })
 
 export class BoardView extends Component {
   open = false
@@ -115,7 +117,9 @@ export class BoardView extends Component {
         t.version > 1 ? span({ class: 'cs-dim' }, `asked ${t.version} times`) : null,
         span({ class: waited >= LATE_ASK_MS ? 'cs-bad' : 'cs-dim' }, `waiting ${mins(waited)}`),
         this.#where(ask)),
-      md(`q-${t.id}-${t.version}`, ask.question || ask.text),
+      question(`q-${t.id}-${t.version}`, ask.question || ask.text),
+      // The transcript shows the recommendation in the ask's own paragraph; the card shows only the question.
+      ask.recommend ? md(`r-${t.id}-${t.version}`, `**Recommend:** ${ask.recommend}`) : null,
       this.#src!.asks.view(t))
   }
 
@@ -133,7 +137,7 @@ export class BoardView extends Component {
         span({ class: 'cs-mono' }, t.id),
         span({ class: 'bd-time' }, `answered ${clock(t.answer!.at)}`),
         this.#where(ask)),
-      md(`aq-${t.id}-${t.version}`, ask.question || ask.text),
+      question(`aq-${t.id}-${t.version}`, ask.question || ask.text),
       chosenView(t.answer!))
   }
 

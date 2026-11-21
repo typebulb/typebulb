@@ -51,17 +51,18 @@ html[data-theme="dark"] {
   color-scheme: dark;
 }
 
-/* Aliases for beautiful-mermaid, indirecting around a var-name collision with the
-   bulb's theme (see the renderMermaidSVG call). They still resolve to the live
-   theme at the use site. */
+/* pele's theme (the mermaid renderer, markdown.ts): its SVG reads these, so a theme flip restyles a
+   rendered diagram with no re-render. */
 :root {
-  --mm-bg: var(--bg);
-  --mm-fg: var(--fg);
-  --mm-line: var(--muted);
-  --mm-accent: var(--accent);
-  --mm-muted: var(--muted);
-  --mm-surface: var(--tool-bg);
-  --mm-border: var(--border);
+  --pele-bg: var(--bg);
+  --pele-fg: var(--fg);
+  --pele-muted: var(--muted);
+  --pele-line: var(--muted);
+  --pele-surface: var(--tool-bg);
+  --pele-surface-alt: color-mix(in srgb, var(--tool-bg), var(--fg) 8%);
+  --pele-border: var(--border);
+  --pele-accent: var(--accent);
+  --pele-font: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -181,13 +182,16 @@ body {
    session list). Wrap = positioning context; the popover anchors bottom/right and
    grows up-and-left — the chips sit in the right-aligned cluster, so left:0 would
    run them off the viewport's right edge. */
-.token-wrap, .sid-wrap, .servers-wrap, .model-wrap, .gitdiff-wrap, .children-wrap { position: relative; display: inline-block; }
+.token-wrap, .sid-wrap, .servers-wrap, .model-wrap, .gitdiff-wrap, .children-wrap, .board-wrap, .schedule-wrap { position: relative; display: inline-block; }
 /* Each pill renders its wrap unconditionally, emitting an empty div when it has
    nothing to show (no tokens / no session / nothing running). An empty wrap is
    still a flex child, so .statusbar-actions' gap lands on both its sides —
    doubling the visible gap between its neighbours. Collapse the empties so the
    cluster spaces evenly regardless of which pills are present. */
-.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty, .gitdiff-wrap:empty, .children-wrap:empty { display: none; }
+.token-wrap:empty, .sid-wrap:empty, .servers-wrap:empty, .model-wrap:empty, .gitdiff-wrap:empty, .children-wrap:empty, .board-wrap:empty, .schedule-wrap:empty { display: none; }
+/* The bar's word pills (tokens, session) pad as its glyph-and-count pills do (.gitdiff-pill), so every
+   chip carries the same side space around its content. */
+.statusbar-actions .token, .sid-wrap > .pill { padding: 0 .45rem; }
 .picker, .servers-pop {
   --menu-h: 428px;         /* one height for both statusbar menus — they sit side by side, so a
                               mismatched cap reads as a glitch; .picker grows to it, .servers-pop
@@ -1972,6 +1976,68 @@ a.agent-name:hover { text-decoration: underline; }
 .board-pill .pill-close { margin-left: .2rem; }
 .cs-tile.bd-waiting { color: var(--warn); font-weight: 600; }
 .cs-tile.bd-clear { color: var(--diff-add); }
+/* The schedule (TB-Agent-Schedule.md): its pill and header tiles, then the chart, which is HTML laid
+   out on percentages (client/gantt.ts): a label column, then a track per row. */
+/* A word pill led by an emoji, whose own side bearing is already space: its padding is thinner on the
+   emoji's side, as .children-pill's is. */
+.schedule-pill { padding: 0 .45rem 0 .25rem; }
+.schedule-pill .glyph-img { margin-right: .2rem; }
+.schedule-pill.bad { color: var(--warn); }
+.schedule-pill .pill-close { margin-left: .2rem; }
+.cs-tile.sc-eta { color: var(--fg); font-weight: 600; }
+.cs-tile.sc-ok { color: var(--diff-add); }
+.cs-tile.sc-bad { color: var(--warn); font-weight: 600; }
+.gantt-host { margin: .8rem 0 .4rem; }
+.gantt { --gl: 13rem; font-size: 14px; }
+.gantt-head, .gantt-row { display: grid; grid-template-columns: var(--gl) 1fr; }
+.gantt-axis { position: relative; height: 4.2rem; border-bottom: 1px solid var(--border); }
+/* The axis's rows named in the label column: the times, then the orchestrator's context under them. */
+.gantt-axis-names { display: flex; flex-direction: column; justify-content: flex-end; color: var(--muted); line-height: 1.4rem; text-transform: uppercase; letter-spacing: .04em; }
+.gantt-flags { position: absolute; inset: 0 0 auto 0; height: 1.4rem; }
+.gantt-tick, .gantt-flag, .gantt-tok { position: absolute; transform: translateX(-50%); white-space: nowrap; line-height: 1.4rem; }
+.gantt-tick { bottom: 1.4rem; color: var(--muted); }
+.gantt-tok { bottom: 0; }
+.gantt-tok.proj { color: var(--muted); }
+.gantt-flag { top: 0; font-weight: 600; }
+.gantt-flag.now { color: var(--accent); }
+.gantt-flag.target { color: var(--err); }
+.gantt-flag.eta { color: var(--diff-add); }
+.gantt-body { position: relative; }
+.gantt-marks { position: absolute; top: 0; bottom: 0; left: var(--gl); right: 0; pointer-events: none; }
+.gantt-grid, .gantt-mark { position: absolute; top: 0; bottom: 0; width: 0; }
+.gantt-grid { border-left: 1px solid var(--border); }
+.gantt-mark.now { border-left: 2px dashed var(--accent); }
+.gantt-mark.target { border-left: 2px solid var(--err); }
+.gantt-mark.eta { border-left: 2px solid var(--diff-add); }
+/* The slack before the Target, and the width lane: agents running as steps, an empty stretch shaded. */
+.gantt-slack { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--diff-add) 10%, transparent); }
+.gantt-width-track { height: 2.6rem; }
+/* One inset area the steps share, so every height, an idle stretch's full one included, rises from one floor. */
+.gantt-width-area { position: absolute; inset: .2rem 0; }
+.gantt-width { position: absolute; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.gantt-width.idle { background: color-mix(in srgb, var(--err) 20%, transparent); }
+.gantt-legend .gantt-swatch.gantt-width, .gantt-legend .gantt-swatch.gantt-slack { height: .9rem; }
+/* A running agent's time box: where it runs out, the stop limit beside the bar's expectation. */
+.gantt-box { position: absolute; top: .15rem; bottom: .15rem; width: 0; border-left: 2px solid var(--warn); }
+.gantt-legend .gantt-swatch.gantt-box { width: 0; height: .9rem; border-left: 2px solid var(--warn); }
+.gantt-sec { grid-column: 1 / -1; padding: .7rem 0 .15rem; font-weight: 600; color: var(--muted); }
+.gantt-row:hover { background: var(--veil); }
+.gantt-label { padding-right: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.9rem; }
+.gantt-row.has-agent .gantt-label { color: var(--accent); cursor: pointer; }
+.gantt-row.has-agent .gantt-label:hover { text-decoration: underline; }
+.gantt-track { position: relative; height: 1.9rem; }
+.gantt-bar, .gantt-ghost { position: absolute; top: .4rem; bottom: .4rem; }
+.gantt-ghost { border: 1px dashed var(--muted); }
+.gantt-bar { background: var(--accent); }
+.gantt-row.has-agent .gantt-bar { cursor: pointer; }
+.gantt-bar.v-done { background: color-mix(in srgb, var(--diff-add) 70%, transparent); }
+.gantt-bar.v-run { background: var(--accent); }
+.gantt-bar.v-wait { background: color-mix(in srgb, var(--muted) 35%, transparent); }
+.gantt-ms { position: absolute; top: 50%; width: .8rem; height: .8rem; transform: translate(-50%, -50%) rotate(45deg); background: var(--fg); }
+.gantt-ms.v-done { background: var(--diff-add); }
+.gantt-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; color: var(--muted); margin: .4rem 0 1rem; }
+.gantt-key { display: inline-flex; align-items: center; gap: .4rem; }
+.gantt-legend .gantt-swatch { position: static; display: inline-block; width: 1.6rem; height: .9rem; }
 /* A section heading in the colour of what it holds: the transcript ask card's bar and palette. The bar
    sits on the rows' outer edge (.cs-list's outset), the title stays on the text column. */
 .bd-h { border-left: 3px solid var(--tone); margin-left: -.4rem; padding-left: calc(.4rem - 3px); }
@@ -1999,7 +2065,7 @@ a.agent-name:hover { text-decoration: underline; }
 .bd-btn:disabled { opacity: .5; cursor: default; }
 /* The recommendation is the one free-text label, so it wraps rather than truncates: short, it stays
    a pill; long, it spans the row and the fixed choices drop below it. */
-.bd-btn.rec { --btn: var(--diff-add); border-color: var(--diff-add); color: var(--diff-add); font-weight: 600; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.bd-btn.rec { --btn: var(--diff-add); border-color: var(--diff-add); color: var(--diff-add); font-weight: 600; }
 .bd-btn.later { border-style: dashed; color: var(--muted); }
 .bd-btn.chosen { animation: bd-fill .35s ease-out; }
 .bd-btn.rec.chosen { background: var(--diff-add); color: var(--bg); }
@@ -2007,6 +2073,10 @@ a.agent-name:hover { text-decoration: underline; }
 @keyframes bd-fill { from { background: var(--bg); color: var(--btn); } }
 /* A note is the owner's own words, so it gets the filled look too: a reply bubble beside any pill. */
 .bd-chosen-note { --btn: var(--fg); padding: .15rem .65rem; border-radius: 6px; background: color-mix(in srgb, var(--fg) 8%, var(--bg)); animation: bd-fill .35s ease-out; }
+/* What an accept accepted, beside its filled button: text that wraps, not a label that grows. */
+.bd-chosen-rec { flex: 1 1 16rem; min-width: 0; }
+.bd-chosen-rec > :first-child { margin-top: 0; }
+.bd-chosen-rec > :last-child { margin-bottom: 0; }
 .bd-note { display: flex; gap: .4rem; flex: 1 1 16rem; min-width: 0; }
 .bd-input { flex: 1; min-width: 0; font: inherit; font-size: .9rem; padding: .15rem .5rem; border-radius: 6px; border: 1px solid var(--border); background: Canvas; color: CanvasText; }
 .bd-q { flex: 1 1 20rem; min-width: 0; overflow-wrap: anywhere; }
@@ -2018,6 +2088,8 @@ a.agent-name:hover { text-decoration: underline; }
 .ask-row.settled { --ask: var(--diff-add); }
 .ask-row.stale { --ask: var(--muted); }
 .ask-row-head { color: var(--ask); font-weight: 600; font-size: .9rem; }
+/* An ask's question, in the transcript and on the board's cards: the ask tone, so it stands out from the prose. */
+.ask-q { color: var(--warn); }
 .ask-row .bd-actions { margin-top: .35rem; }
 .bd-chosen .bd-btn { pointer-events: none; }
 .ask-row-closed { margin-top: .3rem; color: var(--muted); }
@@ -2067,6 +2139,15 @@ a.agent-name:hover { text-decoration: underline; }
    (equal specificity, later in source) and the stub actually gets its breathing room. */
 .md .bulb-fold { margin: .7rem 0; }
 .bulb-fold:hover { background: color-mix(in srgb, var(--fg) 8%, var(--panel)); }
+/* A superseded plan (TB-Agent-Schedule.md): the same stub, as a native disclosure inside the markdown,
+   so none of the allowlisted <details> box applies. */
+.md details.plan-fold { margin: 0; padding: 0; background: none; border: 0; }
+.plan-fold > summary { list-style: none; }
+.plan-fold > summary::-webkit-details-marker { display: none; }
+.md .plan-fold > summary:hover { color: var(--fold-marker); }
+.plan-fold[open] > summary .caret-tri { transform: rotate(90deg); }
+/* A plan's bars read best square: pele's gantt here, the schedule's own chart below. */
+.mermaid .pele-gantt { --pele-radius: 0; }
 /* Verb + summary are inline siblings sharing one line box and font, so they sit
    on a common baseline. Ellipsis truncation lives on the wrapper, not the
    children — overflow:hidden on the summary itself skews its baseline. */

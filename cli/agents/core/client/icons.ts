@@ -47,7 +47,7 @@ export type IconName = keyof typeof icons | keyof typeof custom
 
 // Inject currentColor only when the root svg has no fill of its own (a stroke icon carries
 // fill="none"; duplicating the attribute would override it — first occurrence wins in HTML).
-const svgFor = (name: IconName): string => {
+export const svgFor = (name: IconName): string => {
   const s = (custom as Record<string, string>)[name] ?? iconSvgs[(icons as Record<string, string>)[name] ?? ''] ?? ''
   return /<svg[^>]*\bfill=/.test(s) ? s : s.replace('<svg ', '<svg fill="currentColor" ')
 }

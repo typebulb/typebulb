@@ -1,5 +1,6 @@
 import type { ComposerRecipe, RecipeCtx } from '../../core/client/types.js'
-import { formatTokens, truncate } from '../../core/client/util.js'
+import { truncate } from '../../core/client/util.js'
+import { formatTokens } from '../../core/format.js'
 
 // Pi's palette recipe table (TB-Agent-Composer-Toolkit.md Piece 5): the built-in TUI commands re-homed as
 // dialog-driven RPC sequences, because pi's RPC mode does not execute them from prompt text (rpc.md:

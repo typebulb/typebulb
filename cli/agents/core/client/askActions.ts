@@ -1,18 +1,24 @@
 import { div, span, button, input, type VElement } from 'domeleon'
 import type { Answer, AnswerChoice, TagThread } from '../tags.js'
+import { renderMarkdown } from './markdown.js'
 
 // An open ask's answer row (TB-Agent-Board.md), one copy for the board's cards and the transcript's
 // replies, so the two never drift. The note being typed, a send in flight and a refused answer's
 // reason are kept per ask id, so a note started in one place is still there in the other.
 
 const LATER = { todo: 'Leave as todo', discuss: 'Discuss' } as const
+// The recommendation itself is text beside the buttons, never their label: a long one grew the button
+// into a block of several lines.
+const ACCEPT = '✓ Accept'
 
 /** A recorded answer drawn as the button that was clicked, filled and checked: outline is an option,
- *  filled is chosen, so an answered ask still looks like its ask and plainly changed state. */
-export function chosenView(a: Answer): VElement {
+ *  filled is chosen, so an answered ask still looks like its ask and plainly changed state. On the board
+ *  an accept carries what was accepted beside it; the transcript has it just above, in the ask itself. */
+export function chosenView(a: Answer, withRecommend = true): VElement {
   return span({ class: 'bd-actions bd-chosen' },
-    a.choice === 'accept' ? span({ class: 'bd-btn rec chosen' }, `✓ ${a.recommend ?? ''}`)
-      : a.choice === 'todo' || a.choice === 'discuss' ? span({ class: 'bd-btn later chosen' }, `✓ ${LATER[a.choice]}`) : null,
+    a.choice === 'accept' ? span({ class: 'bd-btn rec chosen' }, '✓ Accepted') : null,
+    a.choice === 'accept' && a.recommend && withRecommend ? span({ class: 'md bd-chosen-rec', key: `rec-${a.at}`, onMounted: renderMarkdown(a.recommend) }) : null,
+    a.choice === 'todo' || a.choice === 'discuss' ? span({ class: 'bd-btn later chosen' }, `✓ ${LATER[a.choice]}`) : null,
     a.note ? span({ class: 'bd-chosen-note' }, `“${a.note}”`) : null)
 }
 
@@ -47,7 +53,7 @@ export class AskActions {
     const send = (choice: AnswerChoice) => () => void this.answer(t, choice)
     return div({ class: 'bd-answer' },
       div({ class: 'bd-actions', role: 'group', ariaLabel: `answer ${t.id}` },
-        ask.recommend ? button({ class: 'bd-btn rec', disabled: busy, title: 'Accept the recommendation', onClick: send('accept') }, ask.recommend) : null,
+        ask.recommend ? button({ class: 'bd-btn rec', disabled: busy, title: `Accept: ${ask.recommend}`, onClick: send('accept') }, ACCEPT) : null,
         button({ class: 'bd-btn later', disabled: busy, title: 'Not now: park it as a todo', onClick: send('todo') }, LATER.todo),
         button({ class: 'bd-btn later', disabled: busy, title: 'Take it to the chat', onClick: send('discuss') }, LATER.discuss),
         span({ class: 'bd-note' },
