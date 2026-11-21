@@ -53,7 +53,7 @@ export class BoardView extends Component {
     if (!d) return div({ class: 'messages child-status board', key: 'board' },
       div({ class: 'child-status-pending' }, this.#error || 'Loading…'))
     const now = Date.now()
-    const open = d.threads.filter(t => t.state === 'open').sort((x, y) => (x.ask?.at ?? 0) - (y.ask?.at ?? 0))
+    const open = d.threads.filter(t => t.state === 'open').sort((x, y) => (y.ask?.at ?? 0) - (x.ask?.at ?? 0))
     const answered = d.threads.filter(t => t.state === 'answered')
     const settled = d.threads.filter(t => (t.state === 'decided' || t.state === 'done') && isToday(t.latest.at, now))
     const todos = d.threads.filter(t => t.state === 'todo')

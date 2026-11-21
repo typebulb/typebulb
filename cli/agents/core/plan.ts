@@ -67,6 +67,24 @@ function when(s: string, postedAt: number): number | undefined {
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] ?? 0), Number(m[5] ?? 0)).getTime() : undefined
 }
 
+/** A gantt as a mermaid renderer should draw it: mermaid reads `dateFormat HH:mm` times all on one day, so a
+ *  plan crossing midnight drew its later bars a day early. Each time gets its date by `when`'s rule. */
+export function datedGantt(text: string, postedAt: number): string {
+  const lines = text.split('\n')
+  const fmt = lines.findIndex(l => /^\s*dateFormat\s+H{1,2}:mm\s*$/i.test(l))
+  if (fmt < 0) return text
+  const p = (n: number) => String(n).padStart(2, '0')
+  const dated = (s: string) => { const d = new Date(when(s, postedAt)!); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` }
+  const out = lines.map((l, i) => {
+    const line = l.trim(), colon = l.indexOf(':')
+    if (i === fmt) return l.replace(/dateFormat\s+\S+/i, 'dateFormat YYYY-MM-DD HH:mm')
+    if (colon < 0 || line.startsWith('%%') || IGNORED.test(line) || /^section\s/i.test(line)) return l
+    return l.slice(0, colon + 1) + l.slice(colon + 1).split(',').map(f => f.replace(/^(\s*)(\d{1,2}:\d{2})(\s*)$/, (_, a, t, b) => a + dated(t) + b)).join(',')
+  })
+  if (!lines.some(l => /^\s*axisFormat\b/i.test(l))) out.splice(fmt + 1, 0, lines[fmt]!.replace(/dateFormat.*/i, 'axisFormat %H:%M'))
+  return out.join('\n')
+}
+
 /** A gantt's bars, in mermaid's grammar: `title :tags, id, start, end`, where the start is a time or
  *  `after a b` and the end a duration, a time or `until a`. Two fields read as start and end, or as an
  *  id and a duration where the first is neither a time nor `after`. */

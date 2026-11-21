@@ -13,6 +13,7 @@ import hljsPython from 'highlight.js/lib/languages/python'
 import hljsBash from 'highlight.js/lib/languages/bash'
 import hljsYaml from 'highlight.js/lib/languages/yaml'
 import { tryParseBulb, findUnfencedBulbs } from '../../../src/render.js'
+import { datedGantt } from '../plan.js'
 import type { Msg } from './types.js'
 import { svgFor } from './icons.js'
 
@@ -307,8 +308,9 @@ function decodeHtmlEntities(s: string): string {
 
 // ```mermaid``` fences render to inline SVG. A parse error falls through to the
 /** The transcript's plans (TB-Agent-Schedule.md), numbered by fence text: a gantt a later plan supersedes
- *  folds to the inline bulb's stub, so only the latest stands open. Passed through markdown-it's env. */
-export interface PlanFolds { versions: Map<string, number>; latest: number }
+ *  folds to the inline bulb's stub, so only the latest stands open. `at` is when each was first posted,
+ *  which dates its times of day. Passed through markdown-it's env. */
+export interface PlanFolds { versions: Map<string, number>; latest: number; at: Map<string, number> }
 
 // ```mermaid``` fences render to inline SVG. A parse error falls through to the
 // default code-block rendering, so an unsupported diagram degrades to readable
@@ -349,10 +351,11 @@ md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
   }
   if (lang === 'mermaid') {
     try {
-      // Themed by the --pele-* variables on .mermaid (styles.css), so a theme flip needs no re-render.
-      const { svg } = renderMermaid(decodeHtmlEntities(t.content), { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' })
-      const html = `<div class="mermaid copyable">${svg}${copyButton(t.content)}</div>`
       const plans = (env as { plans?: PlanFolds } | undefined)?.plans
+      const src = decodeHtmlEntities(t.content)
+      // Themed by the --pele-* variables on .mermaid (styles.css), so a theme flip needs no re-render.
+      const { svg } = renderMermaid(datedGantt(src, plans?.at.get(t.content.trim()) ?? Date.now()), { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' })
+      const html = `<div class="mermaid copyable">${svg}${copyButton(t.content)}</div>`
       const v = plans?.versions.get(t.content.trim())
       return v === undefined || v >= plans!.latest ? html
         : `<details class="plan-fold"><summary class="bulb-fold"><span class="icon caret-tri">${svgFor('caret')}</span>`

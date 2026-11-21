@@ -150,7 +150,7 @@ export class MessageList extends Component {
   // Each message's plan fences (TB-Agent-Schedule.md), re-read only when its text changes, and their
   // versions; the latest keys the messages holding one, so an older plan folds as a new one lands.
   #plans = new WeakMap<Msg, { text: string; fences: string[] }>()
-  #planFolds: PlanFolds = { versions: new Map(), latest: 0 }
+  #planFolds: PlanFolds = { versions: new Map(), latest: 0, at: new Map() }
   openTools = new Set<string>()                    // tool ids whose body is expanded
   expandedForks = new Set<number>()                // fork-stub msg ids whose abandoned branch the user expanded
   expandedAgents = new Set<number>()               // sub-agent hand-back msg ids the user opened; they start folded
@@ -915,8 +915,10 @@ export class MessageList extends Component {
   }
 
   #numberPlans() {
-    const all = planVersions(this.messages.flatMap(m => this.#plansIn(m)).map(text => ({ text })))
-    this.#planFolds = { versions: new Map(all.map((p, i) => [p.text, i + 1])), latest: all.length }
+    const all = planVersions(this.messages.flatMap(m => this.#plansIn(m).map(text => ({ text, at: m.at }))))
+    const at = new Map<string, number>()
+    for (const p of all) if (p.at !== undefined && !at.has(p.text)) at.set(p.text, p.at)
+    this.#planFolds = { versions: new Map(all.map((p, i) => [p.text, i + 1])), latest: all.length, at }
   }
 
   // A live or lone inline bulb renders its app. A superseded one folds to a "<Name> — Version N" stub whose

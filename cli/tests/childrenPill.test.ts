@@ -9,7 +9,7 @@ import { sessionTags, sessionBackground, sessionPlanFacts } from '../agents/core
 import { ClaudeAdapter } from '../agents/claude/server/adapter.js'
 import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
-import { parseGantt, projectPlan, scheduleEvents, ganttFences, contextFacts, planLines, type AgentFact } from '../agents/core/plan.js'
+import { parseGantt, projectPlan, scheduleEvents, ganttFences, contextFacts, planLines, datedGantt, type AgentFact } from '../agents/core/plan.js'
 import { scheduleChart } from '../agents/core/client/gantt.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
@@ -475,6 +475,9 @@ describe('plan', () => {
     // Two fields: an id and a duration when the first is no start; past midnight, the next day.
     expect(parseGantt('gantt\n a :x, 23:50, 5m\n b :y, 30m', at(23, 40)).bars.map(b => [b.id, b.end - b.start])).toEqual([['x', 5 * MIN], ['y', 30 * MIN]])
     expect(parseGantt('gantt\n a :x, 00:10, 5m', at(23, 40)).bars[0]!.start).toBe(at(23, 40) + 30 * MIN)
+    // Rendered, each time carries its date, so mermaid draws the after-midnight bar after the one before it.
+    expect(datedGantt('gantt\ndateFormat HH:mm\na :a1, 23:47, 8m\nb :c1, 00:02, 2m', at(23, 48)))
+      .toBe('gantt\ndateFormat YYYY-MM-DD HH:mm\naxisFormat %H:%M\na :a1, 2026-11-21 23:47, 8m\nb :c1, 2026-11-22 00:02, 2m')
   })
 
   it('lays the agents over the plan: an overrun pushes what waits on it past the Target, and wakes', () => {
