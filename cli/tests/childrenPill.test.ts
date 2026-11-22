@@ -12,6 +12,7 @@ import { checkFiles } from '../agents/core/server/childReport.js'
 import { parseGantt, projectPlan, scheduleEvents, ganttFences, contextFacts, planLines, datedGantt, type AgentFact } from '../agents/core/plan.js'
 import { scheduleChart } from '../agents/core/client/gantt.js'
 import { machineLine } from '../agents/core/server/machine.js'
+import { inProject, processLabel } from '../agents/core/server/processes.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
@@ -342,6 +343,12 @@ describe('babysitEvents', () => {
 
     const bg = babysitEvents([agent('a', 'done', [call('b1', 'Bash', { command: 'sleep 900' }, 0), result('b1', 'Command running in background', 0, { background: true })])], 11 * min)
     expect(bg.get('background:b1')).toMatch(/finished, background call running 11m/)
+
+    // A failure streak wakes once its agent has stopped: a working agent retries its own check.
+    const fails = [call('f1', 'Bash', { command: 'npm test' }, 0), result('f1', 'Exit code 1', min, { isError: true, exit: 1 }),
+      call('f2', 'Bash', { command: 'npm test' }, min), result('f2', 'Exit code 1', 2 * min, { isError: true, exit: 1 })]
+    expect([...babysitEvents([agent('a', 'running', fails)], 3 * min, true).keys()]).toEqual([])
+    expect([...babysitEvents([agent('a', 'done', fails)], 3 * min, true).keys()]).toEqual(['streak:a:npm test'])
   })
 
   // A project whose suite takes 6 minutes sets its own slow limit; running it doesn't wake.
@@ -504,22 +511,35 @@ describe('plan', () => {
       .toEqual([...scheduleEvents(p).keys()].sort())
     // The axis carries the context: measured up to now, projected after it in steps at the bars' ends.
     // Commands: one still running always shows; a finished one only when it spans enough of the chart.
-    const html = scheduleChart(p, [{ id: 'c', label: 'core', who: 'orchestrator', at: at(18, 40), state: 'running' },
+    const html = scheduleChart(p, { points, lanes: [{ id: 'c', label: 'core', who: 'orchestrator', at: at(18, 40), state: 'running' },
       { id: 'b', label: 'build', who: 'orchestrator', at: at(17, 0), end: at(17, 30), state: 'passed' },
-      { id: 'g', label: 'git log', who: 'orchestrator', at: at(17, 0), end: at(17, 1), state: 'passed' }], points,
-      { samples: [{ at: at(17, 0), to: at(17, 10), cpu: 0.9, mem: 0.25 }, { at: at(17, 10), to: at(17, 20), cpu: 0.3, mem: 0.5 }], memTotal: 64 * 2 ** 30 })
+      { id: 'g', label: 'git log', who: 'orchestrator', at: at(17, 0), end: at(17, 1), state: 'passed' }],
+      machine: { samples: [{ at: at(17, 0), to: at(17, 10), cpu: 0.9, mem: 0.25 }, { at: at(17, 10), to: at(17, 20), cpu: 0.3, mem: 0.5 }], memTotal: 64 * 2 ** 30 },
+      processes: [{ pid: 7, label: 'engine/main.mjs', cmd: 'node engine/main.mjs', start: at(18, 20), to: at(18, 50), peakMb: 910, peakCpu: 0.4, open: true,
+        points: [{ at: at(18, 20), mb: 300, cpu: 0.4 }, { at: at(18, 30), mb: 910, cpu: 0.1 }, { at: at(18, 40), mb: 600, cpu: 0.2 }] }] })
     expect(html).toContain('orchestrator: core')
-    expect(html).toContain('orchestrator: build')
     expect(html).not.toContain('git log')
-    // The width lane and the commands share one heading, apart from the plan's sections.
-    expect(html.split('<div class="gantt-sec">Observed</div>').length).toBe(2)
+    // What finished over half an hour ago folds into one line, drawn when asked for.
+    expect(html).not.toContain('orchestrator: build')
+    expect(html).toContain('▸ 1 earlier, finished')
+    const opened = scheduleChart(p, { points, lanes: [{ id: 'b', label: 'build', who: 'orchestrator', at: at(17, 0), end: at(17, 30), state: 'passed' }] }, true)
+    expect(opened).toContain('orchestrator: build')
+    // The gauges (agents running, CPU, memory) head apart from the runs that start and end.
+    expect(html.split('<div class="gantt-sec">Load</div>').length).toBe(2)
+    expect(html.split('<div class="gantt-sec">Commands</div>').length).toBe(2)
     // The machine's load, each row labelled with its peak.
-    expect(html).toContain('CPU, peak 90%')
-    expect(html).toContain('Memory, peak 32 of 64 GB')
+    // A gauge's figure is now; these samples ended long before, so it's unknown, and the tip keeps the peak.
+    expect(html).toMatch(/title="peak 90%">–<\/span>CPU/)
+    expect(html).toMatch(/title="peak 32\/64 GB">–<\/span>Memory/)
+    // A process carries its memory and CPU as two lines over its bar, its peaks in the label.
+    expect(html).toContain('<div class="gantt-sec">Processes <span class="gantt-sec-note">· this project\'s, over 500 MB or 10% CPU</span></div>')
+    expect(html).toMatch(/>910 MB 40%<\/span>engine\/main\.mjs/)
+    expect(html).toMatch(/<polyline class="mem" points="[^"]+"\/><polyline class="cpu"/)
+    expect(html).toMatch(/data-tip="[^"]+: 910 MB, 10% CPU"/)
     expect(html).toMatch(/<span class="gantt-tok" data-i="\d+" style="left:/)
     expect(html).toMatch(/gantt-tok proj[^>]*>~530k</)
     // The width lane: agents running as steps from the first one's start.
-    expect(html).toContain('Agents running, peak 2')
+    expect(html).toMatch(/title="peak 2">\d<\/span>Agents running/)
     expect(html).toContain('data-tip="2 agents running, ')
     // Agents no bar names are drawn too; a running agent's time box shows where it runs out.
     expect(html).toContain('<div class="gantt-sec">Unplanned</div>')
@@ -593,5 +613,14 @@ describe('plan', () => {
       if (was === undefined) delete process.env.TYPEBULB_SERVERS_DIR
       else process.env.TYPEBULB_SERVERS_DIR = was
     }
+  })
+
+  it('finds a project\'s processes by its folder on their command line, and names each by what it runs', () => {
+    expect(inProject('C:\\Code\\takeoff', 'node.exe C:\\Code\\takeoff\\tests\\x\\main.mjs --port 0')).toBe(true)
+    expect(inProject('C:\\Code\\takeoff', 'node --require c:/code/takeoff/node_modules/vitest/index.js')).toBe(true)
+    expect(inProject('C:\\Code\\takeoff', 'node C:\\Code\\takeoff-old\\main.mjs')).toBe(false)
+    expect(processLabel('node.exe C:\\Code\\takeoff\\engine-hosts\\51\\main.mjs --port 0')).toBe('51/main.mjs')
+    expect(processLabel('node --conditions node C:/Code/takeoff/node_modules/vitest/vitest.mjs run')).toBe('vitest')
+    expect(processLabel('"C:\\Program Files\\rg.exe" -n x C:\\Code\\takeoff')).toBe('rg.exe')
   })
 })

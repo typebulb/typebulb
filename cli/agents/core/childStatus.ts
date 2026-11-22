@@ -652,7 +652,8 @@ export function babysitEvents(agents: StatusReport[], now: number, parentBusy = 
       const left = a.state === 'finished' && o.background
       out.set(`${left ? 'background' : 'slow'}:${o.id}`, `${name(a.id)}: ${left ? 'finished, background call' : 'call'} running ${mins(now - (o.at ?? now))}: ${o.short}`)
     }
-    for (const g of a.commands.groups.filter(g => g.streak >= 2))
+    // Only once its agent has stopped: a working agent retries its own check and reports what it handles.
+    if (!busy(a)) for (const g of a.commands.groups.filter(g => g.streak >= 2))
       out.set(`streak:${a.id}:${g.cmd}`, `${name(a.id)}: failed ${g.streak} in a row: ${g.cmd}`)
   }
   return out

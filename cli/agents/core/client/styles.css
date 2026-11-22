@@ -2042,6 +2042,19 @@ a.agent-name:hover { text-decoration: underline; }
 .gantt-bar.v-done { background: color-mix(in srgb, var(--diff-add) 70%, transparent); }
 .gantt-bar.v-run { background: var(--accent); }
 .gantt-bar.v-wait { background: color-mix(in srgb, var(--muted) 35%, transparent); }
+/* A process's bar is quieter, so the two usage lines on it read: memory amber, CPU in the text colour. */
+.gantt-bar.gantt-proc { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.gantt-bar.gantt-proc.v-done { background: color-mix(in srgb, var(--diff-add) 22%, transparent); }
+.gantt-spark { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.gantt-spark polyline { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.gantt-spark .mem, .gantt-legend .gantt-swatch.gantt-mem { stroke: var(--warn); border-color: var(--warn); }
+.gantt-spark .cpu, .gantt-legend .gantt-swatch.gantt-cpu { stroke: var(--fg); border-color: var(--fg); }
+.gantt-legend .gantt-swatch.gantt-mem, .gantt-legend .gantt-swatch.gantt-cpu { height: 0; border-top: 2px solid; }
+.gantt-pt { position: absolute; top: 0; bottom: 0; }
+.gantt-fold .gantt-label { color: var(--muted); cursor: pointer; }
+.gantt-sec-note { font-weight: 400; color: var(--muted); }
+.gantt-num { display: inline-block; width: 10ch; margin-right: .7em; text-align: right; font-variant-numeric: tabular-nums; }
+.gantt-fold:hover .gantt-label { color: var(--fg); }
 .gantt-ms { position: absolute; top: 50%; width: .8rem; height: .8rem; transform: translate(-50%, -50%) rotate(45deg); background: var(--fg); }
 .gantt-ms.v-done { background: var(--diff-add); }
 .gantt-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; color: var(--muted); margin: .4rem 0 1rem; }

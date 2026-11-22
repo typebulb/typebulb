@@ -1,58 +1,61 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
 import { cpus, freemem, totalmem } from 'os'
-import { typebulbHome } from '../../../src/servers.js'
 import type { MachineFacts } from '../plan.js'
+import { windowFile } from './history.js'
 
-// The machine's load for the schedule (TB-Agent-Schedule.md): CPU and memory in use, sampled while a
-// mirror runs. The whole machine's, not any task's. Kept in one file per machine, so a restart keeps
-// the history; every mirror running appends to it.
+// The machine's load (TB-Agent-Schedule.md, TB-Agent-Babysit.md): CPU and memory in use, the whole
+// machine's, not any task's. Sampled while a mirror runs and kept in one file per machine, so a restart
+// keeps the history; babysit reads the figures itself for its alarm.
 
 const EVERY_MS = 10_000
 const WINDOW_MS = 12 * 60 * 60_000
 const MAX_POINTS = 400
 // Two mirrors sample the same machine; on loading, samples closer than this are one.
 const SAME_MS = EVERY_MS / 2
+// The alarm: past ALARM for ALARM_MS fires; it lasts until below ALARM_CLEAR.
+const ALARM = 0.9
+const ALARM_CLEAR = 0.8
+const ALARM_MS = 60_000
 
 type Sample = MachineFacts['samples'][number]
-const file = () => join(typebulbHome(), 'machine.jsonl')
-let samples: Sample[] = []
-let last: { at: number; idle: number; total: number } | undefined
-let timer: ReturnType<typeof setInterval> | undefined
+export type LoadKind = 'cpu' | 'mem'
+const KINDS: LoadKind[] = ['cpu', 'mem']
+const history = windowFile<Sample>('machine.jsonl', WINDOW_MS)
+const gb = (share: number) => Math.round(share * totalmem() / 2 ** 30)
+const pct = (v: number) => `${Math.round(v * 100)}%`
 
-// The file's last window, merged. A home that can't be read leaves the history to this run.
-function readSamples(now: number): Sample[] {
-  let lines: string[] = []
-  try { lines = readFileSync(file(), 'utf8').split('\n') } catch {}
-  const read = lines.flatMap(l => { try { return [JSON.parse(l) as Sample] } catch { return [] } })
-    .filter(s => s.at >= now - WINDOW_MS && s.to > s.at).sort((a, b) => a.at - b.at)
-  return read.filter((s, i) => i === 0 || s.at - read[i - 1]!.at >= SAME_MS)
-}
-
-// Rewritten on load, so the file doesn't grow past the window.
-function load(now: number) {
-  samples = readSamples(now)
-  try { mkdirSync(typebulbHome(), { recursive: true }); writeFileSync(file(), samples.map(s => JSON.stringify(s) + '\n').join('')) } catch {}
-}
-
-// Each sample is the share of CPU busy since the one before, from that one to now.
-function sample() {
-  const at = Date.now()
-  const t = cpus().reduce((n, c) => ({ idle: n.idle + c.times.idle, total: n.total + c.times.user + c.times.nice + c.times.sys + c.times.irq + c.times.idle }), { idle: 0, total: 0 })
-  if (last && t.total > last.total) {
-    const s = { at: last.at, to: at, cpu: 1 - (t.idle - last.idle) / (t.total - last.total), mem: 1 - freemem() / totalmem() }
-    samples.push(s)
-    try { appendFileSync(file(), JSON.stringify(s) + '\n') } catch {}
+/** The machine's CPU busy since the last reading and its memory in use, as shares of the whole. */
+function loadMeter(): () => Record<LoadKind, number> {
+  const times = () => cpus().reduce((n, c) => ({ idle: n.idle + c.times.idle, total: n.total + c.times.user + c.times.nice + c.times.sys + c.times.irq + c.times.idle }), { idle: 0, total: 0 })
+  let last = times()
+  return () => {
+    const t = times(), cpu = t.total > last.total ? 1 - (t.idle - last.idle) / (t.total - last.total) : 0
+    last = t
+    return { cpu, mem: 1 - freemem() / totalmem() }
   }
-  last = { at, ...t }
-  while (samples.length && samples[0]!.at < at - WINDOW_MS) samples.shift()
 }
+
+// Samples from the file, merged across mirrors, oldest first.
+function merged(rows: Sample[]): Sample[] {
+  const sorted = rows.filter(s => s.to > s.at).sort((a, b) => a.at - b.at)
+  return sorted.filter((s, i) => i === 0 || s.at - sorted[i - 1]!.at >= SAME_MS)
+}
+
+let samples: Sample[] = []
+let timer: ReturnType<typeof setInterval> | undefined
 
 export function startMachineSampler() {
   if (timer) return
-  load(Date.now())
-  sample()
-  timer = setInterval(sample, EVERY_MS)
+  samples = merged(history.load(Date.now()))
+  const meter = loadMeter()
+  let at = Date.now()
+  // Each sample spans the time since the one before.
+  timer = setInterval(() => {
+    const to = Date.now(), s = { at, to, ...meter() }
+    samples.push(s)
+    history.append([s])
+    while (samples.length && samples[0]!.at < to - WINDOW_MS) samples.shift()
+    at = to
+  }, EVERY_MS)
   timer.unref()
 }
 
@@ -71,9 +74,25 @@ export function machineFacts(): MachineFacts {
 
 /** The machine's load as `typebulb status` states it, from the file: '' while no mirror samples it. */
 export function machineLine(now: number): string {
-  const recent = readSamples(now).filter(s => s.to >= now - 30 * 60_000)
+  const recent = merged(history.read(now)).filter(s => s.to >= now - 30 * 60_000)
   const latest = recent.at(-1)
   if (!latest || latest.to < now - 60_000) return ''
-  const gb = (share: number) => Math.round(share * totalmem() / 2 ** 30)
-  return `Machine: CPU ${Math.round(latest.cpu * 100)}% now, peak ${Math.round(Math.max(...recent.map(s => s.cpu)) * 100)}% in the last 30 min; memory ${gb(latest.mem)} of ${gb(1)} GB.`
+  return `Machine: CPU ${pct(latest.cpu)} now, peak ${pct(Math.max(...recent.map(s => s.cpu)))} in the last 30 min; memory ${gb(latest.mem)} of ${gb(1)} GB.`
+}
+
+/** Babysit's machine alarm, read at each poll: which kinds fire, which have not yet cleared, and a
+ *  firing kind's line, finished by what the caller knows of the processes behind it. */
+export function machineAlarm() {
+  const meter = loadMeter()
+  const hot: Record<LoadKind, number | undefined> = { cpu: undefined, mem: undefined }
+  return (now: number) => {
+    const level = meter()
+    for (const k of KINDS) hot[k] = level[k] >= ALARM ? hot[k] ?? now : undefined
+    return {
+      firing: KINDS.filter(k => hot[k] !== undefined && now - hot[k]! >= ALARM_MS),
+      held: (k: LoadKind) => level[k] >= ALARM_CLEAR,
+      line: (k: LoadKind, behind: string) => `Machine: ${k === 'mem' ? `memory ${gb(level.mem)} of ${gb(1)} GB (${pct(level.mem)})` : `CPU ${pct(level.cpu)}`}`
+        + ` for ${Math.max(1, Math.round((now - hot[k]!) / 60_000))} min. ${behind}`,
+    }
+  }
 }

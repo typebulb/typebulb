@@ -278,8 +278,15 @@ export type Lane = LaneRun & { who: string }
  *  context, and the checks lane. */
 /** The machine's CPU and memory in use, as shares of the whole, each sample from `at` to `to`. */
 export interface MachineFacts { samples: { at: number; to: number; cpu: number; mem: number }[]; memTotal: number }
-// `machine` only from the mirror, which samples while it runs.
-export interface ScheduleFacts { plans: { at: number; text: string }[]; agents: AgentFact[]; context: ContextFacts; lanes: Lane[]; machine?: MachineFacts }
+/** When a project's process counts as heavy: past this memory, or this share of the CPU in two samples running. */
+export const HEAVY_MB = 500
+export const HEAVY_CPU = 0.10
+export const sizeText = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
+/** A heavy process whose command line names the project's folder: from its start to its last sighting,
+ *  `open` while the latest sample still saw it, with its memory (MB) and CPU share at each sighting. */
+export interface ProcessRun { pid: number; label: string; cmd: string; start: number; to: number; peakMb: number; peakCpu: number; open: boolean; points: { at: number; mb: number; cpu: number }[] }
+// `machine` and `processes` only from the mirror, which samples while it runs.
+export interface ScheduleFacts { plans: { at: number; text: string }[]; agents: AgentFact[]; context: ContextFacts; lanes: Lane[]; machine?: MachineFacts; processes?: ProcessRun[] }
 
 /** The plan's versions: a fence posted again word for word (a compaction carries a reply forward) is
  *  the same version. */

@@ -9,6 +9,8 @@ import { sessionBackground } from '../../agents/core/server/tagIndex.js'
 import { sessionSchedule } from '../../agents/core/server/schedule.js'
 import { babysitEvents } from '../../agents/core/childStatus.js'
 import { latestProjection, scheduleEvents } from '../../agents/core/plan.js'
+import { heavyProcesses, heavyText } from '../../agents/core/server/processes.js'
+import { machineAlarm, type LoadKind } from '../../agents/core/server/machine.js'
 import { childAdapters } from './status.js'
 
 const POLL_MS = 10_000
@@ -19,7 +21,7 @@ const TOOL = 'typebulb_babysit'
 /**
  * `typebulb babysit` — watch the calling session and stay silent until it needs the parent: a
  * sub-agent's idle stall, a call past the slow limit, a background call outliving its agent, a
- * failure streak (TB-Agent-Children.md), an agent past its time box, the user's answer to an ask
+ * failure streak, an agent past its time box (all in TB-Agent-Babysit.md), the user's answer to an ask
  * (TB-Agent-Board.md), or the plan parting from what runs (TB-Agent-Schedule.md). Then print what, one line each, and exit 0, which run in
  * the background is the parent's wake-up; it handles that and runs it again. A `slowMs` set is kept for
  * the session, and each poll reads it afresh, so a later `status --slow` applies. A condition fires once
@@ -61,6 +63,7 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
   console.error(`Babysitting session ${sessionId}: this exits with a line when a sub-agent or the user's answer needs you; run it again after handling that.`)
 
   const deadline = Date.now() + GIVE_UP_MS
+  const alarm = machineAlarm()
   while (Date.now() < deadline) {
     // Checked before any event, so a babysit nobody waits on never consumes one. Only another pid
     // counts: a missing lock is one the filesystem refused, and this one watches unlocked.
@@ -79,11 +82,24 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
     const events = babysitEvents(reports, Date.now(), parentBusy, sessionSlowMs(sessionId), threads)
     const plan = latestProjection(sessionSchedule(adapter, cwd, s.file, s.children, s.live, Date.now()), Date.now())
     if (plan) for (const [k, t] of scheduleEvents(plan, threads.some(t => t.state === 'open'), midTurn)) events.set(k, t)
-    const fresh = [...events].filter(([key]) => !fired.includes(key))
+
+    // The project's heavy processes, read only when a wake needs them: idle isn't idle while they run.
+    let heavy: Awaited<ReturnType<typeof heavyProcesses>> | undefined
+    const heaviest = async () => heavy ??= await heavyProcesses(cwd)
+    if (events.has('idle') && !fired.includes('idle') && (await heaviest()).length) events.delete('idle')
+    // The machine's load: a global fact, so it fires whatever the parent is doing, naming what's behind it.
+    const machine = alarm(Date.now())
+    for (const k of machine.firing) events.set(`machine:${k}`, fired.includes(`machine:${k}`) ? ''
+      : machine.line(k, (hs => hs.length ? `Heaviest in ${cwd}: ${heavyText(hs, 3)}.` : "None of it is this project's processes.")(await heaviest())))
+    const held = (key: string) => key.startsWith('machine:') && machine.held(key.slice(8) as LoadKind)
+    // What stays fired besides what still stands: an alarm not yet cleared.
+    const kept = (keys: string[]) => [...new Set([...keys, ...fired.filter(held)])]
+    // Answers lead: the highest-value event shouldn't sit among the others.
+    const fresh = [...events].filter(([key]) => !fired.includes(key)).sort(([a], [b]) => Number(b.startsWith('answer:')) - Number(a.startsWith('answer:')))
     // A condition that has cleared leaves the list, so its return fires again. A fired stall stays
     // while the parent is busy: its turn handling the wake hides the stall without ending it, and
     // dropping it there made every re-arm fire the same notice again.
-    if (!fresh.length) { fired = fired.filter(k => events.has(k) || k === 'idle' && parentBusy); save(fired) }
+    if (!fresh.length) { fired = fired.filter(k => events.has(k) || k === 'idle' && parentBusy || held(k)); save(fired) }
     else {
       const text = fresh.map(([, t]) => t).join('\n')
       if (adapter.wake) {
@@ -91,13 +107,13 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
         console.error(`detected ${new Date().toISOString()}`)
         try { await adapter.wake(sessionId, TOOL, text) } catch (e) {
           // Undelivered: left unfired, so the next run tries it again.
-          save([...events.keys()].filter(k => !fresh.some(([f]) => f === k)))
+          save(kept([...events.keys()].filter(k => !fresh.some(([f]) => f === k))))
           console.log(text)
           end(4, `Not delivered: ${e instanceof Error ? e.message : e}`)
         }
         console.error(`accepted ${new Date().toISOString()}`)
       }
-      save([...events.keys()])
+      save(kept([...events.keys()]))
       console.log(text)
       end(0)
     }

@@ -13,6 +13,7 @@ import { sessionStatus } from './childReport.js'
 import { sessionThreads, saveAnswer } from './board.js'
 import { sessionSchedule } from './schedule.js'
 import { machineFacts, startMachineSampler } from './machine.js'
+import { processFacts, watchProjectProcesses } from './processes.js'
 import { answerLine, type Answer, type AnswerChoice } from '../tags.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
@@ -90,6 +91,7 @@ interface State<E> {
  */
 export function createMirror<E>(adapter: AgentAdapter<E>) {
   startMachineSampler()
+  watchProjectProcesses(projectCwd)
   const state: State<E> = {
     cwd: projectCwd,
     sessionId: '',
@@ -880,7 +882,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!state.sessionId || !sessionFile) return { plans: [], agents: [], context: { points: [], pieces: 0 }, lanes: [] }
     const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
     const live = sessionLive()
-    return { ...sessionSchedule(adapter, state.cwd, sessionFile, kids.map(c => ({ ...c, state: childState(c, live) })), live, Date.now()), machine: machineFacts() }
+    return { ...sessionSchedule(adapter, state.cwd, sessionFile, kids.map(c => ({ ...c, state: childState(c, live) })), live, Date.now()), machine: machineFacts(), processes: processFacts(state.cwd) }
   }
 
   // ── session picker ──
