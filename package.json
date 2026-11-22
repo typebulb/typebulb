@@ -1,6 +1,6 @@
 {
   "name": "typebulb",
-  "version": "0.64.1",
+  "version": "0.64.2",
   "description": "Typebulb CLI to run single-file markdown apps called bulbs, either as standalone web apps or embedded in agent responses.",
   "keywords": [
     "bulb",
@@ -35,12 +35,6 @@
       "import": "./dist/render.js",
       "default": "./dist/render.js"
     },
-    "./servers": {
-      "types": "./dist/servers.d.ts",
-      "node": "./dist/servers.js",
-      "import": "./dist/servers.js",
-      "default": "./dist/servers.js"
-    },
     "./ai": {
       "types": "./dist/ai/index.d.ts",
       "default": "./dist/ai/index.js"
@@ -68,6 +62,8 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo",
     "SKILL.md"
   ],
   "scripts": {
@@ -80,13 +76,9 @@
     "prepublishOnly": "rimraf dist && tsc --build && node esbuild.config.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.1",
     "@sindresorhus/slugify": "3.0.0",
-    "chokidar": "^4.0.3",
     "es-module-lexer": "^1.7.0",
     "fflate": "^0.8.2",
-    "hono": "^4.7.5",
-    "lru-cache": "^11.2.2",
     "open": "^10.1.0",
     "p-limit": "^7.2.0",
     "resolve.exports": "^2.0.3",
@@ -96,14 +88,17 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@hono/node-server": "^1.14.1",
     "@types/katex": "^0.16.7",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.15.21",
     "@types/semver": "^7.7.0",
+    "chokidar": "^4.0.3",
     "domeleon": "^0.6.2",
     "dompurify": "^3.2.6",
     "esbuild": "^0.27.3",
     "highlight.js": "^11.10.0",
+    "hono": "^4.7.5",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
     "pele": "^1.13.0",

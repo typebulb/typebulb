@@ -511,7 +511,7 @@ function spawnDetached(command: string, args: string[], cwd: string): void {
   proc.unref()
 }
 
-/** This package's `bin` (`dist/index.js`), the sibling of this module (`dist/servers.js`). Public
+/** This package's `bin` (`dist/index.js`), the bundle this module is built into. Public
  *  (through `servers.ts`) because pi's extension spawns its session watcher off it — TB-Wait.md. */
 export function typebulbBinPath(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.js')

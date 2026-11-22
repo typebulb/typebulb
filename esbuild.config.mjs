@@ -20,12 +20,13 @@ await build({
   define: {
     __TYPEBULB_VERSION__: JSON.stringify(pkg.version),
   },
+  // External only what npm installs anyway (the core areas' runtime deps) and `open`, which spawns
+  // the xdg-open script it ships; everything else is bundled, so an install fetches fewer packages.
   external: [
-    'hono', '@hono/node-server',
     'sucrase',
-    'open', 'chokidar',
+    'open',
     'semver', 'es-module-lexer',
-    'fflate', 'lru-cache', 'p-limit', 'resolve.exports',
+    'fflate', 'p-limit', 'resolve.exports',
     // The agent mirror dynamically imports esbuild to rebuild its client bundle on a source
     // change (dev hot reload, repo only — see agentViewer/serve.ts). External so it resolves from
     // node_modules at runtime rather than being bundled (esbuild ships a native binary).
@@ -45,58 +46,40 @@ await build({
   minify: true,
 })
 
-// Node entry (the package's `exports["./servers"]`): the breakout server-management
-// capability (launch/list/stop). platform:'node' so it can spawn processes and touch
-// the registry — kept strictly separate from the browser entry above (Embed-spec
-// Invariant 6). Only node builtins, so nothing to externalize.
+// The agent mirror client (TB-Agent-Mirror.md, TB-Agent-Harness.md): ONE browser bundle for every
+// harness (`agents/client.ts` picks the harness at runtime; the per-harness code is a few pills), so
+// the package ships the shared UI once rather than once per harness. Self-contained (NO externals —
+// katex/markdown-it/pele/dompurify/highlight.js, the `agents/*/client/` modules, and the internal
+// `../src/render.ts` they import are all inlined). styles.css + index.html are the neutral chrome
+// (`agents/core/client/`), copied beside it with KaTeX's stylesheet and fonts, so runAgentViewer reads
+// them from `dist/agents/` at runtime. The server halves (`agents/<name>/server.ts`) need no copy:
+// they're bundled into `dist/index.js` (serve.ts's static import map).
 await build({
-  entryPoints: ['cli/src/servers.ts'],
+  entryPoints: ['cli/agents/client.ts'],
   bundle: true,
-  platform: 'node',
+  platform: 'browser',
   format: 'esm',
-  outfile: 'dist/servers.js',
+  outfile: 'dist/agents/client.js',
   minify: true,
-  banner: { js: nodeRequireBanner },
 })
-
-// Agent mirror clients (TB-Agent-Mirror.md, TB-Pi.md): each agent's browser UI entry, bundled
-// self-contained (NO externals — katex/markdown-it/pele/dompurify/highlight.js, the
-// neutral `agents/client/` modules, and the internal `../../src/render.ts` they import are all
-// inlined). Served as a static asset by runAgentViewer. styles.css + index.html are the neutral chrome
-// (`agents/client/`), copied next to each agent's bundle — along with KaTeX's stylesheet and fonts —
-// so runAgentViewer reads them from `dist/` at runtime and they ship via `files: ["dist"]`. The server
-// halves (`agents/<name>/server.ts`) need no copy: they're bundled into `dist/index.js` transitively
-// (serve.ts's static import map).
-const MIRROR_AGENTS = ['claude', 'codex', 'pi']
-for (const agent of MIRROR_AGENTS) {
-  await build({
-    entryPoints: [`cli/agents/${agent}/client/index.ts`],
-    bundle: true,
-    platform: 'browser',
-    format: 'esm',
-    outfile: `dist/agents/${agent}/client.js`,
-    minify: true,
-  })
-  mkdirSync(new URL(`./dist/agents/${agent}/`, import.meta.url), { recursive: true })
-  for (const asset of ['styles.css', 'index.html', 'typebulb.png', 'typebulb-inv.png']) {
-    copyFileSync(
-      new URL(`./cli/agents/core/client/${asset}`, import.meta.url),
-      new URL(`./dist/agents/${agent}/${asset}`, import.meta.url),
-    )
-  }
-  // KaTeX's stylesheet, self-hosted: on a CDN it was a render-blocking fetch in a localhost tool's
-  // critical path. Font URLs are absolutised to this agent's mount because page.ts inlines the css
-  // into <head>, where the file's own `fonts/` would resolve against `/`. woff2 only — it is
-  // universally supported, so the css's woff/ttf fallbacks are listed but never fetched.
-  const katexDist = new URL('./node_modules/katex/dist/', import.meta.url)
-  writeFileSync(
-    new URL(`./dist/agents/${agent}/katex.min.css`, import.meta.url),
-    readFileSync(new URL('katex.min.css', katexDist), 'utf8').replaceAll('url(fonts/', `url(/agents/${agent}/fonts/`),
+for (const asset of ['styles.css', 'index.html', 'typebulb.png', 'typebulb-inv.png']) {
+  copyFileSync(
+    new URL(`./cli/agents/core/client/${asset}`, import.meta.url),
+    new URL(`./dist/agents/${asset}`, import.meta.url),
   )
-  mkdirSync(new URL(`./dist/agents/${agent}/fonts/`, import.meta.url), { recursive: true })
-  for (const font of readdirSync(new URL('fonts/', katexDist)).filter(f => f.endsWith('.woff2'))) {
-    copyFileSync(new URL(`fonts/${font}`, katexDist), new URL(`./dist/agents/${agent}/fonts/${font}`, import.meta.url))
-  }
+}
+// KaTeX's stylesheet, self-hosted: on a CDN it was a render-blocking fetch in a localhost tool's
+// critical path. Font URLs are absolutised to the mirror's mount because page.ts inlines the css
+// into <head>, where the file's own `fonts/` would resolve against `/`. woff2 only — it is
+// universally supported, so the css's woff/ttf fallbacks are listed but never fetched.
+const katexDist = new URL('./node_modules/katex/dist/', import.meta.url)
+writeFileSync(
+  new URL('./dist/agents/katex.min.css', import.meta.url),
+  readFileSync(new URL('katex.min.css', katexDist), 'utf8').replaceAll('url(fonts/', 'url(/agents/fonts/'),
+)
+mkdirSync(new URL('./dist/agents/fonts/', import.meta.url), { recursive: true })
+for (const font of readdirSync(new URL('fonts/', katexDist)).filter(f => f.endsWith('.woff2'))) {
+  copyFileSync(new URL(`fonts/${font}`, katexDist), new URL(`./dist/agents/fonts/${font}`, import.meta.url))
 }
 
 // The shipped skill artifact (TB-Skill.md): SKILL.md at the package root — discovery frontmatter +
@@ -155,94 +138,6 @@ export declare function stripFrontmatter(source: string): string
 /** Structural problems a bulb's Markdown has (chiefly an unterminated fence that swallowed a block);
  *  one message per problem, empty when well-formed. */
 export declare function validateBulbStructure(content: string): string[]
-`)
-
-// Hand-authored .d.ts for the node `./servers` entry, same rationale as render.d.ts.
-writeFileSync(new URL('./dist/servers.d.ts', import.meta.url), `export interface BulbServer {
-  /** OS process id of the dev server. */
-  pid: number
-  /** Bound loopback port. */
-  port: number
-  /** http://localhost:<port>. */
-  url: string
-  /** Absolute path to the .bulb.md being served. */
-  file: string
-  /** The cwd the server was launched in (the project it belongs to). */
-  cwd?: string
-  /** Epoch ms the server began listening. */
-  startedAt: number
-  /** Launched with --trust (filesystem / AI / server.ts enabled)? */
-  trust?: boolean
-  /** Human label of a capability the proactive scan predicts this untrusted bulb will need
-   *  (set at register time; probabilistic, not enforcement). */
-  predicted?: string
-  /** Human label of a privileged capability this untrusted server denied (set by the gate). */
-  denied?: string
-}
-
-/** Launch (or re-attach to) a standalone \`typebulb\` dev server for \`file\`. Idempotent
- *  per file: a live server already serving it is returned, not re-spawned. Always silent
- *  (no console window); detached so it outlives the caller. \`trust\` passes --trust. */
-export declare function launchBulbServer(file: string, opts?: { cwd?: string; open?: boolean; trust?: boolean }): Promise<BulbServer>
-
-/** Every live dev server, oldest first. Dead entries are pruned on read. Pass \`cwd\` to scope the
- *  list to that project's bulbs (the machine-global default is for explicit pid/file targeting). */
-export declare function listBulbServers(cwd?: string): Promise<BulbServer[]>
-
-/** Stop a server by pid (SIGTERM + deregister). Idempotent. */
-export declare function stopBulbServer(pid: number): Promise<void>
-
-/** New console bytes of a server (its \`<pid>.log\`) since \`offset\`; returns the text and
- *  the new offset. A trim past the cap resyncs from 0. Absent file ⇒ empty. */
-export declare function readServerLog(pid: number, offset?: number): { text: string; offset: number }
-
-/** Absolute path of a server's console log, sibling of its registry entry. */
-export declare function serverLogPath(pid: number): string
-
-export interface BulbFileInfo {
-  /** Absolute path to the .bulb.md. */
-  path: string
-  /** The bulb's \`name:\` frontmatter title, or the filename stem when unnamed. */
-  name: string
-  /** File mtime (epoch ms); 0 if it vanished mid-walk. */
-  mtime: number
-}
-
-/** Every \`*.bulb.md\` under \`cwd\` (dot-dirs and node_modules skipped, depth-bounded),
- *  each with its frontmatter name (or filename stem) and mtime. */
-export declare function listBulbFiles(cwd: string): BulbFileInfo[]
-
-/** Scan a \`.bulb.md\` and return the privileged capability it probably needs (or undefined),
- *  so a host can offer --trust before launching. Probabilistic hint, never enforcement. */
-export declare function predictBulbTrust(file: string): Promise<string | undefined>
-
-/** The bulb's \`name:\` from its leading frontmatter, or undefined if absent. */
-export declare function bulbName(source: string): string | undefined
-
-/** A filesystem-safe slug from the bulb's name; 'bulb' when unnamed. */
-export declare function slugifyBulbName(source: string): string
-
-/** The source with its leading \`---\` frontmatter block stripped. */
-export declare function stripFrontmatter(source: string): string
-
-/** Return \`source\` with every bare client import in code.tsx guaranteed a config.json \`dependencies\`
- *  entry (deriving the missing ones as "latest" — the version the import-driven resolver already uses
- *  for an undeclared import). Idempotent: a fully-declared / non-bulb / import-less source is returned
- *  unchanged. Used by breakout to make a promoted embed a correct, runnable .bulb.md. */
-export declare function ensureDeclaredDependencies(source: string): string
-
-/** Is this bulb remembered as Trusted in the CLI's per-machine trust store? */
-export declare function isBulbTrusted(file: string): boolean
-
-/** Set or clear a bulb's remembered trust (written only by user/agent action, never bulb code). */
-export declare function setBulbTrusted(file: string, trust: boolean): void
-
-/** Every remembered-trusted bulb path (absolute, normalized). */
-export declare function listTrustedBulbs(): string[]
-
-/** Open \`filePath\` (optionally at \`line\`) in the user's editor, detached. Defaults to VS Code
- *  (\`code\`); override with \`TYPEBULB_EDITOR\`. Fire-and-forget. */
-export declare function openInEditor(filePath: string, line?: number): void
 `)
 
 // ── Core-subpath firewall (TB-Single-Package.md req 3, TB-Lint-Transpile.md) ─────────────────────

@@ -320,7 +320,7 @@ function resolveOverrideNodeEntry(dir: string, name: string, subpath: string): s
 /**
  * Rewrite a compiled server module's imports of the override package to `file://` URLs
  * of its local node build — the server-side half of `--replace`. Matches the bare name
- * and any subpath (`typebulb`, `typebulb/servers`); every other import is left untouched.
+ * and any subpath (`typebulb`, `typebulb/format`); every other import is left untouched.
  * Only static imports are rewritten (the override's API is imported statically); es-module-lexer
  * gives precise specifier offsets so the surrounding quotes are preserved. Rewriting the
  * specifier away from a bare name also removes it from the npm-install set in the caller.

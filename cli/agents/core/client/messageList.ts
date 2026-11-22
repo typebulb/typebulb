@@ -19,9 +19,9 @@ import { ganttFences, planVersions } from '../plan.js'
 const PASTE_MENTION_RE = new RegExp(
   `@${PASTE_DIR.replace(/\./g, '\\.')}/([\\w-]+(?:\\.[\\w-]+)*\\.(?:${Object.keys(PASTE_IMAGE_MIME).join('|')}))`, 'gi')
 
-// The wordmark assets, copied beside the client bundle (dist/agents/<agent>/). Resolved off
-// import.meta.url so the agent-scoped mount path falls out with no hardcoded agent name. Both are
-// rendered; CSS picks one by the host theme (light → black wordmark, dark → outline).
+// The wordmark assets, copied beside the client bundle (dist/agents/). Resolved off import.meta.url
+// so the mount path falls out with none hardcoded. Both are rendered; CSS picks one by the host
+// theme (light → black wordmark, dark → outline).
 const LOGO_LIGHT = new URL('typebulb.png', import.meta.url).href
 const LOGO_DARK = new URL('typebulb-inv.png', import.meta.url).href
 

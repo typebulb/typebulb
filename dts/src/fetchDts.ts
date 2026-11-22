@@ -1,4 +1,3 @@
-import { LRUCache } from 'lru-cache'
 import { DtsConfig } from './dtsConfig.js'
 import { fetchWithRetry } from './httpFetch.js'
 import type { DtsCache } from './cache.js'
@@ -7,18 +6,18 @@ export type FetchOut = { dts: string; url: string } | undefined
 
 /**
  * Factory: returns a `fetchDtsWithCache(url)` function backed by the given
- * persistent DtsCache plus an in-process LRU negative cache and an in-flight
+ * persistent DtsCache plus an in-process negative cache (bounded, oldest out) and an in-flight
  * dedup map. The closure isolates cache state per resolver instance.
  */
 export function createFetchDts(cache: DtsCache) {
-  const negativeCache = new LRUCache<string, true>({ ttl: DtsConfig.negativeTtlMs, max: 500 })
+  const negativeUntil = new Map<string, number>()   // url → expiry ms; insertion order is age
   const inFlight = new Map<string, Promise<FetchOut>>()
 
   return async function fetchDtsWithCache(url: string): Promise<FetchOut> {
     try {
       if (await cache.isNegative(url)) return undefined
 
-      if (negativeCache.has(url)) return undefined
+      if ((negativeUntil.get(url) ?? 0) > Date.now()) return undefined
 
       const cached = await cache.getCachedFile(url)
       if (cached) return { dts: cached, url }
@@ -30,7 +29,9 @@ export function createFetchDts(cache: DtsCache) {
         const resp = await fetchWithRetry(url, { init: { cache: 'no-store' } })
         if (!resp?.ok) {
           if (resp?.status === 404) {
-            negativeCache.set(url, true)
+            negativeUntil.delete(url)
+            negativeUntil.set(url, Date.now() + DtsConfig.negativeTtlMs)
+            if (negativeUntil.size > 500) negativeUntil.delete(negativeUntil.keys().next().value!)
             await cache.recordNegative(url)
           }
           return undefined

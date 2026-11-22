@@ -2020,7 +2020,10 @@ a.agent-name:hover { text-decoration: underline; }
 /* A running agent's time box: where it runs out, the stop limit beside the bar's expectation. */
 .gantt-box { position: absolute; top: .15rem; bottom: .15rem; width: 0; border-left: 2px solid var(--warn); }
 .gantt-legend .gantt-swatch.gantt-box { width: 0; height: .9rem; border-left: 2px solid var(--warn); }
-.gantt-sec { grid-column: 1 / -1; padding: .7rem 0 .15rem; font-weight: 600; color: var(--muted); }
+/* Section headings: full-strength and bold, each group after the first opened by a rule, so a heading
+   never reads as one more (dimmer) row. */
+.gantt-sec { grid-column: 1 / -1; padding: 1rem 0 .2rem; font-weight: 700; color: var(--fg); }
+.gantt-sec:not(:first-child) { margin-top: .4rem; border-top: 1px solid var(--border); }
 .gantt-row:hover { background: var(--veil); }
 .gantt-label { padding-right: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.9rem; }
 .gantt-row.has-agent .gantt-label { color: var(--accent); cursor: pointer; }

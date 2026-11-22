@@ -36,7 +36,7 @@ const NODE_BUILTINS = new Set(builtinModules)
  * @param declaredRanges - The bulb's `config.json` `dependencies`. A bare spec
  *                whose name appears here installs at that range, so a package the
  *                bulb uses on *both* sides (e.g. `typebulb`: browser inline bulb via the
- *                import map + server breakout via `typebulb/servers`) resolves to
+ *                import map + `typebulb/format` in server.ts) resolves to
  *                the same published version on each — no cross-consumer skew. A spec
  *                that already carries a version is left untouched.
  */

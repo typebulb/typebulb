@@ -8,7 +8,7 @@ import { createRequire } from 'module'
 import { launchBulb, runCli, requireDistBuild, freePort, distBin } from './harness/servers.js'
 import { serverModulePath } from '../../src/pipeline.js'
 import { startServer, type ServerInstance } from '../../src/serve/server.js'
-import { buildAgentHtml } from '../../src/agentViewer/page.js'
+import { buildAgentHtml, CLIENT_BUNDLE_URL } from '../../src/agentViewer/page.js'
 
 /**
  * Tier B — the tab survives its server being replaced (TB-CLI.md, "A replace keeps the user's tab").
@@ -266,25 +266,28 @@ describe('the agent mirror covers a slow boot (live browser)', () => {
 
   beforeAll(async () => {
     requireDistBuild()
-    const assetDir = path.join(path.dirname(distBin), 'agents', 'claude')
+    const assetDir = path.join(path.dirname(distBin), 'agents')
     const read = (f: string) => fs.readFileSync(path.join(assetDir, f), 'utf8')
     const held = new Promise<void>(resolve => { answer = resolve })
 
     const port = await freePort()
     url = `http://localhost:${port}`
     server = await startServer({
-      getHtml: () => buildAgentHtml({
-        name: 'Claude Mirror',
-        agent: missingBundle ? 'absent' : 'claude',
-        styles: read('styles.css'),
-        katex: read('katex.min.css'),
-        mountHtml: bareStub ? '<div id="app"></div>' : read('index.html'),
-        watch: false,
-      }),
+      getHtml: () => {
+        const html = buildAgentHtml({
+          name: 'Claude Mirror',
+          agent: 'claude',
+          styles: read('styles.css'),
+          katex: read('katex.min.css'),
+          mountHtml: bareStub ? '<div id="app"></div>' : read('index.html'),
+          watch: false,
+        })
+        return missingBundle ? html.replace(CLIENT_BUNDLE_URL, '/absent/client.js') : html
+      },
       basePath: assetDir,
       port,
       trusted: true,
-      staticAssets: { mount: '/agents/claude/', dir: assetDir },
+      staticAssets: { mount: '/agents/', dir: assetDir },
       getServerExports: () => ({
         info: async () => { await held; return { cwd: assetDir, pid: 0, composer: false } },
         poll: async () => ({ events: [], cursor: 0, working: false, latestModel: null, busy: [] }),

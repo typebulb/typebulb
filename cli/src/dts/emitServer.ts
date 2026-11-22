@@ -94,7 +94,7 @@ export async function emitServerTypecheck(opts: ServerEmitOptions): Promise<Serv
 
 function buildServerTsconfig(local?: { name: string; typesAbs?: string }) {
   // The base's `moduleResolution: 'bundler'` (not 'node') matters doubly here: tsc must honour a
-  // package's `exports` map — a server import like `typebulb/servers` is an `exports` subpath,
+  // package's `exports` map — a server import like `typebulb/format` is an `exports` subpath,
   // unresolvable under classic node resolution. Without --replace's `paths` shim (the published
   // path) it would otherwise TS2307, cascading the import to `any`.
   const compilerOptions: Record<string, unknown> = {
@@ -104,10 +104,10 @@ function buildServerTsconfig(local?: { name: string; typesAbs?: string }) {
   }
 
   // Map the override package (bare name + any subpath) to its local .d.ts so tsc
-  // resolves `typebulb` / `typebulb/servers` against the local build, not node_modules.
+  // resolves `typebulb` / `typebulb/<sub>` against the local build, not node_modules.
   // The subpath map assumes subpath dts files sit beside the `.` types in the same dir
-  // and are named for the subpath (e.g. ./servers → servers.d.ts) — true of the typebulb
-  // build; a dev-only typecheck affordance, so the heuristic is acceptable.
+  // and are named for the subpath (e.g. ./sub → sub.d.ts); a dev-only typecheck affordance,
+  // so the heuristic is acceptable.
   if (local?.typesAbs) {
     const fwd = (p: string) => p.replace(/\\/g, '/')
     const distDir = fwd(path.dirname(local.typesAbs))

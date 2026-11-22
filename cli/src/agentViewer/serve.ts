@@ -10,7 +10,7 @@ import { resolvePort } from '../serve/portBlocks.js'
 import { watchPath } from '../serve/watcher.js'
 import { startServerLog, findProjectViewer } from '../serve/serverRegistry.js'
 import { isKnownAgent, listAgentNames, loadAgentServer } from './registry.js'
-import { buildAgentHtml, clientBundleUrl } from './page.js'
+import { buildAgentHtml, CLIENT_BUNDLE_URL } from './page.js'
 
 /**
  * Serve the Claude agent mirror (TB-Agent-Mirror.md).
@@ -58,13 +58,13 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // runtime (it's bundled), so this just confirms which .env files loaded.
   reportEnv(envResult, path.join(basePath, 'mirror'))
 
-  // The mirror's built assets live beside this bundle in `dist/agents/<agent>/` (client.js +
-  // styles.css + katex.min.css + index.html, emitted by esbuild.config.mjs). The client bundle is per-agent; its
-  // styles/mount are the neutral chrome copied from `agents/client/`. The matching source lives in
+  // The mirror's built assets live beside this bundle in `dist/agents/` (client.js + styles.css +
+  // katex.min.css + index.html, emitted by esbuild.config.mjs), one set shared by every harness. The
+  // styles/mount are the neutral chrome copied from `agents/core/client/`. The matching source lives in
   // `cli/agents/` beside `dist/` (repo only — a published install ships just `dist/`, so the dir won't
   // exist there); it drives hot reload.
   const distDir = path.dirname(fileURLToPath(import.meta.url))
-  const assetDir = path.join(distDir, 'agents', agent)
+  const assetDir = path.join(distDir, 'agents')
   const agentsSourceDir = path.join(distDir, '..', 'cli', 'agents')   // repo source root for all agents
   const stylesPath = path.join(assetDir, 'styles.css')
   const katexPath = path.join(assetDir, 'katex.min.css')
@@ -111,7 +111,7 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
       // The mirror is privileged: /__api is ungated, and there is no --trust for it
       // (TB-Agent-Mirror.md).
       trusted: true,
-      staticAssets: { mount: `${path.posix.dirname(clientBundleUrl(agent))}/`, dir: assetDir },
+      staticAssets: { mount: `${path.posix.dirname(CLIENT_BUNDLE_URL)}/`, dir: assetDir },
     }),
     makeEntry: (port, url) => ({ pid: process.pid, port, url, file: `agent:${agent}`, cwd: basePath, startedAt: Date.now(), trust: true, agent }),
   })
@@ -124,18 +124,18 @@ export async function runAgentViewer(args: CliArgs): Promise<void> {
   // A published install watches nothing: only an npm update changes its `dist/`, which would reload
   // an old server's page onto the new client, and on Windows the delete-and-rewrite left chokidar
   // spinning ~2 cores per mirror on events for a folder that no longer changed.
-  // The agent's client entry (per-agent) pulls in the neutral `agents/client/` modules via its
-  // imports; styles.css + index.html are the neutral chrome copied from `agents/client/`.
-  const agentClientDir = path.join(agentsSourceDir, agent, 'client')
+  // The one client entry (`agents/client.ts`) pulls in every harness's client modules; styles.css +
+  // index.html are the neutral chrome copied from `agents/core/client/`.
+  const clientEntry = path.join(agentsSourceDir, 'client.ts')
   const sharedClientDir = path.join(agentsSourceDir, 'core', 'client')
-  const devSource = existsSync(agentClientDir)
+  const devSource = existsSync(clientEntry)
   if (args.watch && devSource) console.log('  Watching for changes...\n')
   async function rebuildClient(): Promise<void> {
     const esbuild = await import('esbuild')
     // Every mirror on this repo's dist rebuilds the same file, so write it atomically: a page that
     // reloads mid-write otherwise parses half a bundle ("Unexpected token").
     const { outputFiles } = await esbuild.build({
-      entryPoints: [path.join(agentClientDir, 'index.ts')],
+      entryPoints: [clientEntry],
       bundle: true,
       platform: 'browser',
       format: 'esm',
