@@ -276,7 +276,10 @@ export function contextFacts(points: ContextFacts['points'], agents: AgentFact[]
 export type Lane = LaneRun & { who: string }
 /** Everything the schedule reads, gathered on the server: the plans as posted, the agents, the
  *  context, and the checks lane. */
-export interface ScheduleFacts { plans: { at: number; text: string }[]; agents: AgentFact[]; context: ContextFacts; lanes: Lane[] }
+/** The machine's CPU and memory in use, as shares of the whole, each sample from `at` to `to`. */
+export interface MachineFacts { samples: { at: number; to: number; cpu: number; mem: number }[]; memTotal: number }
+// `machine` only from the mirror, which samples while it runs.
+export interface ScheduleFacts { plans: { at: number; text: string }[]; agents: AgentFact[]; context: ContextFacts; lanes: Lane[]; machine?: MachineFacts }
 
 /** The plan's versions: a fence posted again word for word (a compaction carries a reply forward) is
  *  the same version. */
@@ -368,7 +371,7 @@ export function planLines(p: Projection, lanes: Lane[] = []): string[] {
   const name = (l: Lane) => `${l.label} (${l.who})`
   const going = lanes.filter(l => l.end === undefined).map(l => `${name(l)} ${l.state} ${mins(p.now - l.at)}`)
   const failed = lanes.filter(l => l.state === 'failed' && (l.end ?? p.now) >= p.now - HOUR).map(l => `${name(l)} at ${clock(l.end ?? l.at)}`)
-  if (going.length || failed.length) out.push(`  Checks: ${[going.length ? listed(going) : 'none running', failed.length ? `failed in the last hour: ${listed(failed)}` : ''].filter(Boolean).join('; ')}.`)
+  if (going.length || failed.length) out.push(`  Commands: ${[going.length ? listed(going) : 'none running', failed.length ? `failed in the last hour: ${listed(failed)}` : ''].filter(Boolean).join('; ')}.`)
   for (const [k, v] of scheduleEvents(p, true)) if (k.startsWith('plan-unplanned:')) out.push(`  ${v.replace(/^Schedule: /, '')}`)
   return out
 }

@@ -142,15 +142,16 @@ class TagIndex<E> {
         tokens: usage ? usage.in + usage.out + usage.cached + usage.cacheCreate : undefined,
         starts: events.some(ev => ev.type === 'user' && !ev.agent) ? 'talk' : events.some(ev => ev.type === 'task_done' || ev.type === 'user' && ev.agent) ? 'plan' : undefined })
       if (!a.isSidechain(e, 'main') && a.isLeafType(e)) this.#leaf = id
-      // Off the chain too: a background call runs on whatever branch started it.
+      // Off the chain too: a background call runs on whatever branch started it. A Code Mode script
+      // counts with the shell calls: its own shell calls run inside it, so the script is the long run.
       for (const ev of events) {
         if (ev.type === 'assistant') {
           for (const t of ev.tools) if (BABYSIT.test(String(t.input?.command ?? ''))) this.#babysits.add(t.id)
-          const shell = ev.tools.filter(t => t.input?.command !== undefined || t.input?.cmd !== undefined)
-          if (shell.length) {
-            for (const t of shell) this.#callIds.add(t.id)
+          const runs = ev.tools.filter(t => t.input?.command !== undefined || t.input?.cmd !== undefined || typeof t.input?.code === 'string')
+          if (runs.length) {
+            for (const t of runs) this.#callIds.add(t.id)
             this.#calls.push({ type: 'assistant', text: '', thinking: '', live: false, at: ev.at,
-              tools: shell.map(t => ({ id: t.id, name: t.name, input: { command: t.input.command ?? t.input.cmd, description: t.input.description } })) })
+              tools: runs.map(t => ({ id: t.id, name: t.name, input: { command: t.input.command ?? t.input.cmd, code: typeof t.input.code === 'string' ? t.input.code.slice(0, 200) : undefined, description: t.input.description } })) })
           }
         } else if (ev.type === 'tool_result' && this.#callIds.has(ev.id)) {
           this.#calls.push({ ...ev, content: ev.content.slice(-600), digest: undefined })

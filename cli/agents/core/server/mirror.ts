@@ -12,6 +12,7 @@ import { lastEntryAt } from './sessions.js'
 import { sessionStatus } from './childReport.js'
 import { sessionThreads, saveAnswer } from './board.js'
 import { sessionSchedule } from './schedule.js'
+import { machineFacts, startMachineSampler } from './machine.js'
 import { answerLine, type Answer, type AnswerChoice } from '../tags.js'
 import type { AgentAdapter, AgentDriver } from './adapter.js'
 import { orderByDescending } from '../order.js'
@@ -88,6 +89,7 @@ interface State<E> {
  * attach), and returns the RPC surface the agent's server barrel re-exports for the browser.
  */
 export function createMirror<E>(adapter: AgentAdapter<E>) {
+  startMachineSampler()
   const state: State<E> = {
     cwd: projectCwd,
     sessionId: '',
@@ -878,7 +880,7 @@ export function createMirror<E>(adapter: AgentAdapter<E>) {
     if (!state.sessionId || !sessionFile) return { plans: [], agents: [], context: { points: [], pieces: 0 }, lanes: [] }
     const kids = adapter.listChildren?.(state.cwd, state.sessionId) ?? []
     const live = sessionLive()
-    return sessionSchedule(adapter, state.cwd, sessionFile, kids.map(c => ({ ...c, state: childState(c, live) })), live, Date.now())
+    return { ...sessionSchedule(adapter, state.cwd, sessionFile, kids.map(c => ({ ...c, state: childState(c, live) })), live, Date.now()), machine: machineFacts() }
   }
 
   // ── session picker ──

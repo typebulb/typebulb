@@ -1,14 +1,18 @@
 import { clock } from '../childStatus.js'
 import { formatTokens as tokens } from '../format.js'
-import { barWord, widthSteps, type AgentFact, type Lane, type Projection, type ProjectedBar } from '../plan.js'
+import { barWord, widthSteps, type AgentFact, type Lane, type MachineFacts, type Projection, type ProjectedBar } from '../plan.js'
 
 // The schedule's chart (TB-Agent-Schedule.md), drawn as HTML so the truth can be laid over the plan:
-// each bar where it is now projected, over a ghost of where it was planned, the checks lane under the
-// bars, and the now and Target lines across both. Positions are percentages, so it fills any width.
+// each bar where it is now projected, over a ghost of where it was planned, what was observed (agents
+// running, long commands) under the bars, and the now and Target lines across both. Positions are
+// percentages, so it fills any width.
 
 const MIN = 60_000
 const STEPS = [5, 10, 15, 30, 60, 120, 180, 240, 360, 720, 1440].map(m => m * MIN)
 const MAX_LANES = 40
+// A finished command narrower than this share of the chart reads as a sliver, not a span, so it's left off.
+const MIN_SHARE = 0.03
+const OBSERVED = 'Observed'
 const FLAG_ROW = 1.4         // rem: one line of the axis, as styles.css sets it
 const AXIS_ROWS = 2          // the times and the context under the flags
 
@@ -25,7 +29,7 @@ const todoLine = (a: AgentFact | undefined) => a?.todos ? `todos ${a.todos.done}
 
 /** The projected plan and the checks lane as one chart; '' for a plan with no bars. `points` are the
  *  orchestrator's measured context, for the axis's token row. */
-export function scheduleChart(p: Projection, lanes: Lane[], points: { at: number; tokens: number }[] = []): string {
+export function scheduleChart(p: Projection, lanes: Lane[], points: { at: number; tokens: number }[] = [], machine?: MachineFacts): string {
   const rows: Row[] = p.bars.map(b => {
     const moved = !b.milestone && (Math.abs(b.pStart - b.start) > MIN || Math.abs(b.pEnd - b.end) > MIN)
     const tip = [b.title, b.agent ? `agent "${b.agent.name}"` : '', barWord(b),
@@ -39,13 +43,13 @@ export function scheduleChart(p: Projection, lanes: Lane[], points: { at: number
     tip: [a.name, 'running; no bar names it', todoLine(a)].filter(Boolean).join('\n') })))
   if (!rows.length) return ''
   const from = Math.min(p.now, ...rows.map(r => Math.min(r.start, r.ghost?.[0] ?? Infinity)))
-  const checks: Row[] = lanes.filter(l => (l.end ?? p.now) >= from).slice(-MAX_LANES).map(l => ({
-    label: `${l.who}: ${l.label}`, section: 'Checks', start: Math.max(l.at, from), end: l.end ?? p.now, cls: l.end === undefined ? 'v-run' : 'v-done',
+  const checks: Row[] = lanes.filter(l => (l.end ?? p.now) >= from).map(l => ({
+    label: `${l.who}: ${l.label}`, section: OBSERVED, start: Math.max(l.at, from), end: l.end ?? p.now, cls: l.end === undefined ? 'v-run' : 'v-done',
     tip: `${l.who}: ${l.label}\n${l.state}, ${span(l.at, l.end ?? p.now)}` }))
   // The projected close gets its own line only while it lands before the Target; past it, the bars that
   // don't fit already say so.
   const eta = p.eta !== undefined && (p.plan.target === undefined || p.eta < p.plan.target) ? p.eta : undefined
-  return chart(rows, checks, p.agents, p.now, p.plan.target, contextAt(p, points), eta)
+  return chart(rows, checks, p.agents, p.now, p.plan.target, contextAt(p, points), eta, machine)
 }
 
 // The context at a time: measured up to now (the last response before it), projected after it, where
@@ -67,7 +71,7 @@ function contextAt(p: Projection, points: { at: number; tokens: number }[]): (t:
   }
 }
 
-function chart(rows: Row[], checks: Row[], agents: AgentFact[], now: number, target: number | undefined, context: (t: number) => string, eta: number | undefined): string {
+function chart(rows: Row[], checks: Row[], agents: AgentFact[], now: number, target: number | undefined, context: (t: number) => string, eta: number | undefined, machine?: MachineFacts): string {
   let lo = Math.min(now, target ?? Infinity, ...rows.map(r => Math.min(r.start, r.ghost?.[0] ?? Infinity)))
   let hi = Math.max(now, target ?? -Infinity, ...rows.map(r => Math.max(r.end, r.ghost?.[1] ?? -Infinity, r.box ?? -Infinity)))
   if (hi - lo < 30 * MIN) hi = lo + 30 * MIN
@@ -75,6 +79,8 @@ function chart(rows: Row[], checks: Row[], agents: AgentFact[], now: number, tar
   lo -= pad; hi += pad
   const pct = (t: number) => `${((t - lo) / (hi - lo) * 100).toFixed(2)}%`
   const width = (a: number, b: number) => `${Math.max(0.4, (b - a) / (hi - lo) * 100).toFixed(2)}%`
+  // A command still running ('v-run') always shows: it's the long tail the lane is for.
+  const commands = checks.filter(r => r.cls === 'v-run' || r.end - r.start >= MIN_SHARE * (hi - lo)).slice(-MAX_LANES)
   // Ticks on round local times.
   const step = STEPS.find(s => (hi - lo) / s <= 8) ?? STEPS.at(-1)!
   const offset = new Date(lo).getTimezoneOffset() * MIN
@@ -92,14 +98,13 @@ function chart(rows: Row[], checks: Row[], agents: AgentFact[], now: number, tar
     // The slack before the Target, shaded, while the close lands before it.
     + (eta !== undefined && target !== undefined ? `<div class="gantt-slack" style="left:${pct(eta)};width:${width(eta, target)}"></div>` : '')
   let section: string | undefined
+  const head = (s: string) => { if (s === section) return ''; section = s; return s ? `<div class="gantt-sec">${esc(s)}</div>` : '' }
   const rowsHtml = (list: Row[]) => list.map(r => {
-    let head = ''
-    if (r.section !== section) { section = r.section; if (section) head = `<div class="gantt-sec">${esc(section)}</div>` }
     const ghost = r.ghost ? `<div class="gantt-ghost" style="left:${pct(r.ghost[0])};width:${width(r.ghost[0], r.ghost[1])}"></div>` : ''
     const bar = r.milestone ? `<div class="gantt-ms ${r.cls}" style="left:${pct(r.start)}" data-tip="${esc(r.tip)}"></div>`
       : `<div class="gantt-bar ${r.cls}" style="left:${pct(r.start)};width:${width(r.start, r.end)}" data-tip="${esc(r.tip)}"></div>`
     const box = r.box !== undefined ? `<div class="gantt-box" style="left:${pct(r.box)}" data-tip="Time box ends about ${clock(r.box)}, if it works without a break"></div>` : ''
-    return head + `<div class="gantt-row${r.agent ? ' has-agent' : ''}"${r.agent ? ` data-agent="${esc(r.agent)}"` : ''}>`
+    return head(r.section) + `<div class="gantt-row${r.agent ? ' has-agent' : ''}"${r.agent ? ` data-agent="${esc(r.agent)}"` : ''}>`
       + `<div class="gantt-label" title="${esc(r.label)}">${esc(r.label)}</div><div class="gantt-track">${ghost}${bar}${box}</div></div>`
   }).join('')
   // The width lane: how many agents ran, from the first one's start to now, an empty stretch shaded, so an
@@ -110,7 +115,18 @@ function chart(rows: Row[], checks: Row[], agents: AgentFact[], now: number, tar
   const widthRow = steps.length ? `<div class="gantt-row"><div class="gantt-label">Agents running, peak ${peak}</div><div class="gantt-track gantt-width-track"><div class="gantt-width-area">`
     + steps.map(([a, b, n]) => `<div class="gantt-width${n ? '' : ' idle'}" style="left:${pct(a)};width:${width(a, b)};height:${n ? Math.round(n / peak * 100) : 100}%"`
       + ` data-tip="${n} agent${n === 1 ? '' : 's'} running, ${clock(a)} to ${clock(b)}"></div>`).join('') + '</div></div></div>' : ''
-  const body = rowsHtml(rows) + widthRow + rowsHtml(checks)
+  // The machine's load under the agents: the whole machine's, from the mirror's samples.
+  const ss = machine?.samples ?? []
+  const gb = (share: number) => Math.round(share * (machine?.memTotal ?? 0) / 2 ** 30)
+  const load = (name: string, of: (s: MachineFacts['samples'][number]) => number, say: (v: number) => string) => {
+    const segs = ss.map(s => [Math.max(s.at, lo), Math.min(s.to, now), of(s)] as const).filter(([a, b]) => b > a)
+    if (!segs.length) return ''
+    return `<div class="gantt-row"><div class="gantt-label">${name}, peak ${say(Math.max(...segs.map(s => s[2])))}</div><div class="gantt-track gantt-width-track"><div class="gantt-width-area">`
+      + segs.map(([a, b, v]) => `<div class="gantt-load" style="left:${pct(a)};width:${((b - a) / (hi - lo) * 100).toFixed(3)}%;clip-path:inset(${100 - Math.round(v * 100)}% 0 0 0)"`
+        + ` data-tip="${name} ${say(v)}, ${clock(a)} to ${clock(b)}"></div>`).join('') + '</div></div></div>'
+  }
+  const observed = widthRow + load('CPU', s => s.cpu, v => `${Math.round(v * 100)}%`) + load('Memory', s => s.mem, v => `${gb(v)} of ${gb(1)} GB`)
+  const body = rowsHtml(rows) + (observed && head(OBSERVED) + observed) + rowsHtml(commands)
   return `<div class="gantt"><div class="gantt-head"><div class="gantt-axis-names"><span>time</span><span>context</span></div>`
     + `<div class="gantt-axis"><div class="gantt-flags">${flags}</div>${axis}</div></div>`
     + `<div class="gantt-body">${body}<div class="gantt-marks">${marks}</div></div></div>`

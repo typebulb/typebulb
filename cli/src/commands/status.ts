@@ -4,6 +4,7 @@ import { detectCallerHarness } from '../agentViewer/resolve.js'
 import { sessionsWithChildren, sessionChildren, callerScope, matchChildren, sessionStatus, sessionSlowMs, type SessionChildren } from '../../agents/core/server/childReport.js'
 import { sessionThreads } from '../../agents/core/server/board.js'
 import { sessionSchedule } from '../../agents/core/server/schedule.js'
+import { machineLine } from '../../agents/core/server/machine.js'
 import { statusText, overviewText } from '../../agents/core/childStatus.js'
 import { asksLines } from '../../agents/core/tags.js'
 import { latestProjection, planLines } from '../../agents/core/plan.js'
@@ -43,7 +44,8 @@ export async function runStatus(query: string | undefined, mode: string | undefi
       const facts = s && sessionSchedule(adapter, cwd, s.file, s.children, s.live, Date.now())
       const plan = facts && latestProjection(facts, Date.now())
       const tagged = s ? asksLines(sessionThreads(adapter, cwd, s.sessionId, s.file, s.children).threads, Date.now()) : []
-      const head = plan ? planLines(plan, facts.lanes) : []
+      const machine = machineLine(Date.now())
+      const head = [...plan ? planLines(plan, facts.lanes) : [], ...machine ? [machine] : []]
       const lead = [...head, ...head.length && tagged.length ? [''] : [], ...tagged]
       if (!s?.children.length) {
         if (own) { sessionSlowMs(own, slowMs); console.log([...lead, ...lead.length ? [''] : [], 'No sub-agents in this session yet.'].join('\n')); return }

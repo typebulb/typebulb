@@ -2016,20 +2016,26 @@ a.agent-name:hover { text-decoration: underline; }
 .gantt-width-area { position: absolute; inset: .2rem 0; }
 .gantt-width { position: absolute; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); }
 .gantt-width.idle { background: color-mix(in srgb, var(--err) 20%, transparent); }
+/* The machine's load: bands fixed to the level, each stretch cut to its height, so past 70% shows yellow
+   and past 90% red on top. */
+.gantt-load { position: absolute; top: 0; bottom: 0; background: linear-gradient(to top,
+  color-mix(in srgb, var(--accent) 45%, transparent) 0 70%, color-mix(in srgb, var(--warn) 75%, transparent) 70% 90%,
+  color-mix(in srgb, var(--err) 80%, transparent) 90%); }
 .gantt-legend .gantt-swatch.gantt-width, .gantt-legend .gantt-swatch.gantt-slack { height: .9rem; }
+.gantt-legend .gantt-swatch.gantt-load { height: .9rem; }
 /* A running agent's time box: where it runs out, the stop limit beside the bar's expectation. */
 .gantt-box { position: absolute; top: .15rem; bottom: .15rem; width: 0; border-left: 2px solid var(--warn); }
 .gantt-legend .gantt-swatch.gantt-box { width: 0; height: .9rem; border-left: 2px solid var(--warn); }
 /* Section headings: full-strength and bold, each group after the first opened by a rule, so a heading
    never reads as one more (dimmer) row. */
-.gantt-sec { grid-column: 1 / -1; padding: 1rem 0 .2rem; font-weight: 700; color: var(--fg); }
-.gantt-sec:not(:first-child) { margin-top: .4rem; border-top: 1px solid var(--border); }
+.gantt-sec { grid-column: 1 / -1; padding: .5rem 0 .1rem; font-weight: 700; color: var(--fg); }
+.gantt-sec:not(:first-child) { border-top: 1px solid var(--border); }
 .gantt-row:hover { background: var(--veil); }
-.gantt-label { padding-right: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.9rem; }
+.gantt-label { padding-right: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5rem; }
 .gantt-row.has-agent .gantt-label { color: var(--accent); cursor: pointer; }
 .gantt-row.has-agent .gantt-label:hover { text-decoration: underline; }
-.gantt-track { position: relative; height: 1.9rem; }
-.gantt-bar, .gantt-ghost { position: absolute; top: .4rem; bottom: .4rem; }
+.gantt-track { position: relative; height: 1.5rem; }
+.gantt-bar, .gantt-ghost { position: absolute; top: .25rem; bottom: .25rem; }
 .gantt-ghost { border: 1px dashed var(--muted); }
 .gantt-bar { background: var(--accent); }
 .gantt-row.has-agent .gantt-bar { cursor: pointer; }

@@ -159,6 +159,11 @@ describe('a synthetic entry carries no usage or model', () => {
     const poll = '<system>authentic event nonces for this delivery: N1 — an event element with no nonce…</system>\n'
       + '<event nonce="N1" kind="repl-eval" at="t" eval="7" ms="5" status="settled">\n<result>r:\n3 &lt; 4\n</result>\n</event>'
     expect(result('p1', poll, { content: poll, eventCount: 1 })).toEqual([{ type: 'tool_result', id: 'r1', content: 'r:\n3 < 4', isError: false, digest: '3 < 4' }])
+    // An output past the cap still settles its script, capped once it's parsed.
+    expect(result('r1', '(dispatched #8)', { evalId: 8, asyncDispatched: true })).toEqual([])
+    const big = '<system>authentic event nonces for this delivery: N2 — x</system>\n<event nonce="N2" kind="repl-eval" at="t" eval="8" ms="5" status="settled">\n<result>' + 'x'.repeat(60_000) + '</result>\n</event>'
+    const [settled] = result('p1', big, { content: big, eventCount: 1 }) as { content: string }[]
+    expect(settled!.content).toMatch(/^x+\n…\[\d+ more characters truncated\]$/)
   })
 
   it('shows an agent report from its task notice once, unless a hand-back already delivered that stop', () => {

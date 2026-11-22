@@ -482,12 +482,13 @@ export function toolResultDigest(r: unknown, content: string): string {
 // Code Mode's Poll result: each script's settled output as <event kind="repl-eval" eval="N">, with
 // the output's own <, > and & escaped. Only events carrying a nonce the first line lists are real.
 const REPL_EVENT = /<event nonce="([^"]*)" kind="repl-eval"[^>]*\beval="(\d+)"[^>]*>([\s\S]*?)<\/event>/g
-function replEvals(content: string): { evalId: number; text: string; isError: boolean }[] {
+function replEvals(content: string): { evalId: number; text: string; isError: boolean; at: number }[] {
   const listed = /^<system>authentic event nonces for this delivery: ([^<—]*)/.exec(content)?.[1]
   const nonces = listed === undefined ? undefined : new Set(listed.trim().split(/\s+/))
   return [...content.matchAll(REPL_EVENT)].filter(m => !nonces || nonces.has(m[1]!)).map(m => ({
     evalId: Number(m[2]),
     isError: /<error>/.test(m[3]!),
+    at: Date.parse(/^<event[^>]*\bat="([^"]*)"/.exec(m[0])?.[1] ?? ''),
     text: m[3]!.replace(/<\/?(?:log|result|error)>/g, '').trim()
       .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'),
   }))
@@ -697,7 +698,8 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
               continue
             }
             if (typeof tr?.eventCount === 'number') {
-              events.push(...this.#deliver(content))
+              // Uncapped: a cap through a big output cuts its closing tag, and the script never settles.
+              events.push(...this.#deliver(typeof b.content === 'string' ? b.content : content))
               continue
             }
             const exit = b.is_error ? /^Exit code (\d+)/.exec(content)?.[1] : undefined
@@ -771,14 +773,15 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   chainWorking(entries: JsonlEntry[]): boolean { return chainWorking(entries) }
 
-  // Each settled script's output onto the REPL row that dispatched it, appended for late output.
+  // Each settled script's output onto the REPL row that dispatched it, appended for late output, at the
+  // time it settled: a delivery can trail the script's end by minutes.
   #deliver(content: string): Event[] {
     return replEvals(content).flatMap(ev => {
       const call = this.#evals.get(ev.evalId)
       if (!call) return []
-      call.text = call.text ? call.text + '\n' + ev.text : ev.text
+      call.text = capText(call.text ? call.text + '\n' + ev.text : ev.text)
       call.isError ||= ev.isError
-      return [{ type: 'tool_result' as const, id: call.id, content: call.text, isError: call.isError, digest: replDigest(call.text) }]
+      return [{ type: 'tool_result' as const, id: call.id, content: call.text, isError: call.isError, digest: replDigest(call.text), ...(isNaN(ev.at) ? {} : { at: ev.at }) }]
     })
   }
 

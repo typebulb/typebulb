@@ -6,8 +6,8 @@ import { childName, childShownState, type ChildRow } from '../events.js'
 import { contextFacts, type AgentFact, type ScheduleFacts } from '../plan.js'
 
 // The schedule's server half (TB-Agent-Schedule.md): the session's plans and context from its own
-// transcript, its agents from the child rows, and the checks lane from every shell call, the
-// session's own and its children's. No model call; the projection is the caller's, at its own now.
+// transcript, its agents from the child rows, and the checks lane from every shell call and Code Mode
+// script, the session's own and its children's. No model call; the projection is the caller's, at its own now.
 
 const LANE_WINDOW_MS = 12 * 60 * 60_000
 const MAX_POINTS = 400

@@ -33,10 +33,14 @@ interface Touch { path: string; at: number; whole?: boolean }
 const clip = (s: string, n: number) => { s = stripAnsi(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s }
 const stripBoiler = (s: string) => preamble(s).rest
 const commandOf = (c: Call) => asStr(c.input?.command) ?? asStr(c.input?.cmd)
+// A Code Mode script, whose shell calls run inside it.
+const scriptOf = (c: Call) => asStr(c.input?.code)
 export const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 const label = (c: Call) => {
   const cmd = commandOf(c)
   if (cmd) return clip(commandLabel(stripBoiler(cmd).trim()), 100)
+  const code = scriptOf(c)?.split('\n').find(l => l.trim())
+  if (code) return clip(code, 100)
   const what = clip(toolSummary(c.input), 80)
   return what ? `${toolDisplayName(c.name)}: ${what}` : toolDisplayName(c.name)
 }
@@ -203,8 +207,9 @@ export function commandsOf(d: Digest, readOutput?: (file: string) => string | un
   return { runs: all.reduce((n, g) => n + g.runs, 0), failed: all.reduce((n, g) => n + g.failed, 0), lookups, groups: all }
 }
 
-/** A shell run on the schedule's checks lane (TB-Agent-Schedule.md): one that went to the background
- *  or ran past `minMs`. A background run still going reads as queued while its latest line says so. */
+/** A shell run or Code Mode script on the schedule's checks lane (TB-Agent-Schedule.md): one that went
+ *  to the background or ran past `minMs`. A background run still going reads as queued while its latest
+ *  line says so. */
 export interface LaneRun { id: string; label: string; at: number; end?: number; state: 'queued' | 'running' | 'failed' | 'passed' }
 // Waits, not work: they run for as long as their watcher does.
 const WATCHER = /\btypebulb\S*\s+(babysit|wait)\b/
@@ -215,7 +220,8 @@ export function laneRuns(calls: Call[], now: number, live: boolean, running: boo
   const out: LaneRun[] = []
   for (const c of calls) {
     const cmd = commandOf(c)
-    if (c.at === undefined || !cmd || WATCHER.test(cmd)) continue
+    // A script that arms a watcher on its way out is still work, so only a command is read as a wait.
+    if (c.at === undefined || !(cmd ?? scriptOf(c)) || cmd && WATCHER.test(cmd)) continue
     const r = runOf(c, readOutput)
     if (!r || r.open && (!live || !c.background && !running)) continue
     if (!c.background && (r.open ? now - c.at : r.ms ?? 0) < minMs) continue

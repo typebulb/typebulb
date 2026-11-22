@@ -11,6 +11,7 @@ import { isRead, commandLabel } from '../agents/core/shell.js'
 import { checkFiles } from '../agents/core/server/childReport.js'
 import { parseGantt, projectPlan, scheduleEvents, ganttFences, contextFacts, planLines, datedGantt, type AgentFact } from '../agents/core/plan.js'
 import { scheduleChart } from '../agents/core/client/gantt.js'
+import { machineLine } from '../agents/core/server/machine.js'
 import type { Event } from '../agents/core/events.js'
 import type { ChildRow } from '../agents/core/client/types.js'
 
@@ -502,7 +503,19 @@ describe('plan', () => {
     expect([...scheduleEvents(projectPlan(plan, 2, agents, contextFacts(points, agents), at(18, 50))).keys()].sort())
       .toEqual([...scheduleEvents(p).keys()].sort())
     // The axis carries the context: measured up to now, projected after it in steps at the bars' ends.
-    const html = scheduleChart(p, [], points)
+    // Commands: one still running always shows; a finished one only when it spans enough of the chart.
+    const html = scheduleChart(p, [{ id: 'c', label: 'core', who: 'orchestrator', at: at(18, 40), state: 'running' },
+      { id: 'b', label: 'build', who: 'orchestrator', at: at(17, 0), end: at(17, 30), state: 'passed' },
+      { id: 'g', label: 'git log', who: 'orchestrator', at: at(17, 0), end: at(17, 1), state: 'passed' }], points,
+      { samples: [{ at: at(17, 0), to: at(17, 10), cpu: 0.9, mem: 0.25 }, { at: at(17, 10), to: at(17, 20), cpu: 0.3, mem: 0.5 }], memTotal: 64 * 2 ** 30 })
+    expect(html).toContain('orchestrator: core')
+    expect(html).toContain('orchestrator: build')
+    expect(html).not.toContain('git log')
+    // The width lane and the commands share one heading, apart from the plan's sections.
+    expect(html.split('<div class="gantt-sec">Observed</div>').length).toBe(2)
+    // The machine's load, each row labelled with its peak.
+    expect(html).toContain('CPU, peak 90%')
+    expect(html).toContain('Memory, peak 32 of 64 GB')
     expect(html).toMatch(/<span class="gantt-tok" data-i="\d+" style="left:/)
     expect(html).toMatch(/gantt-tok proj[^>]*>~530k</)
     // The width lane: agents running as steps from the first one's start.
@@ -518,7 +531,7 @@ describe('plan', () => {
     expect(text).toContain('todos 1 of 3')
     expect(text).toMatch(/put-back +waiting, doesn't fit the Target +.*\(\+1h 50m\) +~530k at its end/)
     expect(text).toContain('1 done: parser fix')
-    expect(text).toContain('Checks: core (orchestrator) queued 10m.')
+    expect(text).toContain('Commands: core (orchestrator) queued 10m.')
     expect(text).toContain('plan stale: 1 agent no bar names: stray work.')
     // Mid-turn, the plan's place is the turn's last message: plan stale waits for the turn to end.
     expect([...scheduleEvents(p, false, true).keys()]).not.toContain('plan-unplanned:a3')
@@ -551,11 +564,34 @@ describe('plan', () => {
     writeFileSync(file, line({ uuid: 'u1', parentUuid: null, type: 'user', timestamp: '2026-11-21T10:00:00Z', message: { role: 'user', content: 'go' } })
       + line({ uuid: 'a1', parentUuid: 'u1', type: 'assistant', timestamp: '2026-11-21T10:01:00Z', message: { id: 'm1', role: 'assistant', usage, content: [{ type: 'text', text: `The plan:\n${plan}` }] } })
       + line({ uuid: 'a2', parentUuid: 'a1', type: 'assistant', timestamp: '2026-11-21T10:02:00Z', message: { id: 'm2', role: 'assistant', usage, content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }] } })
-      + line({ uuid: 'r1', parentUuid: 'a2', type: 'user', timestamp: '2026-11-21T10:05:00Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } }))
+      + line({ uuid: 'r1', parentUuid: 'a2', type: 'user', timestamp: '2026-11-21T10:05:00Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } })
+      // A detached Code Mode script runs from its dispatch until the time its event settled, not its later delivery.
+      + line({ uuid: 'a3', parentUuid: 'r1', type: 'assistant', timestamp: '2026-11-21T10:05:10Z', message: { id: 'm3', role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'REPL', input: { code: 'await $`npm run land`', description: 'Land the fix' } }] } })
+      + line({ uuid: 'r2', parentUuid: 'a3', type: 'user', timestamp: '2026-11-21T10:05:11Z', toolUseResult: { evalId: 3, asyncDispatched: true }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: '(dispatched #3)' }] } })
+      + line({ uuid: 'a4', parentUuid: 'r2', type: 'assistant', timestamp: '2026-11-21T10:05:12Z', message: { id: 'm4', role: 'assistant', content: [{ type: 'tool_use', id: 'p1', name: 'Poll', input: {} }] } })
+      + line({ uuid: 'r3', parentUuid: 'a4', type: 'user', timestamp: '2026-11-21T10:12:00Z', toolUseResult: { eventCount: 1 }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'p1',
+        content: '<system>authentic event nonces for this delivery: N1 — x</system>\n<event nonce="N1" kind="repl-eval" at="2026-11-21T10:09:10Z" eval="3" ms="240000" status="settled">\n<result>ok</result>\n</event>' }] } }))
     const f = sessionPlanFacts(new ClaudeAdapter(), file)
     expect(f.plans).toEqual([{ at: Date.parse('2026-11-21T10:01:00Z'), text: 'gantt\n  fix :f, 10:05, 20m' }])
     expect(f.points.map(p => p.tokens)).toEqual([1100, 1100])
-    const runs = laneRuns(childDigest(f.calls).calls, Date.parse('2026-11-21T10:06:00Z'), true, true)
-    expect(runs).toMatchObject([{ label: 'Run the tests', state: 'passed', at: Date.parse('2026-11-21T10:02:00Z'), end: Date.parse('2026-11-21T10:05:00Z') }])
+    const runs = laneRuns(childDigest(f.calls).calls, Date.parse('2026-11-21T10:13:00Z'), true, true)
+    expect(runs).toMatchObject([{ label: 'Run the tests', state: 'passed', at: Date.parse('2026-11-21T10:02:00Z'), end: Date.parse('2026-11-21T10:05:00Z') },
+      { label: 'Land the fix', state: 'passed', at: Date.parse('2026-11-21T10:05:10Z'), end: Date.parse('2026-11-21T10:09:10Z') }])
+  })
+
+  it('states the machine\'s load from its samples file, and nothing once no mirror samples it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'tb-machine-'))
+    const was = process.env.TYPEBULB_SERVERS_DIR
+    process.env.TYPEBULB_SERVERS_DIR = join(home, 'servers')
+    try {
+      const now = Date.now()
+      writeFileSync(join(home, 'machine.jsonl'), [{ at: now - 600_000, to: now - 590_000, cpu: 0.92, mem: 0.5 }, { at: now - 20_000, to: now - 10_000, cpu: 0.63, mem: 0.75 }]
+        .map(s => JSON.stringify(s) + '\n').join(''))
+      expect(machineLine(now)).toMatch(/^Machine: CPU 63% now, peak 92% in the last 30 min; memory \d+ of \d+ GB\.$/)
+      expect(machineLine(now + 5 * 60_000)).toBe('')
+    } finally {
+      if (was === undefined) delete process.env.TYPEBULB_SERVERS_DIR
+      else process.env.TYPEBULB_SERVERS_DIR = was
+    }
   })
 })

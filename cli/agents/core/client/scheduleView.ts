@@ -14,7 +14,8 @@ type Source = { onChange: () => void; openChild: (id: string) => void }
 
 const hash = (s: string) => { let h = 5381; for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) }
 const LEGEND: [string, string][] = [['gantt-bar v-done', 'done'], ['gantt-bar v-run', 'running'], ['gantt-bar v-wait', 'waiting'],
-  ['gantt-ghost', 'where it was planned'], ['gantt-box', 'time box ends'], ['gantt-width', 'agents running'], ['gantt-width idle', 'none running'], ['gantt-slack', 'slack']]
+  ['gantt-ghost', 'where it was planned'], ['gantt-box', 'time box ends'], ['gantt-width', 'agents running'], ['gantt-width idle', 'none running'],
+  ['gantt-load', 'CPU, memory: yellow past 70%, red past 90%'], ['gantt-slack', 'slack']]
 
 export class ScheduleView extends Component {
   open = false
@@ -60,7 +61,7 @@ export class ScheduleView extends Component {
     const p = this.projection()
     if (!p) return shell(div({ class: 'cs-header' }, div({ class: 'cs-title' }, 'Schedule')),
       div({ class: 'child-status-note' }, 'No plan in this session yet. The orchestrator posts one as a mermaid gantt in a reply, with a Target milestone, and it lands here.'))
-    const html = scheduleChart(p, d.lanes, d.context.points)
+    const html = scheduleChart(p, d.lanes, d.context.points, d.machine)
     const wakes = [...scheduleEvents(p, true).values()].map(t => t.replace(/^Schedule: /, ''))
     return shell(
       div({ class: 'cs-header' },

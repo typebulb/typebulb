@@ -3,15 +3,16 @@ import type { AgentAdapter } from './adapter.js'
 import type { ChildRow, ChildTranscript, Event, Thread } from '../events.js'
 
 /** One entry's events as a view of `thread` renders them: the adapter's own, each stamped with the
- *  entry's timestamp (the child Status measures time from it), and in a child view every user turn
- *  marked authored, since nobody types into a child: its brief and follow-ups are the parent agent's
- *  markdown. Shared by the mirror's tail and a one-shot read, so both emit alike. */
+ *  entry's timestamp unless the adapter stamped it (the child Status measures time from it), and in a
+ *  child view every user turn marked authored, since nobody types into a child: its brief and
+ *  follow-ups are the parent agent's markdown. Shared by the mirror's tail and a one-shot read, so both
+ *  emit alike. */
 export function entryEvents<E>(adapter: AgentAdapter<E>, entry: E, thread: Thread, sessionStartMs: number) {
   const r = adapter.apply(entry, sessionStartMs)
   const at = Date.parse(adapter.timestampOf(entry) ?? '')
   const events = r.events.map(e => {
     const out = thread === 'child' && e.type === 'user' ? { ...e, authored: true } : e
-    if (!isNaN(at) && (out.type === 'user' || out.type === 'assistant' || out.type === 'tool_result' || out.type === 'task_done' || out.type === 'turn_end')) out.at = at
+    if (!isNaN(at) && (out.type === 'user' || out.type === 'assistant' || out.type === 'tool_result' || out.type === 'task_done' || out.type === 'turn_end')) out.at ??= at
     return out
   })
   return { ...r, events }
