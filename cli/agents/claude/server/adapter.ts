@@ -609,6 +609,9 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
   #evals = new Map<number, { id: string; text: string; isError: boolean }>()
   // A sub-agent's last report: whether it came as a hand-back, and its text (see #freshReport).
   #reports = new Map<string, { handedBack: boolean; text: string }>()
+  // Each background call's end notice, by call: Code Mode writes a script's shell calls when the script
+  // settles, after the notices of those that ended meanwhile, and a reader drops an end it has no call for.
+  #ends = new Map<string, Event>()
 
   constructor(private root = join(homedir(), '.claude')) { super() }
   override forRead() { return new ClaudeAdapter(this.root) }
@@ -640,6 +643,7 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
     // A fresh index is a drain from the top, so what apply remembers across entries starts over.
     this.#evals.clear()
     this.#reports.clear()
+    this.#ends.clear()
     const messageOf = new Map<string, string>()   // entry → the assistant message it belongs to
     const tip = new Map<string, string>()         // message → its newest entry
     return { link(e) {
@@ -665,9 +669,15 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   apply(entry: JsonlEntry, sessionStartMs: number): { events: Event[]; usage?: TokenCounts; model?: string } {
     const notices = coordinatorMessage(entry) ? [] : taskNotices(entry)
-    if (notices.length) return { events: notices.filter(ev => ev.type !== 'user' || this.#freshReport(ev.agent!.from, ev.text)) }
+    if (notices.length) {
+      for (const ev of notices) if (ev.type === 'task_done' && ev.id) this.#ends.set(ev.id, { ...ev })
+      return { events: notices.filter(ev => ev.type !== 'user' || this.#freshReport(ev.agent!.from, ev.text)) }
+    }
     const r = this.#applyEntry(entry, sessionStartMs)
     for (const ev of r.events) if (ev.type === 'user' && ev.agent) this.#reports.set(ev.agent.from, { handedBack: true, text: ev.text })
+    // A call written after its end notice ended by the time it was written: the notice follows it again.
+    const ended = r.events.flatMap(ev => ev.type === 'tool_result' && ev.background ? this.#ends.get(ev.id) ?? [] : [])
+    if (ended.length) r.events.push(...ended.map(ev => ({ ...ev })))
     return r
   }
 

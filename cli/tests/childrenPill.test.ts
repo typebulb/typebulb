@@ -552,6 +552,9 @@ describe('plan', () => {
     expect(text).toMatch(/put-back +waiting, doesn't fit the Target +.*\(\+1h 50m\) +~530k at its end/)
     expect(text).toContain('1 done: parser fix')
     expect(text).toContain('Commands: core (orchestrator) queued 10m.')
+    // A failure is a line of its own, not the tail of what runs.
+    expect(planLines(p, [{ id: 'f', label: 'unit', who: 'grid rekey', at: at(18, 30), end: at(18, 35), state: 'failed' }]).at(-2))
+      .toBe('  Failed in the last hour: unit (grid rekey) at 06:35 PM.')
     expect(text).toContain('plan stale: 1 agent no bar names: stray work.')
     // Mid-turn, the plan's place is the turn's last message: plan stale waits for the turn to end.
     expect([...scheduleEvents(p, false, true).keys()]).not.toContain('plan-unplanned:a3')
@@ -564,6 +567,16 @@ describe('plan', () => {
     expect(p.bars[1]).toMatchObject({ state: 'ready', readySince: at(16, 10), pStart: at(16, 20) })
     expect([...scheduleEvents(p).keys()]).toEqual(['plan-ready:land'])
     expect([...scheduleEvents(p, true).keys()]).toEqual([])
+  })
+
+  it('names an agent by the words that open its description, when they open no other', () => {
+    const plan = parseGantt('gantt\n Card 1 :active, a, 16:00, 10m\n Card 11 :active, b, 16:00, 10m\n Card 11 build the reads :c, 16:00, 10m\n Look :active, d, 16:00, 10m', at(16, 0))
+    const agent = (id: string, name: string, state: AgentFact['state'] = 'running'): AgentFact => ({ id, name, state, started: at(16, 0), ended: state === 'done' ? at(16, 5) : undefined })
+    const p = projectPlan(plan, 1, [agent('a1', 'Card 1: finder-ink leaves dots out', 'done'), agent('a2', 'Card 11 measure: populations'),
+      agent('a3', 'Card 11 build: the reads'), agent('a4', 'Look: hatch paths'), agent('a5', 'Look: seven arrows')], undefined, at(16, 6))
+    // "Card 11" opens two, but another bar names one in full; "Look" opens two and names neither.
+    expect(p.bars.map(b => [b.agent?.id, b.state])).toEqual([['a1', 'done'], ['a2', 'running'], ['a3', 'running'], [undefined, 'running']])
+    expect(p.unplanned.map(a => a.id)).toEqual(['a4', 'a5'])
   })
 
   it('finds only mermaid gantt fences in a reply', () => {
@@ -607,7 +620,7 @@ describe('plan', () => {
       const now = Date.now()
       writeFileSync(join(home, 'machine.jsonl'), [{ at: now - 600_000, to: now - 590_000, cpu: 0.92, mem: 0.5 }, { at: now - 20_000, to: now - 10_000, cpu: 0.63, mem: 0.75 }]
         .map(s => JSON.stringify(s) + '\n').join(''))
-      expect(machineLine(now)).toMatch(/^Machine: CPU 63% now, peak 92% in the last 30 min; memory \d+ of \d+ GB\.$/)
+      expect(machineLine(now)).toMatch(/^Load: CPU 63% now, peak 92% in the last 30 min; memory \d+ of \d+ GB\.$/)
       expect(machineLine(now + 5 * 60_000)).toBe('')
     } finally {
       if (was === undefined) delete process.env.TYPEBULB_SERVERS_DIR

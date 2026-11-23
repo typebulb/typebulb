@@ -198,13 +198,21 @@ export interface Projection {
 const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 const finished = (s: BarState) => s === 'done' || s === 'stopped'
 
-/** The plan against the agents and the clock. A bar names its agent by title; an agent's real start
- *  and end replace the plan's, a bar not started cannot start before now, and every bar waits for its
+/** The plan against the agents and the clock. A bar names its agent by title, or by the words that
+ *  open one agent's description alone ("Card 12" for "Card 12: the types row"), agents another bar
+ *  names in full aside. An agent's real start and end replace the plan's, a bar not started cannot
+ *  start before now, and every bar waits for its
  *  dependencies' projected ends. Each remaining bar costs its context in order of its end: what the
  *  plan says it costs, else the measured cost per task; with neither, the end is not projected. */
 export function projectPlan(plan: Plan, version: number, agents: AgentFact[], ctx: ContextFacts | undefined, now: number): Projection {
   const named = new Map<string, AgentFact>()
   for (const a of [...agents].sort((x, y) => (x.started ?? 0) - (y.started ?? 0))) named.set(norm(a.name), a)   // the latest of a name wins
+  const titles = new Set(plan.bars.map(b => norm(b.title)))
+  const agentOf = (title: string) => {
+    const t = norm(title)
+    const opens = t ? [...named.keys()].filter(n => n.startsWith(t + ' ') && !titles.has(n)) : []
+    return named.get(t) ?? (opens.length === 1 ? named.get(opens[0]!) : undefined)
+  }
   const byKey = new Map(plan.bars.map(b => [b.key, b]))
   const memo = new Map<string, ProjectedBar>()
   const visiting = new Set<string>()
@@ -217,7 +225,7 @@ export function projectPlan(plan: Plan, version: number, agents: AgentFact[], ct
     const depsEnd = Math.max(-Infinity, ...deps.map(d => d.pEnd))
     const depsDone = deps.every(d => d.state === 'done')
     const dur = b.end - b.start
-    const agent = b.milestone ? undefined : named.get(norm(b.title))
+    const agent = b.milestone ? undefined : agentOf(b.title)
     let pStart = b.start, pEnd = b.end, due = b.end, state: BarState, late = false, readySince: number | undefined
     if (agent) {
       pStart = agent.started ?? b.start
@@ -251,12 +259,12 @@ export function projectPlan(plan: Plan, version: number, agents: AgentFact[], ct
     context = { used, perTask: ctx.perTask, tasks: ctx.tasks, needed }
   }
   const eta = bars.length ? Math.max(...bars.map(b => b.pEnd)) : undefined
-  const titles = new Set(plan.bars.map(b => norm(b.title)))
+  const barred = new Set(bars.flatMap(b => b.agent ? [norm(b.agent.name)] : []))
   return {
     plan, version, now, bars, eta,
     slack: eta !== undefined && plan.target !== undefined ? plan.target - eta : undefined,
     context,
-    unplanned: agents.filter(a => (a.state === 'running' || a.state === 'failing') && !titles.has(norm(a.name))),
+    unplanned: agents.filter(a => (a.state === 'running' || a.state === 'failing') && !barred.has(norm(a.name))),
     agents,
   }
 }
@@ -378,7 +386,8 @@ export function planLines(p: Projection, lanes: Lane[] = []): string[] {
   const name = (l: Lane) => `${l.label} (${l.who})`
   const going = lanes.filter(l => l.end === undefined).map(l => `${name(l)} ${l.state} ${mins(p.now - l.at)}`)
   const failed = lanes.filter(l => l.state === 'failed' && (l.end ?? p.now) >= p.now - HOUR).map(l => `${name(l)} at ${clock(l.end ?? l.at)}`)
-  if (going.length || failed.length) out.push(`  Commands: ${[going.length ? listed(going) : 'none running', failed.length ? `failed in the last hour: ${listed(failed)}` : ''].filter(Boolean).join('; ')}.`)
+  if (going.length) out.push(`  Commands: ${listed(going)}.`)
+  if (failed.length) out.push(`  Failed in the last hour: ${listed(failed)}.`)
   for (const [k, v] of scheduleEvents(p, true)) if (k.startsWith('plan-unplanned:')) out.push(`  ${v.replace(/^Schedule: /, '')}`)
   return out
 }

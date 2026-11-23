@@ -269,6 +269,12 @@ describe('apply gives the child Status its call outcomes', () => {
     expect(a.apply({ type: 'user', isMeta: true, message: { content: notice } } as never, 0).events).toEqual([done])
   })
 
+  it('gives a call written after its notice its end again: Code Mode writes a script\'s calls when it settles', () => {
+    const late = a.apply({ type: 'user', toolUseResult: { backgroundTaskId: 'b1' }, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '' }] } } as never, 0).events
+    expect(late.map(e => e.type)).toEqual(['tool_result', 'task_done'])
+    expect(late[1]).toMatchObject({ id: 't1', outcome: 'failed', exit: 2 })
+  })
+
   it('marks a backgrounded result, a failed run\'s exit, and an error that never ran', () => {
     const [bg] = a.apply(result('Command running in background with ID: b1. Output is being written to: x'), 0).events as never as { background?: boolean }[]
     const [ran] = a.apply(result('Exit code 1\nFAIL src/a.test.ts', true), 0).events as never as { exit?: number; refused?: boolean }[]

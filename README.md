@@ -308,7 +308,7 @@ Tag a question in your reply and the mirror's board lists it, answerable with a 
 
 Post your plan as a `mermaid` `gantt` in a reply and the mirror's schedule draws it, with your agents and long-running commands laid over it.
 
-- **The latest gantt is the plan:** a bar's title is its agent's description (punctuation aside), so the agent's real start, state and end replace the plan's; tag your own bars `active`, then `done`.
+- **The latest gantt is the plan:** a bar's title is its agent's description or the words that open it (punctuation aside), so the agent's real start, state and end replace the plan's; tag your own bars `active`, then `done`.
 - **Add `Target :milestone, end, 19:00, 0m` only for a deadline the user names**, follow each landing bar with its put-back bar, and price what bars cost your context with `%% cost 20k` (every bar) or `%% cost v 5k, cl 80k` (by id).
 - **Babysit wakes you on two facts:** a bar `ready, not started`, or `plan stale` (a running agent no bar names). Re-post when the plan's shape changes, never for drift: `typebulb status` prints it, and whether the plan fits is yours to judge.
 

@@ -77,7 +77,7 @@ export function machineLine(now: number): string {
   const recent = merged(history.read(now)).filter(s => s.to >= now - 30 * 60_000)
   const latest = recent.at(-1)
   if (!latest || latest.to < now - 60_000) return ''
-  return `Machine: CPU ${pct(latest.cpu)} now, peak ${pct(Math.max(...recent.map(s => s.cpu)))} in the last 30 min; memory ${gb(latest.mem)} of ${gb(1)} GB.`
+  return `Load: CPU ${pct(latest.cpu)} now, peak ${pct(Math.max(...recent.map(s => s.cpu)))} in the last 30 min; memory ${gb(latest.mem)} of ${gb(1)} GB.`
 }
 
 /** Babysit's machine alarm, read at each poll: which kinds fire, which have not yet cleared, and a
