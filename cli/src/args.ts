@@ -91,6 +91,9 @@ export interface CliArgs {
   /** `status`/`babysit --slow <dur>`: when a call counts as slow for this session, kept for later
    *  calls and the mirror's view (TB-Agent-Children.md). */
   slowMs?: number
+  /** `babysit --hook`: run as the harness's own hook (Claude Code's Stop hook, TB-Agent-Babysit.md),
+   *  never typed by an agent: a wake is exit 2 with the lines on stderr. */
+  hook?: boolean
   /** `stop --bulbs|--agent|--global`: batch reaping by category instead of one file/pid target.
    *  `bulbs`/`agent` are scoped to this project (this cwd's bulbs / its mirror); `global` reaps every
    *  bulb and mirror across all projects — the housekeeping verb for the orphan pile. */
@@ -218,6 +221,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.stopScope = 'global'
     } else if (arg === '--wake') {
       result.wake = true
+    } else if (arg === '--hook') {
+      result.hook = true
     } else if (arg === '--match') {
       const m = args[++i]
       if (m === undefined) {
@@ -463,10 +468,10 @@ Usage:
                                  needs you (a sub-agent's idle stall, slow call,
                                  background call left running, failure streak or
                                  overrun time box; or the user's answer on the
-                                 mirror's board), then print it and exit.
-                                 Run it in the background; the exit is your
-                                 wake-up. Run it again after handling it:
-                                 what came up meanwhile fires at once.
+                                 mirror's board), then wake you with a line.
+                                 Claude Code: run it once; it stays on until
+                                 the session ends. Codex: run it in the
+                                 background, and again after each wake.
                                  Both take --slow (below).
 
 Options:

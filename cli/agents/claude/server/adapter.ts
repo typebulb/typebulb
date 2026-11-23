@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { capText, dataUriImage, firstLineDigest, plural } from '../../core/server/text.js'
 import { listJsonlFiles, readHead, readTail } from '../../core/server/sessions.js'
 import { AgentAdapter, type Linker } from '../../core/server/adapter.js'
+import { ensureBabysitHook, hasBabysitHook } from './babysitHook.js'
 import type { ChildTranscript, Event, Thread, TokenCounts } from '../../core/events.js'
 import { asStr } from '../../core/format.js'
 
@@ -622,6 +623,15 @@ export class ClaudeAdapter extends AgentAdapter<JsonlEntry> {
 
   // CC creates ~/.claude on first run (settings, projects, sessions all live under it).
   detectsInstalled() { return existsSync(this.root) }
+
+  // Babysit rides CC's Stop hook, kept in the project of the session a typebulb command runs in.
+  override ensureHarnessSupport() {
+    if (!this.detectsSelf()) return
+    const id = this.callerSessionId()
+    const project = process.env.CLAUDE_PROJECT_DIR || (id && this.sessionCwd(id))
+    if (project) ensureBabysitHook(project)
+  }
+  startsBabysit(cwd: string) { return hasBabysitHook(cwd) }
 
   sessionsDir(cwd: string) { return projectDir(this.root, cwd) }
   listSessionFiles(cwd: string) { return listJsonlFiles(projectDir(this.root, cwd)) }

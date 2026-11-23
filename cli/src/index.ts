@@ -108,7 +108,7 @@ async function main(): Promise<void> {
     return
   }
   if (args.subcommand === 'babysit') {
-    await runBabysit(args.mode, args.slowMs)
+    await runBabysit(args.mode, args.slowMs, args.hook)
     return
   }
   if (args.subcommand === 'send') {

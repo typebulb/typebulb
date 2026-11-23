@@ -71,16 +71,16 @@ const settingsLocalPath = (cwd: string) => join(cwd, '.claude', 'settings.local.
 const switcherSidecarPath = (cwd: string) => join(cwd, '.claude', '.cc-switcher.json')
 const proxyUrlFor = (port: number) => `http://127.0.0.1:${port}`
 
-function readJsonFile(p: string): any | null {
+export function readJsonFile(p: string): any | null {
   try { return JSON.parse(readFileSync(p, 'utf8')) } catch { return null }
 }
-function writeJsonFile(p: string, obj: unknown) {
+export function writeJsonFile(p: string, obj: unknown) {
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, JSON.stringify(obj, null, 2) + '\n')
 }
 
 // Append entries to the project .gitignore if missing — so a token at rest can never be committed.
-function ensureGitignored(cwd: string, entries: string[], comment: string) {
+export function ensureGitignored(cwd: string, entries: string[], comment: string) {
   const gi = join(cwd, '.gitignore')
   let cur = ''
   try { cur = readFileSync(gi, 'utf8') } catch { /* no .gitignore yet */ }

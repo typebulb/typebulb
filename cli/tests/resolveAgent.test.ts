@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { resolveAgent } from '../src/agentViewer/resolve.js'
+import { withBabysitHook } from '../agents/claude/server/babysitHook.js'
 import { mkdtempSync, mkdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -92,5 +93,21 @@ describe('resolveAgent — machine-install signal (step 2)', () => {
   it('neither installed ⇒ canonical default (first registered)', () => {
     const cwd = freshProject([])
     expect(resolveAgent(cwd)).toEqual({ name: 'claude' })
+  })
+})
+
+// Claude Code's harness support is babysit's Stop hook in the project's local settings (TB-Agent-Babysit.md).
+describe('withBabysitHook — the Stop hook merged into settings', () => {
+  const other = { hooks: [{ type: 'command', command: 'node guard.mjs' }] }
+  it('adds the hook beside the project\'s own, once, and replaces its own stale command', () => {
+    const first = withBabysitHook({ env: { A: '1' }, hooks: { Stop: [other], PreToolUse: [other] } }, '"node" "a/index.js" babysit --hook')
+    expect(first.env).toEqual({ A: '1' })
+    expect(first.hooks.PreToolUse).toEqual([other])
+    expect(first.hooks.Stop).toHaveLength(2)
+    expect(first.hooks.Stop[0]).toBe(other)
+    expect(first.hooks.Stop[1].hooks[0]).toMatchObject({ asyncRewake: true, timeout: 43200 })
+    expect(withBabysitHook(first, '"node" "a/index.js" babysit --hook')).toBeUndefined()
+    const moved = withBabysitHook(first, '"node" "b/index.js" babysit --hook')
+    expect(moved.hooks.Stop.map((g: any) => g.hooks[0].command)).toEqual(['node guard.mjs', '"node" "b/index.js" babysit --hook'])
   })
 })

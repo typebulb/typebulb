@@ -114,9 +114,9 @@ export abstract class AgentAdapter<E = unknown> {
   // ── CLI-side harness integration (called from agentViewer/resolve.ts, not the mirror engine — the
   //    same src→adapter direction detectsSelf uses) ──
   /**
-   * Install whatever CLI-side support this harness needs. The default is a no-op — Claude Code's
-   * case (`run_in_background` is native, and the CLI never plants the skill per TB-Skill.md). Pi
-   * overrides it: the background-`wait` shim extension (TB-Wait.md — pi has no background bash),
+   * Install whatever CLI-side support this harness needs. The default is a no-op. Claude Code
+   * overrides it with babysit's Stop hook (TB-Agent-Babysit.md; the CLI never plants the skill per
+   * TB-Skill.md), and pi with the background-`wait` shim extension (TB-Wait.md — pi has no background bash),
    * whose mirror-orientation block also points a composer-driven session — which has no cold-start
    * command to learn from — at the packaged SKILL.md. Runs on the CLI hot path,
    * so an override MUST be idempotent, gated (write nothing if the harness isn't present), and
@@ -222,6 +222,12 @@ export abstract class AgentAdapter<E = unknown> {
    */
   wakeRoute?(sessionId: string): Promise<{ error?: string; hosted?: boolean }>
   wake?(sessionId: string, tool: string, text: string): Promise<void>
+  /**
+   * Does the harness start `babysit --hook` itself in this project, after each turn (Claude Code's
+   * Stop hook, TB-Agent-Babysit.md § Lifecycle)? Then `typebulb babysit` only turns it on for the
+   * session, and nothing is armed again.
+   */
+  startsBabysit?(cwd: string): boolean
 
   /**
    * The sessions this harness reports as **mid-turn right now**, for the picker's working dot.

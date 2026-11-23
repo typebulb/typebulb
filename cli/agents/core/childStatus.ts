@@ -623,7 +623,7 @@ export function overviewText(sessionId: string, agents: (StatusReport & { depth:
   const rest = agents.filter(a => !shown.has(a.id)), stopped = rest.filter(a => a.state === 'stopped').length
   const fold = [rest.length - stopped ? `${rest.length - stopped} finished` : '', stopped ? `${stopped} stopped` : ''].filter(Boolean).join(', ')
   if (rest.length) out.push(`  ${listed.length ? '+' : ''}${fold}, nothing to check`)
-  out.push('', 'Run `typebulb status <id>` for one agent\'s report, or `typebulb babysit` in the background to be woken when an agent or the user\'s answer needs you.')
+  out.push('', 'Run `typebulb status <id>` for one agent\'s report, or `typebulb babysit` to be woken when an agent or the user\'s answer needs you.')
   return out.join('\n')
 }
 

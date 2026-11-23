@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { loadEnv } from '../env.js'
 import { typebulbHome } from '../serve/paths.js'
@@ -28,6 +28,10 @@ const TOOL = 'typebulb_babysit'
  * while it lasts and again if it clears and comes back: what has fired is kept per session, so a
  * re-armed babysit resumes rather than repeating itself.
  *
+ * Under a harness that starts it itself (Claude Code's Stop hook runs `babysit --hook` after each turn),
+ * the command only turns it on for the session, and the hook's copy wakes with exit 2 and the lines on
+ * stderr, so nothing is armed again.
+ *
  * A harness whose agents a process exit cannot wake (Codex) wakes through its own host instead
  * (`adapter.wake`, TB-Agent-Codex.md § Waking through the app server): only for the caller's own
  * session, checked reachable before arming, and an event counts as fired only once the host accepts
@@ -37,11 +41,11 @@ const TOOL = 'typebulb_babysit'
  * nobody is left to wake. 4: an event was found but its wake was refused. 5: a newer babysit took
  * this session over.
  */
-export async function runBabysit(mode: string | undefined, slowMs?: number): Promise<void> {
+export async function runBabysit(mode: string | undefined, slowMs?: number, hook = false): Promise<void> {
   loadEnv(mode)
   const { caller, adapters } = childAdapters()
   // A harness that starts turns must know whose: never the newest session as a stand-in.
-  const target = adapters.map(adapter => ({ adapter, ...(adapter.wake ? callerScope : sessionToWatch)(adapter, process.cwd()) })).find(t => t.sessionId)
+  const target = adapters.map(adapter => ({ adapter, ...(adapter.wake || hook ? callerScope : sessionToWatch)(adapter, process.cwd()) })).find(t => t.sessionId)
   if (!target?.sessionId) return fail(!adapters.length ? `Babysit isn't supported for ${caller} sessions.`
     : adapters.some(a => a.wake) ? "Can't babysit: your own session couldn't be identified in this project, and a wake goes to no other."
     : 'No session to babysit in this project.')
@@ -55,12 +59,21 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
   const dir = join(typebulbHome(), 'babysit')
   const stateFile = join(dir, `${sessionId}.json`)
   const lockFile = join(dir, `${sessionId}.lock`)
+  const save = (keys: string[]) => { try { writeFileSync(stateFile, JSON.stringify(keys)) } catch {} }
+  try { mkdirSync(dir, { recursive: true }) } catch {}
+  // The session's fired state is also its switch: the hook's copy stands down for a session that never
+  // ran the command, since a wake is a turn its user did not prompt.
+  if (hook && !existsSync(stateFile)) return
+  if (!hook && adapter.callerSessionId?.(cwd) === sessionId && adapter.startsBabysit?.(cwd)) {
+    if (!existsSync(stateFile)) save([])
+    console.log("Babysit is on for this session until it ends: Claude Code starts it after each of your turns, and a line from it wakes you when a sub-agent, the user's answer or the machine needs you. Nothing to arm again.")
+    return
+  }
   const replaced = takeLock(lockFile)
   let fired: string[] = []
   try { fired = JSON.parse(readFileSync(stateFile, 'utf8')) as string[] } catch {}
-  const save = (keys: string[]) => { try { writeFileSync(stateFile, JSON.stringify(keys)) } catch {} }
-  if (replaced) console.error(`Took over from the babysit already watching this session (pid ${replaced}), which stops at its next check.`)
-  console.error(`Babysitting session ${sessionId}: this exits with a line when a sub-agent or the user's answer needs you; run it again after handling that.`)
+  if (replaced && !hook) console.error(`Took over from the babysit already watching this session (pid ${replaced}), which stops at its next check.`)
+  if (!hook) console.error(`Babysitting session ${sessionId}: this exits with a line when a sub-agent or the user's answer needs you; run it again after handling that.`)
 
   const deadline = Date.now() + GIVE_UP_MS
   const alarm = machineAlarm()
@@ -114,11 +127,15 @@ export async function runBabysit(mode: string | undefined, slowMs?: number): Pro
         console.error(`accepted ${new Date().toISOString()}`)
       }
       save(kept([...events.keys()]))
+      // The hook's exit 2 is the wake, and its stderr is what the session is shown.
+      if (hook) end(2, `typebulb babysit, your session's watcher, reports:\n${text}`)
       console.log(text)
       end(0)
     }
     await new Promise(r => setTimeout(r, POLL_MS))
   }
+  // Quietly under the hook, where exit 2 would wake the session to say nothing happened.
+  if (hook) end(0)
   // A harness woken through its host would otherwise just go quiet: say so, so it can re-arm.
   if (adapter.wake) await adapter.wake(sessionId, TOOL, 'typebulb babysit stopped after 12 hours with nothing to report; run it again to keep watching.').catch(() => {})
   end(2, 'Nothing needed attention; gave up.')
