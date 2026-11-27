@@ -24,10 +24,12 @@ const AXIS_ROWS = 2          // the times and the context under the flags
 // `box`: when a running agent's time box runs out, were it to work without a break (the box counts active time).
 // `inner`: drawn inside the bar (a process's usage graph).
 // `open`: a command or process still running.
-// `num`: a figure for the label's fixed-width number column.
-interface Row { label: string; section: string; start: number; end: number; ghost?: [number, number]; box?: number; cls: string; tip: string; milestone?: boolean; agent?: string; inner?: string; open?: boolean; num?: string }
+// `num`: a figure for the label's fixed-width number column, `numTip` its tip.
+interface Row { label: string; section: string; start: number; end: number; ghost?: [number, number]; box?: number; cls: string; tip: string; milestone?: boolean; agent?: string; inner?: string; open?: boolean; num?: string; numTip?: string }
 // A label led by its figure, in a fixed-width column so the figures line up down the chart.
-const numLabel = (num: string, name: string, tip = 'peak over the chart') => `<span class="gantt-num" title="${esc(tip)}">${esc(num)}</span>${esc(name)}`
+const numLabel = (num: string, name: string, tip: string, cls = '') => `<span class="gantt-num${cls}" title="${esc(tip)}">${esc(num)}</span>${esc(name)}`
+// A load figure's level, the same bands the legend gives: yellow past 70%, red past 90%.
+const level = (v: number) => v >= 0.9 ? ' lvl-err' : v >= 0.7 ? ' lvl-warn' : ''
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
 // Three looks, no more: done, running, waiting. A late bar shows as drawn past its planned outline, and a
@@ -63,16 +65,20 @@ export function scheduleChart(p: Projection, { lanes = [], points = [], machine,
   // The projected close gets its own line only while it lands before the Target; past it, the bars that
   // don't fit already say so.
   const eta = p.eta !== undefined && (p.plan.target === undefined || p.eta < p.plan.target) ? p.eta : undefined
-  // The project's heavy processes beside the commands: what a runner or engine starts on its own.
+  // The project's heavy processes beside the commands: what a runner or engine starts on its own. Like a
+  // gauge's, the figure is now (the latest sighting), unknown once no mirror has sampled for a minute.
   const procs: Row[] = processes.filter(x => (x.open ? p.now : x.to) >= from).map(x => {
-    const start = Math.max(x.start, from), end = x.open ? p.now : x.to
-    return { label: x.label, num: `${sizeText(x.peakMb)} ${Math.round(x.peakCpu * 100)}%`, section: PROCESSES, start, end, cls: `gantt-proc ${x.open ? 'v-run' : 'v-done'}`, open: x.open,
-      tip: `${x.cmd}\n${x.open ? 'running' : 'ended'}, ${span(x.start, end)}; peak ${sizeText(x.peakMb)}, ${Math.round(x.peakCpu * 100)}% CPU`, inner: usageGraph(x, start, end) }
+    const known = !x.open || x.to >= p.now - MIN, start = Math.max(x.start, from), end = x.open && known ? p.now : x.to
+    const peak = `peak ${sizeText(x.peakMb)}, ${Math.round(x.peakCpu * 100)}% CPU`
+    const num = !x.open ? 'ended' : known ? `${sizeText(x.lastMb)} ${Math.round(x.lastCpu * 100)}%` : '–'
+    const numTip = !x.open ? `last seen ${clock(x.to)}; ${peak}` : known ? `now; ${peak}` : `no sample since ${clock(x.to)}; ${peak}`
+    return { label: x.label, num, numTip, section: PROCESSES, start, end, cls: `gantt-proc ${x.open ? 'v-run' : 'v-done'}`, open: x.open,
+      tip: `${x.cmd}\n${!x.open ? 'ended' : known ? 'running' : 'unknown now'}, ${span(x.start, end)}; ${peak}`, inner: usageGraph(x, start, end) }
   })
   return chart({ rows, checks, procs, agents: p.agents, now: p.now, target: p.plan.target, context: contextAt(p, points), eta, machine, earlier })
 }
 
-// A process's memory and CPU over its bar, each scaled to its own peak (the label states the peaks),
+// A process's memory and CPU over its bar, each scaled to its own peak (the figure's tip states the peaks),
 // with each sighting's figures on hover.
 function usageGraph(x: ProcessRun, start: number, end: number): string {
   const pts = x.points.filter(q => q.at >= start && q.at <= end)
@@ -147,7 +153,7 @@ function chart({ rows, checks, procs, agents, now, target, context, eta, machine
       : `<div class="gantt-bar ${r.cls}" style="left:${pct(r.start)};width:${width(r.start, r.end)}" data-tip="${esc(r.tip)}">${r.inner ?? ''}</div>`
     const box = r.box !== undefined ? `<div class="gantt-box" style="left:${pct(r.box)}" data-tip="Time box ends about ${clock(r.box)}, if it works without a break"></div>` : ''
     return head(r.section) + `<div class="gantt-row${r.agent ? ' has-agent' : ''}"${r.agent ? ` data-agent="${esc(r.agent)}"` : ''}>`
-      + `<div class="gantt-label" title="${esc(r.label)}">${r.num ? numLabel(r.num, r.label, 'peak memory and CPU') : esc(r.label)}</div><div class="gantt-track">${ghost}${bar}${box}</div></div>`
+      + `<div class="gantt-label" title="${esc(r.label)}">${r.num ? numLabel(r.num, r.label, r.numTip ?? '') : esc(r.label)}</div><div class="gantt-track">${ghost}${bar}${box}</div></div>`
   }).join('')
   // The width lane: how many agents ran, from the first one's start to now, an empty stretch shaded, so an
   // idle gap or a long tail of one agent is plain. Facts only; whether it's enough is the project's to say.
@@ -155,8 +161,8 @@ function chart({ rows, checks, procs, agents, now, target, context, eta, machine
   const steps = first < now ? widthSteps(agents, Math.max(lo, first), now) : []
   const peak = Math.max(1, ...steps.map(s => s[2]))
   // A gauge: its figure and name, then its stretches across the track.
-  const gauge = (num: string, name: string, tip: string, parts: string[]) => parts.length
-    ? `<div class="gantt-row"><div class="gantt-label">${numLabel(num, name, tip)}</div><div class="gantt-track gantt-width-track"><div class="gantt-width-area">${parts.join('')}</div></div></div>` : ''
+  const gauge = (num: string, name: string, tip: string, parts: string[], cls = '') => parts.length
+    ? `<div class="gantt-row"><div class="gantt-label">${numLabel(num, name, tip, cls)}</div><div class="gantt-track gantt-width-track"><div class="gantt-width-area">${parts.join('')}</div></div></div>` : ''
   // A gauge's figure is the value now; the bars show the history, and the figure's tip gives the peak.
   const widthRow = gauge(String(steps.at(-1)?.[2] ?? 0), 'Agents running', `peak ${peak}`, steps.map(([a, b, n]) => `<div class="gantt-width${n ? '' : ' idle'}" style="left:${pct(a)};width:${width(a, b)};height:${n ? Math.round(n / peak * 100) : 100}%"`
     + ` data-tip="${n} agent${n === 1 ? '' : 's'} running, ${clock(a)} to ${clock(b)}"></div>`))
@@ -166,9 +172,9 @@ function chart({ rows, checks, procs, agents, now, target, context, eta, machine
   const load = (name: string, of: (s: MachineFacts['samples'][number]) => number, say: (v: number) => string, short = say) => {
     const segs = ss.map(s => [Math.max(s.at, lo), Math.min(s.to, now), of(s)] as const).filter(([a, b]) => b > a)
     // Unknown now once no mirror has sampled for a minute.
-    const last = segs.at(-1), current = last && last[1] >= now - MIN ? short(last[2]) : '–'
+    const last = segs.at(-1), known = !!last && last[1] >= now - MIN, current = known ? short(last[2]) : '–'
     return gauge(current, name, `peak ${short(Math.max(0, ...segs.map(s => s[2])))}`, segs.map(([a, b, v]) => `<div class="gantt-load" style="left:${pct(a)};width:${((b - a) / (hi - lo) * 100).toFixed(3)}%;clip-path:inset(${100 - Math.round(v * 100)}% 0 0 0)"`
-      + ` data-tip="${name} ${say(v)}, ${clock(a)} to ${clock(b)}"></div>`))
+      + ` data-tip="${name} ${say(v)}, ${clock(a)} to ${clock(b)}"></div>`), known ? level(last[2]) : '')
   }
   const gauges = widthRow + load('CPU', s => s.cpu, v => `${Math.round(v * 100)}%`) + load('Memory', s => s.mem, v => `${gb(v)} of ${gb(1)} GB`, v => `${gb(v)}/${gb(1)} GB`)
   const fold = (n: number) => n ? `<div class="gantt-row gantt-fold" data-fold><div class="gantt-label">${earlier ? '▾' : '▸'} ${n} earlier, finished</div><div class="gantt-track"></div></div>` : ''

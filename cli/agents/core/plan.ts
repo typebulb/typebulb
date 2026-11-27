@@ -291,8 +291,9 @@ export const HEAVY_MB = 500
 export const HEAVY_CPU = 0.10
 export const sizeText = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
 /** A heavy process whose command line names the project's folder: from its start to its last sighting,
- *  `open` while the latest sample still saw it, with its memory (MB) and CPU share at each sighting. */
-export interface ProcessRun { pid: number; label: string; cmd: string; start: number; to: number; peakMb: number; peakCpu: number; open: boolean; points: { at: number; mb: number; cpu: number }[] }
+ *  `open` while the latest sample still saw it, with its memory (MB) and CPU share at its peak, at its last
+ *  sighting, and at each sighting. */
+export interface ProcessRun { pid: number; label: string; cmd: string; start: number; to: number; peakMb: number; peakCpu: number; lastMb: number; lastCpu: number; open: boolean; points: { at: number; mb: number; cpu: number }[] }
 // `machine` and `processes` only from the mirror, which samples while it runs.
 export interface ScheduleFacts { plans: { at: number; text: string }[]; agents: AgentFact[]; context: ContextFacts; lanes: Lane[]; machine?: MachineFacts; processes?: ProcessRun[] }
 

@@ -515,8 +515,10 @@ describe('plan', () => {
       { id: 'b', label: 'build', who: 'orchestrator', at: at(17, 0), end: at(17, 30), state: 'passed' },
       { id: 'g', label: 'git log', who: 'orchestrator', at: at(17, 0), end: at(17, 1), state: 'passed' }],
       machine: { samples: [{ at: at(17, 0), to: at(17, 10), cpu: 0.9, mem: 0.25 }, { at: at(17, 10), to: at(17, 20), cpu: 0.3, mem: 0.5 }], memTotal: 64 * 2 ** 30 },
-      processes: [{ pid: 7, label: 'engine/main.mjs', cmd: 'node engine/main.mjs', start: at(18, 20), to: at(18, 50), peakMb: 910, peakCpu: 0.4, open: true,
-        points: [{ at: at(18, 20), mb: 300, cpu: 0.4 }, { at: at(18, 30), mb: 910, cpu: 0.1 }, { at: at(18, 40), mb: 600, cpu: 0.2 }] }] })
+      processes: [{ pid: 7, label: 'engine/main.mjs', cmd: 'node engine/main.mjs', start: at(18, 20), to: at(18, 50), peakMb: 910, peakCpu: 0.4, lastMb: 600, lastCpu: 0.2, open: true,
+        points: [{ at: at(18, 20), mb: 300, cpu: 0.4 }, { at: at(18, 30), mb: 910, cpu: 0.1 }, { at: at(18, 50), mb: 600, cpu: 0.2 }] },
+      { pid: 8, label: 'recogmem/mem.mjs', cmd: 'node recogmem/mem.mjs', start: at(18, 20), to: at(18, 45), peakMb: 2900, peakCpu: 0.3, lastMb: 2900, lastCpu: 0.1, open: false, points: [] },
+      { pid: 9, label: 'onnxrecog/ortrun.mjs', cmd: 'node onnxrecog/ortrun.mjs', start: at(18, 20), to: at(18, 40), peakMb: 6400, peakCpu: 0.18, lastMb: 6400, lastCpu: 0.18, open: true, points: [] }] })
     expect(html).toContain('orchestrator: core')
     expect(html).not.toContain('git log')
     // What finished over half an hour ago folds into one line, drawn when asked for.
@@ -531,9 +533,12 @@ describe('plan', () => {
     // A gauge's figure is now; these samples ended long before, so it's unknown, and the tip keeps the peak.
     expect(html).toMatch(/title="peak 90%">–<\/span>CPU/)
     expect(html).toMatch(/title="peak 32\/64 GB">–<\/span>Memory/)
-    // A process carries its memory and CPU as two lines over its bar, its peaks in the label.
+    // A process carries its memory and CPU as two lines over its bar. Its figure is now, its peaks in the tip;
+    // one no longer sighted reads ended, and one the mirror stopped sampling reads unknown.
     expect(html).toContain('<div class="gantt-sec">Processes <span class="gantt-sec-note">· this project\'s, over 500 MB or 10% CPU</span></div>')
-    expect(html).toMatch(/>910 MB 40%<\/span>engine\/main\.mjs/)
+    expect(html).toMatch(/title="now; peak 910 MB, 40% CPU">600 MB 20%<\/span>engine\/main\.mjs/)
+    expect(html).toMatch(/title="last seen [^"]+; peak [^"]+">ended<\/span>recogmem\/mem\.mjs/)
+    expect(html).toMatch(/title="no sample since [^"]+">–<\/span>onnxrecog\/ortrun\.mjs/)
     expect(html).toMatch(/<polyline class="mem" points="[^"]+"\/><polyline class="cpu"/)
     expect(html).toMatch(/data-tip="[^"]+: 910 MB, 10% CPU"/)
     expect(html).toMatch(/<span class="gantt-tok" data-i="\d+" style="left:/)

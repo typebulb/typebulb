@@ -2028,7 +2028,7 @@ a.agent-name:hover { text-decoration: underline; }
 .gantt-legend .gantt-swatch.gantt-box { width: 0; height: .9rem; border-left: 2px solid var(--warn); }
 /* Section headings: full-strength and bold, each group after the first opened by a rule, so a heading
    never reads as one more (dimmer) row. */
-.gantt-sec { grid-column: 1 / -1; padding: .5rem 0 .1rem; font-weight: 700; color: var(--fg); }
+.gantt-sec { grid-column: 1 / -1; padding: .5rem 0 .1rem; font-weight: 700; color: var(--warn); }
 .gantt-sec:not(:first-child) { border-top: 1px solid var(--border); }
 .gantt-row:hover { background: var(--veil); }
 .gantt-label { padding-right: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5rem; }
@@ -2054,6 +2054,9 @@ a.agent-name:hover { text-decoration: underline; }
 .gantt-fold .gantt-label { color: var(--muted); cursor: pointer; }
 .gantt-sec-note { font-weight: 400; color: var(--muted); }
 .gantt-num { display: inline-block; width: 10ch; margin-right: .7em; text-align: right; font-variant-numeric: tabular-nums; }
+.gantt-num.lvl-warn { color: var(--warn); }
+.gantt-num.lvl-err { color: var(--err); }
+.gantt-row:has(.gantt-proc.v-done) .gantt-num { color: var(--muted); }
 .gantt-fold:hover .gantt-label { color: var(--fg); }
 .gantt-ms { position: absolute; top: 50%; width: .8rem; height: .8rem; transform: translate(-50%, -50%) rotate(45deg); background: var(--fg); }
 .gantt-ms.v-done { background: var(--diff-add); }

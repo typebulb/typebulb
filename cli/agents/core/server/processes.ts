@@ -128,7 +128,8 @@ export function processFacts(root: string): ProcessRun[] {
   for (const s of seen) {
     if (norm(s.root) !== r) continue
     let x = runs.find(x => x.pid === s.pid && Math.abs(x.start - s.start) < SAME_START_MS)
-    if (!x) runs.push(x = { pid: s.pid, label: processLabel(s.cmd), cmd: s.cmd, start: s.start, to: s.at, peakMb: 0, peakCpu: 0, open: false, points: [] })
+    if (!x) runs.push(x = { pid: s.pid, label: processLabel(s.cmd), cmd: s.cmd, start: s.start, to: s.at, peakMb: 0, peakCpu: 0, lastMb: 0, lastCpu: 0, open: false, points: [] })
+    if (s.at >= x.to) Object.assign(x, { lastMb: s.mb, lastCpu: s.cpu })
     Object.assign(x, { to: Math.max(x.to, s.at), peakMb: Math.max(x.peakMb, s.mb), peakCpu: Math.max(x.peakCpu, s.cpu) })
     x.points.push({ at: s.at, mb: s.mb, cpu: s.cpu })
   }
